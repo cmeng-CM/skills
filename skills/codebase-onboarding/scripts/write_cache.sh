@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 用途：扫描/生成 CLAUDE.md 完成后，写入缓存标记，供下次 check_cache.sh 判断是否命中
+# 用途：扫描/生成项目认知文件完成后，写入缓存标记，供下次 check_cache.sh 判断是否命中
 # 用法：bash write_cache.sh [项目根目录，默认当前目录]
 
 set -euo pipefail
@@ -20,9 +20,9 @@ CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 cat > "$CACHE_FILE" <<EOF
-# Claude Code 项目认知缓存标记
+# 项目认知缓存标记
 # 本文件由 codebase-onboarding skill 自动生成，用于判断项目认知是否需要刷新
-# 不要手动编辑；如需强制刷新认知，删除本文件或直接要求 Claude 重新 onboard
+# 不要手动编辑；如需强制刷新认知，删除本文件或直接要求 agent 重新 onboard
 
 sha: ${CURRENT_SHA}
 branch: ${CURRENT_BRANCH}

@@ -1,6 +1,7 @@
 ---
 name: delve
-description: 拷问式澄清与决策——逐个提问，每个问题附上你的推荐答案，让用户确认或纠正，直到双方达成共识。覆盖"问题还没定义清楚"和"需要在选项间做选择"两种情况。触发词："帮我分析一下""我在想""不知道该怎么做""有个问题想聊聊""哪种方案好""有什么思路""方案设计""帮我对比一下""拷问我"。
+description: Use when the user's request is not clear enough to act on — you can see two interpretations leading to different outcomes, or two approaches with non-obvious tradeoffs, and the user hasn't picked one. Also use on explicit asks like "拷问我" / "帮我分析一下" / "哪种方案好" / "帮我对比一下" / "方案设计".
+
 ---
 
 # delve

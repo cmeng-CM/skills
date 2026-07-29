@@ -1,19 +1,19 @@
 # Subagent 派发指令模板
 
-当 Step 1 判定需要用 subagent 执行扫描时，用下面这个模板派发任务（Task tool / 等价机制）。这个文件本身不会被自动读入 subagent，是给主会话里的 Claude 参考的派发话术。
+当 Step 1 判定需要用 subagent 执行扫描时，用下面这个模板派发任务（Task tool / 等价机制）。这个文件本身不会被自动读入 subagent，是给主会话里的 agent 参考的派发话术。
 
 ## 派发指令
 
 ```
-执行一次代码库结构扫描，目的是为 CLAUDE.md 生成内容素材。
+执行一次代码库结构扫描，目的是为项目认知文件（AGENTS.md / CLAUDE.md）生成内容素材。
 
 扫描范围：<项目根目录路径>
-已有 CLAUDE.md：<如果存在，把路径给出；不存在则写"无">
+已有认知文件：<AGENTS.md / CLAUDE.md，如果存在，把路径给出；不存在则写"无">
 
 请按以下优先级读取文件，越靠前越必须读，后面的按信息增量决定要不要继续：
 
 1. manifest 层（全部读）：README*、package.json/pom.xml/pyproject.toml/Cargo.toml/go.mod、
-   Makefile、已有的 CLAUDE.md
+   Makefile、已有的认知文件（AGENTS.md / CLAUDE.md）
 2. 入口层（全部读）：main.*/app.*/index.* 或框架约定的启动文件、路由/控制器顶层目录
 3. 约定层（用 tree/ls -R 看结构，不要逐个打开文件；只读 lint/CI 配置文件本身）
 4. 代表性源码（挑 2-4 个从入口层能追踪到的典型模块，验证前面推断的架构是否成立）
