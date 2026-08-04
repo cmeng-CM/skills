@@ -14,7 +14,7 @@ Claude Code / Codex / OpenCode 的 skill 集合仓库。每个 skill 以 `SKILL.
 
 - `skills/` 下一 skill 一目录，入口即 `SKILL.md`。写 skill 遵循 `skills/模板.md` 的四段式：frontmatter → 一句话定场 → Working Protocol → Exit Criteria → Exit Protocol；正文超 500 行就拆到 `references/`
 - 安装：`skills/install-skill.sh <skill 目录>`（软链到三个客户端的 skills 目录）；卸载：`skills/uninstall-skill.sh <skill 名或路径>`
-- 无构建、无测试框架：质量验证靠各 skill 的 `test-prompts.json`（`[{id, prompt, expected}]` 格式）配合 darwin-skill 打分
+- 无构建、无测试框架：质量验证靠各 skill 的 `test-prompts.json`（`[{id, prompt, expected}]` 格式）配合 darwin-skill 打分；验收标准与执行规程见 `skills/基线测试.md`（≥80 合格，70-80 有短板，<70 需优化）
 
 ## 坑点
 

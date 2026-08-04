@@ -1,0 +1,27 @@
+[
+  {
+    "id": 1,
+    "prompt": "今天先干到这，帮我交接一下，明天接着弄。",
+    "expected": "Skill 走 CREATE 流程：先跑 git status/log/diff 拿客观锚点，再做链式判定（.handoffs/ 无历史则开新链 seq=1），按模板写文件到 .handoffs/<时间戳>_<slug>.md，头部含 chain/seq/prev/branch/base_commit；最后报告文件路径并给出可直接粘贴的 resume 指令；若 .gitignore 未包含 .handoffs/ 只提示不擅自修改"
+  },
+  {
+    "id": 2,
+    "prompt": "继续上次的工作，我们之前干到哪了？",
+    "expected": "Skill 走 RESUME 流程：ls .handoffs/ 定位文件（多链时按当前分支过滤→取最新→冲突才问用户）；必须读取头部 base_commit 做新鲜度检查并报告级别；展示状态摘要；若 handoff 里有未回答的问题则原样重问，否则不问'要不要继续'直接开始执行下一步"
+  },
+  {
+    "id": 3,
+    "prompt": "handoff 是什么？它会改我的代码吗？",
+    "expected": "Skill 识别这是询问而非执行请求，不进入 CREATE/RESUME 流程，只解释用途并说明它只写 .handoffs/ 下的 Markdown 文件、不改代码，等用户明确指令"
+  },
+  {
+    "id": 4,
+    "prompt": "把这段对话总结一下，我要粘贴到另一个 AI 工具里继续。",
+    "expected": "Skill 识别这是跨工具迁移场景（输出到对话、读者是外部模型），不属于本 skill 边界，应建议改用 conversation-summary，而不是在 .handoffs/ 里生成文件"
+  },
+  {
+    "id": 5,
+    "prompt": "读取 .handoffs/20260728-1430_auth-refactor.md 并继续鉴权重构。",
+    "expected": "Skill 走 RESUME：使用用户指明的文件；新鲜度检查发现 base_commit 之后已有 8 个新 commit → 报告'过期'并展示 git log/diff 事实，提示核对后再继续或干完当前阶段重建 handoff，不盲目按旧下一步执行"
+  }
+]
