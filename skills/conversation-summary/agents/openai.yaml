@@ -1,4 +1,0 @@
-interface:
-  display_name: "Conversation Summary"
-  short_description: "生成可迁移的对话上下文交接卡"
-  default_prompt: "使用 $conversation-summary 总结当前对话或公开分享链接中的对话内容，生成上下文交接卡。"
