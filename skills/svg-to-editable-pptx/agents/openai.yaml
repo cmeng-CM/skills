@@ -1,0 +1,4 @@
+interface:
+  display_name: "SVG 转可编辑 PPTX"
+  short_description: "将 SVG 高保真转换为可编辑 PowerPoint 原生图形"
+  default_prompt: "Use $svg-to-editable-pptx to insert this SVG into the specified PowerPoint slide as editable native shapes while preserving the template."
