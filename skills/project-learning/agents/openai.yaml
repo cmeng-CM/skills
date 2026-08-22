@@ -1,0 +1,4 @@
+interface:
+  display_name: "Project Learning"
+  short_description: "Learn how a project actually runs, with guided deep dives"
+  default_prompt: "Use $project-learning to build or continue a learning map of this project: explain how it actually runs with file:line anchors, then guide module-by-module deep dives at the user's pace."

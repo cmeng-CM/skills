@@ -3,7 +3,7 @@ set -euo pipefail
 
 # skill 快速安装脚本
 # 用法: ./install-skill.sh <skill 目录路径>
-# 作用: 将指定 skill 以软链接方式安装到 Claude Code / Codex / OpenCode 三个客户端
+# 作用: 将指定 skill 以软链接方式安装到 Claude Code / Codex 两个客户端
 
 usage() {
   echo "用法: $0 <skill 目录路径>"
@@ -29,11 +29,10 @@ fi
 src_dir=$(cd "$src" && pwd)
 name=$(basename "$src_dir")
 
-# ---------- 三个客户端的 skill 目录 ----------
+# ---------- 两个客户端的 skill 目录 ----------
 targets=(
   "$HOME/.claude/skills"
   "$HOME/.codex/skills"
-  "$HOME/.config/opencode/skills"
 )
 
 for dir in "${targets[@]}"; do
