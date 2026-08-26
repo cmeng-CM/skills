@@ -1,3 +1,4 @@
 .claude/
 .history/
 .DS_Store
+*.bak
