@@ -27,6 +27,8 @@ description: Build a learnable mental model of how a software / AI / open-source
 
 4. **绘制运行图**。用嵌入式 Mermaid 画帮助建立心智模型的图（典型：主线时序图、状态/生命周期图、组件与数据流向图）。每张图必须降低一项真实认知成本；图种按问题选择，不为配图而配图。
 
+    **可交互成品图（opt-in）**：当用户想把「端到端主线 trace」或「模块依赖」画成可交互、能点开看 `file:line` 源码证据的成品时，调用 `archify` skill 生成自包含 HTML（sequence / architecture），存到 `.context/project-learning/diagrams/`，并在 `00-map.md` 对应章节链接。默认仍用 Mermaid 内嵌保底；archify 只在这两类图、且用户主动要求时使用。
+
 5. **给出下钻菜单**。列出值得下钻的模块，按学习价值排序，每项一句话说明"这里面有什么值得学的"（如"会话生命周期——generation/lease 失效协议是并发一致性的核心"）。菜单是主动规划的学习纵深，不是等用户自己发现。
 
 6. **建立术语表**。收词标准以读者为准，不以"是否项目自造"为准：项目私有概念（lease、ledger 这类不查代码无从知晓的词）**和**正文承重的行业黑话、借用隐喻（transcript、overlay、capabilities、栅栏/fencing 这类），都在地图开头集中一行一释义。判定测试：这个词删掉正文就讲不通，且不能假定读者认识——两条都满足就收。正文可以放心使用这些词，读者卡住时有地方查——这是控制正文解释负担的前提。
