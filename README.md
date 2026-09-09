@@ -1,4 +1,4 @@
-# tools
+# skills
 
 Claude Code / Codex / OpenCode 的 skill 集合仓库。每个 skill 以 `SKILL.md`（prompt-as-code）为主体、各自自包含，skill 之间无共享代码。写 skill 遵循 [`skills/模板.md`](skills/模板.md) 的四段式规范。
 
@@ -24,9 +24,9 @@ Claude Code / Codex / OpenCode 的 skill 集合仓库。每个 skill 以 `SKILL.
 每次都 `cd` 到脚本目录、还要拼 skill 的绝对路径，太繁琐。在 `~/.zshrc` 里加一个 `skill` 函数，即可在**任意目录**用 `install / remove / list` 三个子命令调用本仓库的脚本：
 
 ```zsh
-# skill 安装/卸载/列表：任意目录可用，调用 tools 仓库的脚本
+# skill 安装/卸载/列表：任意目录可用，调用 skills 仓库的脚本
 skill() {
-  local repo="$HOME/workspace/github/tools/skills"
+  local repo="$HOME/workspace/github/skills"
   local cmd="$1"
   local clients=(
     "$HOME/.claude/skills"
@@ -79,8 +79,8 @@ skill() {
 ```bash
 source ~/.zshrc
 
-skill install /Users/cm/workspace/github/tools/skills/delve
-skill remove  /Users/cm/workspace/github/tools/skills/delve
+skill install /Users/cm/workspace/github/skills/delve
+skill remove  /Users/cm/workspace/github/skills/delve
 skill remove  delve          # remove 也支持只写名称
 skill list
 ```

@@ -21,5 +21,5 @@ Claude Code / Codex / OpenCode 的 skill 集合仓库。每个 skill 以 `SKILL.
 - 安装名以**目录名**为准（脚本取 basename）；`md2docx/` 的 frontmatter `name: md-to-docx` 与目录名不一致，改它不影响安装名
 - 安装脚本的 `rm -rf` + `ln -s` 两步写法、绝对路径转换都不要改（不要"优化"成 `ln -sfn` 或相对路径）：目标是真实目录时 `ln -sfn` 会把链接建进目录内部，相对路径目标会断链
 - Python 脚本最小依赖原则：优先纯标准库；浏览器渲染等重能力默认 opt-in
-- `README.md` 是空占位，仓库级说明实际在各 SKILL.md 与 `skills/模板.md` 里
-- 遗留路径痕迹：旧脚本/settings 引用 `tools/skill/`（单数），现为 `tools/skills/`，遇到历史路径先核对
+- 仓库级安装/卸载与 `skill` 函数说明在 `README.md`，写 skill 的规范在 `skills/模板.md`
+- 遗留路径痕迹：旧脚本/settings 引用 `tools/skill/`（单数）与 `tools/skills/`，现已统一为 `skills/`，遇到历史路径先核对
