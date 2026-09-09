@@ -1,22 +1,22 @@
 # skills
 
-Claude Code / Codex / OpenCode 的 skill 集合仓库。每个 skill 以 `SKILL.md`（prompt-as-code）为主体、各自自包含，skill 之间无共享代码。写 skill 遵循 [`skills/模板.md`](skills/模板.md) 的四段式规范。
+Claude Code / Codex / OpenCode 的 skill 集合仓库。每个 skill 以 `SKILL.md`（prompt-as-code）为主体、各自自包含，skill 之间无共享代码。写 skill 遵循 [`模板.md`](模板.md) 的四段式规范。
 
 ## 安装与卸载
 
 仓库提供两个脚本，把指定 skill 以**软链接**方式安装到三个客户端的 skills 目录（`~/.claude/skills`、`~/.codex/skills`、`~/.config/opencode/skills`）。
 
-- [`skills/install-skill.sh`](skills/install-skill.sh) — 安装 / 覆盖安装一个 skill
-- [`skills/uninstall-skill.sh`](skills/uninstall-skill.sh) — 从三个客户端移除一个 skill
+- [`install-skill.sh`](install-skill.sh) — 安装 / 覆盖安装一个 skill
+- [`uninstall-skill.sh`](uninstall-skill.sh) — 从三个客户端移除一个 skill
 
 软链接的好处：**改源即生效**。skill 随时在仓库里更新，无需重新安装，三个客户端立刻看到最新内容。
 
 ### 直接调用
 
 ```bash
-# 在仓库的 skills 目录下
-./skills/install-skill.sh <skill 目录路径>
-./skills/uninstall-skill.sh <skill 名称或路径>
+# 在仓库根目录下
+./install-skill.sh <skill 目录路径>
+./uninstall-skill.sh <skill 名称或路径>
 ```
 
 ### 推荐用法：`skill` 命令（zshrc 函数）
@@ -93,4 +93,4 @@ skill list
 
 ### 关于"全局命令"的取舍
 
-`skill` 函数定义在 `~/.zshrc` 里，仅 zsh 交互式 shell 可用；若将来要给团队分发、或想在 bash / 脚本 / 非交互环境也能调，可把这段函数改写成一个带 `#!/usr/bin/env bash` 的 `skills/skill.sh`，再软链到 `~/.local/bin/skill`——逻辑一行不用改，只是换个"住址"。详见 [`CLAUDE.md`](CLAUDE.md)。
+`skill` 函数定义在 `~/.zshrc` 里，仅 zsh 交互式 shell 可用；若将来要给团队分发、或想在 bash / 脚本 / 非交互环境也能调，可把这段函数改写成一个带 `#!/usr/bin/env bash` 的 `skill.sh`，再软链到 `~/.local/bin/skill`——逻辑一行不用改，只是换个"住址"。详见 [`CLAUDE.md`](CLAUDE.md)。
