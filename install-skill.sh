@@ -3,7 +3,8 @@ set -euo pipefail
 
 # skill 快速安装脚本
 # 用法: ./install-skill.sh <skill 目录路径>
-# 作用: 将指定 skill 以软链接方式安装到 Claude Code / Codex 两个客户端
+# 作用: 将指定 skill 以软链接方式安装到 Claude Code / Codex / OpenCode
+#       以及跨工具标准路径 ~/.agents/skills（ZCode 等 runtime 读这里）
 
 usage() {
   echo "用法: $0 <skill 目录路径>"
@@ -29,10 +30,10 @@ fi
 src_dir=$(cd "$src" && pwd)
 name=$(basename "$src_dir")
 
-# ---------- 两个客户端的 skill 目录 ----------
+# ---------- 各客户端的 skill 目录 ----------
 targets=(
   "$HOME/.claude/skills"
-  "$HOME/.codex/skills"
+  "$HOME/.agents/skills"
 )
 
 for dir in "${targets[@]}"; do
@@ -51,4 +52,4 @@ for dir in "${targets[@]}"; do
   fi
 done
 
-echo "完成: $name 已安装到 ${#targets[@]} 个客户端"
+echo "完成: $name 已安装到 ${#targets[@]} 个客户端目录"

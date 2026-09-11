@@ -4,12 +4,13 @@ Claude Code / Codex / OpenCode 的 skill 集合仓库。每个 skill 以 `SKILL.
 
 ## 安装与卸载
 
-仓库提供两个脚本，把指定 skill 以**软链接**方式安装到三个客户端的 skills 目录（`~/.claude/skills`、`~/.codex/skills`、`~/.config/opencode/skills`）。
+仓库提供两个脚本，把指定 skill 以**软链接**方式安装到四个客户端目录：
+`~/.claude/skills`（Claude Code）、`~/.codex/skills`（Codex）、`~/.config/opencode/skills`（OpenCode），以及跨工具标准路径 `~/.agents/skills`（ZCode 等读这里）。
 
 - [`install-skill.sh`](install-skill.sh) — 安装 / 覆盖安装一个 skill
-- [`uninstall-skill.sh`](uninstall-skill.sh) — 从三个客户端移除一个 skill
+- [`uninstall-skill.sh`](uninstall-skill.sh) — 从四个客户端目录移除一个 skill
 
-软链接的好处：**改源即生效**。skill 随时在仓库里更新，无需重新安装，三个客户端立刻看到最新内容。
+软链接的好处：**改源即生效**。skill 随时在仓库里更新，无需重新安装，各客户端立刻看到最新内容。
 
 ### 直接调用
 
@@ -32,6 +33,7 @@ skill() {
     "$HOME/.claude/skills"
     "$HOME/.codex/skills"
     "$HOME/.config/opencode/skills"
+    "$HOME/.agents/skills"
   )
   case "$cmd" in
     install)
@@ -65,9 +67,9 @@ skill() {
       ;;
     *)
       echo "用法:"
-      echo "  skill install <skill 目录的绝对路径>     # 安装/覆盖安装到三个客户端"
-      echo "  skill remove  <skill 路径或名称>        # 从三个客户端卸载"
-      echo "  skill list                               # 列出三个客户端已装的 skill"
+      echo "  skill install <skill 目录的绝对路径>     # 安装/覆盖安装到四个客户端目录"
+      echo "  skill remove  <skill 路径或名称>        # 从四个客户端目录卸载"
+      echo "  skill list                               # 列出四个客户端目录已装的 skill"
       return 1
       ;;
   esac
