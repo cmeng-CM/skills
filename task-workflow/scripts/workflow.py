@@ -58,6 +58,7 @@ VALID_STATUS = ["pending", "in_progress", "complete", "blocked"]
 
 MAX_TASKS = 8          # 超过则建议拆分
 MAX_FILES_PER_TASK = 5  # 单任务文件数上限
+MAX_BATCH_TASKS = 4     # 同批合并的任务数上限（一个 subagent 一次能高质量做完的量）
 UNTRACKED_HASH_LIMIT = 1 << 20  # 超大未跟踪文件只记大小，不读内容
 
 
@@ -1040,10 +1041,30 @@ def cmd_next(args):
     ready = [t for t in plan.tasks if st[t.id] in ("READY", "RUNNING")]
     blocked = [t for t in plan.tasks if st[t.id] == "BLOCKED"]
 
+    # 可合并提示：互不依赖 + 文件不重叠的 READY 任务。是否"同型"机器判不了，
+    # 所以只提示候选，判断留给控制器。
+    batchable = []
+    if len(ready) > 1:
+        group = []
+        for t in ready:
+            if len(group) >= MAX_BATCH_TASKS:
+                break
+            ids = {x.id for x in group}
+            if ids & set(t.deps):
+                continue
+            paths = {_norm_path(f) for f in t.files} - {""}
+            taken = {_norm_path(f) for x in group for f in x.files} - {""}
+            if paths and paths & taken:
+                continue
+            group.append(t)
+        if len(group) > 1:
+            batchable = [t.id for t in group]
+
     result = {
         "slug": slug,
         "ready": [{"id": t.id, "title": t.title, "parallel": t.is_parallel} for t in ready],
         "blocked": [{"id": t.id, "title": t.title, "deps": t.deps} for t in blocked],
+        "batchable": batchable,
     }
     if not ready:
         msg = "没有可执行的任务。"
@@ -1058,6 +1079,14 @@ def cmd_next(args):
     for t in result["ready"]:
         tag = "  [可并行]" if t["parallel"] else ""
         lines.append(f"  {t['id']} {t['title']}{tag}")
+    if len(batchable) > 1:
+        lines += [
+            "",
+            f"可合并为一批：{', '.join(batchable)}"
+            "（互不依赖、文件不重叠）",
+            f"  ——若它们是同型机械改动，用 `slice <slug> {' '.join(batchable)}`"
+            " 一次派发、一次审查；否则逐个派。",
+        ]
     if blocked:
         lines.append("")
         lines.append("被阻塞：")
@@ -1110,57 +1139,153 @@ def cmd_approve(args):
     return result, f"✓ 已记录『{stage}』审批（指纹 {fp}）\n  依据：{basis}"
 
 
+def _norm_path(token):
+    """把『文件』字段里的一项归一成可比较的路径（去掉行号区间）。"""
+    return token.split(":")[0].strip().lstrip("./")
+
+
+def validate_batch(plan, tasks):
+    """合并派发的机械守卫。
+
+    注意：同批由**一个** subagent 顺序完成，所以文件重叠不是并发冲突问题——
+    它是"这批不像同型机械改动"的气味，只报警告。真正会挡的是后面几条。
+
+    返回警告列表；不满足硬条件时抛 WorkflowError。
+    """
+    if len(tasks) > MAX_BATCH_TASKS:
+        raise WorkflowError(
+            f"一批最多 {MAX_BATCH_TASKS} 个任务（当前 {len(tasks)} 个）。"
+            "一个 subagent 一次能高质量做完的量有限——超了就拆成两批，"
+            "或者干脆逐个派发。"
+        )
+
+    st = plan.states()
+    ids = {t.id for t in tasks}
+
+    # 依赖检查放在状态检查之前：有内部依赖时该任务必然处于 BLOCKED，
+    # 若先查状态，"批次内含依赖"这条更精确的提示就永远出不来。
+    for t in tasks:
+        inner = ids & set(t.deps)
+        if inner:
+            raise WorkflowError(
+                f"{t.id} 依赖批次内的 {', '.join(sorted(inner))}。"
+                "批次是给互不依赖的同型改动用的——有依赖说明它们是顺序工作，"
+                "该逐个派发（后一个的审查要看前一个的结果）。"
+            )
+
+    for t in tasks:
+        state = st[t.id]
+        if state == "DONE":
+            raise WorkflowError(f"{t.id} 已完成，不能再次纳入批次。")
+        if state == "BLOCKED":
+            raise WorkflowError(f"{t.id} 当前被阻塞（依赖未完成），不能纳入批次。")
+
+    warnings = []
+    seen = {}
+    for t in tasks:
+        files = [_norm_path(f) for f in t.files]
+        if not files:
+            warnings.append(
+                f"{t.id} 的『文件』字段里析不出路径，文件重叠检查对它无效——"
+                "确认它不会和同批其他任务改同一处。"
+            )
+        for path in files:
+            if path in seen and seen[path] != t.id:
+                warnings.append(
+                    f"{t.id} 与 {seen[path]} 都涉及 {path}——同批改同一文件通常"
+                    "说明它们不是同型机械改动，确认一下是否该分开派。"
+                )
+            seen[path] = t.id
+    return warnings
+
+
+def _task_body(plan, task):
+    """抽出一个任务块的原文（到下一个标题为止）。"""
+    end = task.line_start + 1
+    while end < len(plan.lines) and not re.match(r"^#{2,4}\s", plan.lines[end]):
+        end += 1
+    return "\n".join(plan.lines[task.line_start:end]).rstrip()
+
+
 def cmd_slice(args):
     root = find_project_root()
     slug = resolve_slug(root, args.slug)
     plan = load_plan(root, slug)
     require_plan_approval(root, slug, plan.path)   # 执行门：方案与计划都须已审批
-    task = next((t for t in plan.tasks if t.id == args.task_id), None)
-    if task is None:
-        raise WorkflowError(
-            f"计划里没有 {args.task_id}。现有：{', '.join(t.id for t in plan.tasks)}"
-        )
 
-    end = task.line_start + 1
-    while end < len(plan.lines) and not re.match(r"^#{2,4}\s", plan.lines[end]):
-        end += 1
+    ids = list(args.task_id)
+    tasks = []
+    for tid in ids:
+        t = next((x for x in plan.tasks if x.id == tid), None)
+        if t is None:
+            raise WorkflowError(
+                f"计划里没有 {tid}。现有：{', '.join(x.id for x in plan.tasks)}"
+            )
+        tasks.append(t)
 
-    body = "\n".join(plan.lines[task.line_start:end]).rstrip()
+    warnings = validate_batch(plan, tasks) if len(tasks) > 1 else []
+    batch = len(tasks) > 1
+    label = " + ".join(t.id for t in tasks)
+
     header = [
-        f"# 派发片段：{task.id} {task.title}",
+        f"# 派发片段：{'批次 ' if batch else ''}{label}",
         "",
         f"**Goal（本工作流）**: {plan.meta.get('Goal', '')}",
-        "",
-        "## 全局约束（逐字遵守）",
-        "",
     ]
+    if batch:
+        header += [
+            "",
+            f"**这是一批 {len(tasks)} 个同型任务，一次做完、一次提交、一次审查。**",
+            "按顺序做，每个任务完成后自己先跑一遍它的验收命令再进入下一个。",
+        ]
+    header += ["", "## 全局约束（逐字遵守）", ""]
     constraints = _section_lines(plan.lines, "全局约束")
     header += constraints or ["- （无）"]
-    header += ["", f"## 本任务（{task.id}）", "", body]
+
+    if batch:
+        header += ["", f"## 批次任务（{len(tasks)} 个）"]
+        for t in tasks:
+            header += ["", _task_body(plan, t)]
+    else:
+        header += ["", f"## 本任务（{tasks[0].id}）", "", _task_body(plan, tasks[0])]
 
     deps_ctx = []
-    for dep in task.deps:
-        dt = next((t for t in plan.tasks if t.id == dep), None)
-        if dt:
-            deps_ctx.append(
-                f"- {dt.id} {dt.title}："
-                f"{(dt.get('接口') or '（未声明接口）')}"
-            )
+    for t in tasks:
+        for dep in t.deps:
+            if dep in {x.id for x in tasks}:
+                continue   # 批次内部依赖已被守卫挡掉
+            dt = next((x for x in plan.tasks if x.id == dep), None)
+            if dt:
+                deps_ctx.append(f"- {dt.id} {dt.title}：{dt.get('接口') or '（未声明接口）'}")
     if deps_ctx:
         header += ["", "## 依赖任务的接口（已完成的上下文）", ""] + deps_ctx
 
+    report_name = f"batch-{'-'.join(t.id for t in tasks)}" if batch else tasks[0].id
     header += [
         "",
         "## 报告契约",
         "",
-        f"正文写入 `.workflow/{slug}/reports/{task.id}.md`（详细内容都放这里）。",
+        f"正文写入 `.workflow/{slug}/reports/{report_name}.md`（详细内容都放这里）。",
         "回话只给 ≤15 行，必须包含：状态（DONE / DONE_WITH_CONCERNS / NEEDS_CONTEXT / BLOCKED）、",
         "改了哪些文件、跑了什么命令、结果、遗留问题。",
-        "**不要复述本片段内容，不要粘贴大段代码。**",
     ]
+    if batch:
+        header.append(
+            f"批次里每个任务（{label}）的完成情况都要说清——哪个 DONE、哪个有保留。"
+        )
+    header.append("**不要复述本片段内容，不要粘贴大段代码。**")
 
-    result = {"slug": slug, "task": task.id, "brief": "\n".join(header)}
-    return result, result["brief"]
+    result = {
+        "slug": slug,
+        "tasks": [t.id for t in tasks],
+        "batch": batch,
+        "warnings": warnings,
+        "brief": "\n".join(header),
+    }
+    text = result["brief"]
+    if warnings:
+        text = "⚠ " + "\n⚠ ".join(warnings) + "\n\n" + text
+    return result, text
 
 
 def _section_lines(lines, name):
@@ -1185,40 +1310,58 @@ def cmd_record(args):
     slug = resolve_slug(root, args.slug)
     plan = load_plan(root, slug)
     require_plan_approval(root, slug, plan.path)   # 与 slice 同一道门，防绕过
-    task = next((t for t in plan.tasks if t.id == args.task_id), None)
-    if task is None:
-        raise WorkflowError(f"计划里没有 {args.task_id}。")
     ledger_check_owner(root, slug)
 
+    tasks = []
+    for tid in args.task_id:
+        t = next((x for x in plan.tasks if x.id == tid), None)
+        if t is None:
+            raise WorkflowError(f"计划里没有 {tid}。")
+        tasks.append(t)
+
+    warnings = validate_batch(plan, tasks) if len(tasks) > 1 else []
+    batch = len(tasks) > 1
     status = "complete" if args.verdict == "clean" else "in_progress"
-    line_idx = task.field_lines.get("状态")
-    if line_idx is None:
-        raise WorkflowError(f"{task.id} 缺少『状态』字段行，无法回写。")
-    plan.lines[line_idx] = f"- **状态**：{status}"
+
+    for t in tasks:
+        line_idx = t.field_lines.get("状态")
+        if line_idx is None:
+            raise WorkflowError(f"{t.id} 缺少『状态』字段行，无法回写。")
+        plan.lines[line_idx] = f"- **状态**：{status}"
     with open(plan.path, "w", encoding="utf-8") as fh:
         fh.write("\n".join(plan.lines) + "\n")
 
     stamp = _now()
     commits = args.commits or "—"
-    ledger_append(
-        root,
-        slug,
-        "完成记录",
-        f"| {task.id} | {commits} | {args.verdict} | {stamp} |",
-    )
+    label = " + ".join(t.id for t in tasks)
+    review_note = f"{args.verdict}（批次 {label}）" if batch else args.verdict
+    for t in tasks:
+        ledger_append(
+            root, slug, "完成记录",
+            f"| {t.id} | {commits} | {review_note} | {stamp} |",
+        )
     if args.note:
         ledger_append(
-            root, slug, "裁决", f"| {stamp} | {task.id} | {args.note} | — |"
+            root, slug, "裁决", f"| {stamp} | {label} | {args.note} | — |"
         )
 
     result = {
         "slug": slug,
-        "task": task.id,
+        "tasks": [t.id for t in tasks],
+        "batch": batch,
+        "warnings": warnings,
         "status": status,
         "verdict": args.verdict,
         "ledger": ledger_path(root, slug),
     }
-    return result, f"✓ {task.id} → {status}（{args.verdict}），已记账本"
+    text = (
+        f"✓ {label} → {status}（{review_note}），已记账本"
+        if batch
+        else f"✓ {label} → {status}（{args.verdict}），已记账本"
+    )
+    if warnings:
+        text = "⚠ " + "\n⚠ ".join(warnings) + "\n" + text
+    return result, text
 
 
 def cmd_check(args):
@@ -1518,9 +1661,9 @@ def build_parser():
         _add_json(s)
         s.set_defaults(func=fn)
 
-    s = sub.add_parser("slice", help="抽出单任务派发片段")
+    s = sub.add_parser("slice", help="抽出派发片段（可给多个任务合并成一批）")
     s.add_argument("slug", nargs="?")
-    s.add_argument("task_id")
+    s.add_argument("task_id", nargs="+", help="一个或多个任务 ID；多个即为合并批次")
     _add_json(s)
     s.set_defaults(func=cmd_slice)
 
@@ -1531,9 +1674,9 @@ def build_parser():
     _add_json(s)
     s.set_defaults(func=cmd_approve)
 
-    s = sub.add_parser("record", help="记录任务完成并更新状态")
+    s = sub.add_parser("record", help="记录任务完成并更新状态（可一次记一批）")
     s.add_argument("slug", nargs="?")
-    s.add_argument("task_id")
+    s.add_argument("task_id", nargs="+", help="一个或多个任务 ID")
     s.add_argument("--commits", default="")
     s.add_argument("--verdict", default="clean", choices=["clean", "issues"])
     s.add_argument("--note", default="")
