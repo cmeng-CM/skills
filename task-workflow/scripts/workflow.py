@@ -13,7 +13,7 @@
     workflow.py check   [slug]
     workflow.py approve [slug] <方案|计划> --by "<用户的原话>"
     workflow.py verify  [slug] [--label <name>]
-    workflow.py close   [slug] --handoff <去向> --next-step "<建议>"
+    workflow.py close   [slug] --next-step "<建议>"
 
 所有子命令都支持 --json 输出机器可读结果。
 引擎只做确定性操作；语义判断（需求是否清楚、代码是否合格）留给 skill。
@@ -622,8 +622,8 @@ Created: {datetime.now().strftime('%Y-%m-%d')}
 
 ## 收尾
 
-| 时间 | 完成度 | 指纹 | 交接 | 下一步 |
-|------|-------|------|------|--------|
+| 时间 | 完成度 | 指纹 | 下一步 |
+|------|-------|------|--------|
 """
         )
     return path
@@ -1603,7 +1603,7 @@ def cmd_close(args):
         slug,
         "收尾",
         f"| {stamp} | {len(plan.tasks)}/{len(plan.tasks)} | {verify_fp} | "
-        f"{args.handoff or '—'} | {args.next_step or '—'} |",
+        f"{args.next_step or '—'} |",
     )
 
     result = {
@@ -1611,15 +1611,12 @@ def cmd_close(args):
         "tasks": len(plan.tasks),
         "evidence": evidence,
         "fingerprint": fp,
-        "handoff": args.handoff or "",
         "next_step": args.next_step or "",
         "closed_at": stamp,
     }
     lines = [
         f"✓ 已收尾并记账本：{len(plan.tasks)}/{len(plan.tasks)} 任务完成，{evidence}",
     ]
-    if args.handoff:
-        lines.append(f"  交接：{args.handoff}")
     if args.next_step:
         lines.append(f"  下一步：{args.next_step}")
     return result, "\n".join(lines)
@@ -1685,7 +1682,6 @@ def build_parser():
 
     s = sub.add_parser("close", help="收尾记账（有未验证内容时拒绝）")
     s.add_argument("slug", nargs="?")
-    s.add_argument("--handoff", default="", help="交接去向，如 work-closeout / session-handoff")
     s.add_argument("--next-step", default="", help="给用户的下一步建议")
     s.add_argument(
         "--manual-confirmed",

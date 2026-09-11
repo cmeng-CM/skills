@@ -286,12 +286,14 @@ $W init <slug> --bug --goal "<症状>"
 ### 收尾
 
 ```bash
-$W close <slug> --handoff "<去向>" --next-step "<建议>"
+$W close <slug> --next-step "<建议>"
 ```
 
-`close` 同时是门，三种情况拒绝执行：**还有未完成任务**、**账本无验证记录**、**最近一次验证的指纹与当前工作树不符**。无法自动化验证的走 `--manual-confirmed "<谁确认了什么>"`——同样落账本，**不存在静默通过的口子**。
+`close` 同时是门，四种情况拒绝执行：**还有未完成任务**、**账本无验证记录**、**最近一次验证的指纹与当前工作树不符**、**存在验证覆盖缺口**。无法自动化验证的走 `--manual-confirmed "<谁确认了什么>"`——同样落账本，**不存在静默通过的口子**。
 
-收尾三件事：汇总全部裁决给用户 / 报告验证证据 / 条件交接给 `work-closeout`。
+收尾两件事：汇总全部裁决给用户 / 报告验证证据。
+
+**然后本 skill 的职责就结束了。** 不改代码、不写长期记忆、不更新项目契约。**收尾之后做什么由用户自己判断**——包括是否把产出写回别处；工作流不代判、不探测、不代办。
 
 ---
 
@@ -343,8 +345,8 @@ $W close <slug> --handoff "<去向>" --next-step "<建议>"
 ## 八、与现有 skill 的衔接
 
 ```
-需求 → [delve 澄清*] → [codebase-onboarding*] → ┌─ P/E/V 本 skill ─┐ → [work-closeout*]
-                                                └──────────────────┘   或 [session-handoff*]
+需求 → [delve 澄清*] → [codebase-onboarding*] → ┌─ P/E/V 本 skill ─┐ → 结束
+                                                └──────────────────┘
                     * = 条件调用，探测到才调，缺失则降级
 ```
 
@@ -352,10 +354,11 @@ $W close <slug> --handoff "<去向>" --next-step "<建议>"
 |---|---|---|
 | `delve` | 需求有歧义时 | 自己一次问一个，答案写进决策表 |
 | `codebase-onboarding` | 需要项目约定/验证命令且项目无 `AGENTS.md` | 直接问用户验证命令；**绝不猜默认值** |
-| `work-closeout` | 收尾写回 | 只报告改了哪些文件 + 下一步建议 |
-| `session-handoff` | **换人/换 agent 接手**时 | 账本本身已能跨会话恢复，不需要 handoff |
+| `session-handoff` | **换人/换 agent 接手**时（用户提出才用） | 账本本身已能跨会话恢复，不需要 handoff |
 
-**不衔接的**：`project-learning`（理解项目 ≠ 完成任务）、memory 三件套（`work-closeout` 已编排）、工具型 skill（无结构关系）。
+**不衔接的**：`project-learning`（理解项目 ≠ 完成任务）、收尾写回类（**本 skill 收尾后即结束，是否写回由用户判断**，见上文「收尾」）、memory 三件套、工具型 skill（无结构关系）。
+
+**收尾之后为什么不由本 skill 决定**：工作流解答的是"把这个需求做完并验证通过"，而"把产出写回哪里"是另一件事，取决于用户当时想留下什么。所以这里既不探测下游、也不给建议——**由用户自己判断**。
 
 ---
 
@@ -431,12 +434,12 @@ $W close <slug> --handoff "<去向>" --next-step "<建议>"
 
 | 文件 | 行数 | 职责 |
 |---|---|---|
-| `README.md` | 444 | 本文件：设计理念、机制分级、已定的设计决定 |
-| `SKILL.md` | 368 | 主协议：守卫、反模式、轮次路由、P/E/V 三段、bug 路径、Exit Criteria、失败分支 |
+| `README.md` | 447 | 本文件：设计理念、机制分级、已定的设计决定 |
+| `SKILL.md` | 370 | 主协议：守卫、反模式、轮次路由、P/E/V 三段、bug 路径、Exit Criteria、失败分支 |
 | `references/plan-format.md` | 471 | 计划字段规范（含验证覆盖与 bug 专属字段）+ 完整正例 + 反例对照 |
 | `references/dispatch-protocol.md` | 291 | 派发/报告契约/四态/fix 循环/防误报/整体终审/隔离 |
-| `references/integrations.md` | 110 | 四个 skill 的衔接协议与降级路径 |
-| `scripts/workflow.py` | 1721 | 引擎：init/status/next/check/approve/slice/record/verify/close |
+| `references/integrations.md` | 107 | 四个 skill 的衔接协议与降级路径 |
+| `scripts/workflow.py` | 1717 | 引擎：init/status/next/check/approve/slice/record/verify/close |
 | `test-prompts.json` | 87 | 验收用例（基线测试用） |
 
 依赖：**python3 标准库 + bash `set -euo pipefail`**，无第三方包，无构建步骤。
