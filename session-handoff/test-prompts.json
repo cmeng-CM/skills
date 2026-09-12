@@ -17,7 +17,7 @@
   {
     "id": 4,
     "prompt": "把这段对话总结一下，我要粘贴到另一个 AI 工具里继续。",
-    "expected": "Skill 识别这是跨工具迁移场景（输出到对话、读者是外部模型），不属于本 skill 边界，应建议改用 conversation-summary，而不是在 .handoffs/ 里生成文件"
+    "expected": "Skill 识别这是跨工具迁移场景（输出到对话、读者是外部模型），不属于本 skill 边界（本 skill 只做同一项目内、给下一个 agent 接续干活的交接），应说明不做这类，而不是在 .handoffs/ 里生成文件"
   },
   {
     "id": 5,
