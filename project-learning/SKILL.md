@@ -1,6 +1,6 @@
 ---
 name: project-learning
-description: Quickly build a layered mental model of an unfamiliar software project — a memorizable structural skeleton and core concept model first, then a runtime narrative with an end-to-end trace — then accompany the user through module-by-module deep dives. Use when the user wants to learn or onboard onto a new project, build a holistic view of it ("学一下这个项目"、"建立全貌"、"整体架构是什么"), understand how it works internally, read its source code with guidance, trace how a request/message/event flows through the system, or continue a previous learning session ("继续学"、"下钻某模块"、"带我读源码"). Also use when the user asks to be quizzed on or to verify their understanding of a project being studied. Do not use for bug fixing, feature work, code navigation without a learning goal, or post-learning tasks such as implementing changes or evaluating whether to adopt the project.
+description: Build a layered mental model of an unfamiliar project (structure, concepts, then a runtime trace) and guide module deep dives. Use when learning or onboarding a project: 学一下这个项目、建立全貌、整体架构、带我读源码、继续学、下钻某模块、考我。
 ---
 
 # Project Learning

@@ -435,7 +435,7 @@ $W close <slug> --next-step "<建议>"
 | 文件 | 行数 | 职责 |
 |---|---|---|
 | `README.md` | 447 | 本文件：设计理念、机制分级、已定的设计决定 |
-| `SKILL.md` | 370 | 主协议：守卫、反模式、轮次路由、P/E/V 三段、bug 路径、Exit Criteria、失败分支 |
+| `SKILL.md` | 371 | 主协议：守卫、反模式、轮次路由、P/E/V 三段、bug 路径、Exit Criteria、失败分支 |
 | `references/plan-format.md` | 471 | 计划字段规范（含验证覆盖与 bug 专属字段）+ 完整正例 + 反例对照 |
 | `references/dispatch-protocol.md` | 291 | 派发/报告契约/四态/fix 循环/防误报/整体终审/隔离 |
 | `references/integrations.md` | 107 | 四个 skill 的衔接协议与降级路径 |

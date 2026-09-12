@@ -1,7 +1,6 @@
 ---
 name: delve
-description: Use when the user's request is not clear enough to act on — you can see two interpretations leading to different outcomes, or two approaches with non-obvious tradeoffs, and the user hasn't picked one. Also use on explicit asks like "拷问我" / "帮我分析一下" / "哪种方案好" / "帮我对比一下" / "方案设计".
-
+description: Use when the request isn't clear enough to act on — two readings leading to different outcomes, or two approaches with non-obvious tradeoffs. Also for explicit asks: 拷问我 / 帮我分析一下 / 哪种方案好 / 帮我对比一下 / 方案设计.
 ---
 
 # delve

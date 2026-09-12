@@ -1,6 +1,6 @@
 ---
 name: codebase-onboarding
-description: Generate or refresh a project's agent-knowledge file (AGENTS.md as the cross-tool source of truth, with CLAUDE.md/GEMINI.md aliases) by scanning its codebase for tech stack, entry points, architecture, and conventions. Use whenever the user opens a new project with no AGENTS.md/CLAUDE.md, says things like "帮我理解这个项目" / "onboard me" / "help me understand this codebase" / "生成一份 CLAUDE.md" / "生成 AGENTS.md", or when an existing knowledge file looks stale relative to the current code. This is a one-shot setup skill, not a per-task workflow — it produces the knowledge file, then exits.
+description: Scan a codebase for stack, entry points and conventions, then write/refresh its knowledge file — AGENTS.md (+CLAUDE.md/GEMINI.md aliases). Use on a project without one, on 帮我理解这个项目 / 生成 AGENTS.md, or when stale.
 ---
 
 # Codebase Onboarding
