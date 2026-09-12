@@ -345,15 +345,16 @@ $W close <slug> --next-step "<建议>"
 ## 八、与现有 skill 的衔接
 
 ```
-需求 → [delve 澄清*] → [codebase-onboarding*] → ┌─ P/E/V 本 skill ─┐ → 结束
-                                                └──────────────────┘
-                    * = 条件调用，探测到才调，缺失则降级
+需求 → [delve 澄清*] → ┌─ P/E/V 本 skill ─┐ → 结束
+                       └──────────────────┘
+    * = 条件调用，探测到才调，缺失则降级
 ```
+
+**拿项目约定与验证命令不依赖任何外部 skill**：直接读项目根的 `AGENTS.md` / `CLAUDE.md` / `README.md`；读不到就问用户一次。**绝不猜默认值**（拿不到宁可在计划里标 `未声明`）。
 
 | skill | 时机 | 探测不到时的降级 |
 |---|---|---|
 | `delve` | 需求有歧义时 | 自己一次问一个，答案写进决策表 |
-| `codebase-onboarding` | 需要项目约定/验证命令且项目无 `AGENTS.md` | 直接问用户验证命令；**绝不猜默认值** |
 | `session-handoff` | **换人/换 agent 接手**时（用户提出才用） | 账本本身已能跨会话恢复，不需要 handoff |
 
 **不衔接的**：`project-learning`（理解项目 ≠ 完成任务）、收尾写回类（**本 skill 收尾后即结束，是否写回由用户判断**，见上文「收尾」）、memory 三件套、工具型 skill（无结构关系）。
@@ -434,11 +435,11 @@ $W close <slug> --next-step "<建议>"
 
 | 文件 | 行数 | 职责 |
 |---|---|---|
-| `README.md` | 447 | 本文件：设计理念、机制分级、已定的设计决定 |
-| `SKILL.md` | 371 | 主协议：守卫、反模式、轮次路由、P/E/V 三段、bug 路径、Exit Criteria、失败分支 |
+| `README.md` | 448 | 本文件：设计理念、机制分级、已定的设计决定 |
+| `SKILL.md` | 370 | 主协议：守卫、反模式、轮次路由、P/E/V 三段、bug 路径、Exit Criteria、失败分支 |
 | `references/plan-format.md` | 471 | 计划字段规范（含验证覆盖与 bug 专属字段）+ 完整正例 + 反例对照 |
 | `references/dispatch-protocol.md` | 291 | 派发/报告契约/四态/fix 循环/防误报/整体终审/隔离 |
-| `references/integrations.md` | 107 | 四个 skill 的衔接协议与降级路径 |
+| `references/integrations.md` | 102 | 四个 skill 的衔接协议与降级路径 |
 | `scripts/workflow.py` | 1717 | 引擎：init/status/next/check/approve/slice/record/verify/close |
 | `test-prompts.json` | 87 | 验收用例（基线测试用） |
 

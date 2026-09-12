@@ -6,15 +6,14 @@
 
 ## 探测方式
 
-skill 可能装在三处，任一命中即可调用：
+skill 装在两处，任一命中即可调用：
 
 ```
-~/.zcode/skills/<name>/SKILL.md
-~/.claude/skills/<name>/SKILL.md
-~/.codex/skills/<name>/SKILL.md
-~/.agents/skills/<name>/SKILL.md
-<当前仓库>/.zcode/skills/<name>/SKILL.md
+~/.claude/skills/<name>/SKILL.md     # Claude Code
+~/.agents/skills/<name>/SKILL.md     # 跨工具标准路径：ZCode / Codex / pi 都读这里
 ```
+
+（项目内也可能有 `.agents/skills/` 或 `.zcode/skills/` 的本地副本，一并看一眼。）
 
 探测就是看 `SKILL.md` 在不在。探测不到就**不要**提这个 skill，直接走降级——避免让用户去找一个不存在的 skill。
 
@@ -55,20 +54,16 @@ skill 可能装在三处，任一命中即可调用：
 
 ---
 
-## 上游二：codebase-onboarding（拿项目约定）
+## 上游：拿项目约定与验证命令（不依赖外部 skill）
 
-**触发时机**：P 轮开头，需要知道项目约定和验证命令的时候。
+**触发时机**：P 轮开头——需要知道项目的验证命令与必须遵守的约定。
 
-**判据**——只是需要这两样东西：
+**做法**：直接读项目根的 `AGENTS.md` / `CLAUDE.md` / `README.md`。这三样能给出：
 
 1. 项目用的是什么测试/构建命令（V 轮的验证命令来源）
 2. 项目有哪些必须遵守的约定（会进计划的全局约束）
 
-**优先级**：先直接读项目根已有的 `AGENTS.md` / `CLAUDE.md` / `README.md`。**读得到就不要调 onboarding**——那是给"项目还没有认知文件"的情况准备的。
-
-**调用方式**：仓库里没有 `AGENTS.md`，且从 `README.md` 也读不出测试命令时，调用 `codebase-onboarding` 生成。
-
-**降级路径**（onboarding 不在，或用户不想跑）：直接问用户"这个项目的验证命令是什么"，答案写进 plan.md 的验证命令块。一次问清，之后每次验证都用它。
+**读不到时**：直接问用户"这个项目的验证命令是什么"，答案写进 plan.md 的验证命令块。一次问清，之后每次验证都用它。
 
 **注意**：验证命令拿不到时，**不要**自己猜一个（比如默认写 `npm test`）。宁可标 `未声明`，V 轮走人工确认。
 
@@ -102,6 +97,6 @@ handoff 真正必要的场景：
 
 ## 一个实际的坑
 
-skill 可能安装在不同客户端目录下（`~/.zcode/skills`、`~/.claude/skills`、`~/.codex/skills`、`~/.agents/skills`）。出现"明明装了却调不到"时，先确认它在**当前客户端**的 skills 目录里有软链，而不是只装在别处。
+skill 装在两个目录：`~/.claude/skills`（Claude Code）与 `~/.agents/skills`（ZCode / Codex / pi）。出现"明明装了却调不到"时，先确认它在**当前客户端**读的那个目录里——只装在一起不会被另一处看到。
 
 调用前统一按上面的探测方式检查，不要假设装在同一个地方。
