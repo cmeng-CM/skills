@@ -33,6 +33,7 @@ from datetime import datetime
 TASK_HEADER = re.compile(r"^####\s+(T\d+)\b\s*(.*)$")
 PHASE_HEADER = re.compile(r"^###\s+Phase\s+(\d+)\s*[:：]?\s*(.*)$")
 SECTION_HEADER = re.compile(r"^##\s+(.+?)\s*$")
+H2_ANYWHERE = re.compile(r"^##\s+(.+?)\s*$", re.M)  # 在整份文本里找二级标题
 META_FIELD = re.compile(r"^\*\*(?P<key>[^*]+?)\*\*\s*[:：]\s*(?P<value>.*)$")
 TASK_FIELD = re.compile(r"^-\s+\*\*(?P<key>[^*]+?)\*\*\s*[:：]\s*(?P<value>.*)$")
 DECISION_ROW = re.compile(r"^\|\s*(D-\d+)\s*\|(.+)\|\s*$")
@@ -55,6 +56,21 @@ PLACEHOLDERS = [
 
 TASK_FIELD_KEYS = ["文件", "依赖", "并行", "接口", "验收", "失败信号", "决策", "状态"]
 VALID_STATUS = ["pending", "in_progress", "complete", "blocked"]
+
+# 设计文档：与状态控制分开的独立产物，必须落在项目仓库里（.workflow/ 自忽略）
+DESIGN_DOC_KEY = "设计文档"
+DESIGN_DOC_SECTIONS = [
+    "一句话方案",
+    "做法",
+    "备选与取舍",
+    "接口与数据形状",
+    "明确不做",
+    "已知限制",
+    "验收标准",
+    "决策摘要",
+]
+DESIGN_DOC_MIN_REASON = 10  # 声明「无」时理由的最短长度（挡掉「无 — 不需要」这类凑数）
+DESIGN_DOC_NONE_MARKERS = ("无", "不适用", "n/a", "N/A")
 
 MAX_TASKS = 8          # 超过则建议拆分
 MAX_FILES_PER_TASK = 5  # 单任务文件数上限
@@ -361,9 +377,140 @@ def load_plan(root, slug):
     return Plan(path, text)
 
 
+# ---------------------------------------------------------------- 设计文档
+
+def _md_section(text, name):
+    """取 `## <name>` 一节的正文（到下一个二级标题为止）。找不到返回空串。"""
+    buf, collecting = [], False
+    for line in text.splitlines():
+        m = SECTION_HEADER.match(line)
+        if m:
+            if collecting:
+                break
+            collecting = m.group(1).strip() == name
+            continue
+        if collecting:
+            buf.append(line)
+    return "\n".join(buf)
+
+
+def design_doc_decl(plan):
+    """解析计划头部的 `**设计文档**` 声明。
+
+    返回 (path, reason)：
+      - path 是路径：设计文档落在这里
+      - path == ""：声明为「无」，reason 是理由
+      - path is None：根本没声明
+    """
+    raw = (plan.meta.get(DESIGN_DOC_KEY) or "").strip()
+    if not raw:
+        return None, ""
+    for marker in DESIGN_DOC_NONE_MARKERS:
+        if raw.startswith(marker):
+            reason = raw[len(marker):].lstrip(" \t—-—:：,，.。()（）【】[]").strip()
+            return "", reason
+    return raw.split()[0].strip("`"), ""
+
+
+def design_doc_problems(root, plan):
+    """设计文档的问题清单，返回 (errors, warnings)。
+
+    为什么必须落在项目仓库里：`.workflow/` 是自忽略的状态目录，收尾后随工作树
+    消失。状态控制（计划/账本/报告）可以是一次性的，设计记录不行——它得进版本库，
+    半年后还有人读得到。
+    """
+    errors, warnings = [], []
+    declared, reason = design_doc_decl(plan)
+
+    if declared is None:
+        errors.append(
+            "计划头部缺少 `**设计文档**` 声明——设计记录没有归属产物。"
+            "写一份（八节骨架见 references/design-doc.md），或写 `无 — <理由>`。"
+        )
+        return errors, warnings
+
+    if declared == "":
+        if len(reason) < DESIGN_DOC_MIN_REASON:
+            errors.append(
+                "『设计文档』声明为『无』但没给理由（或理由太短）——"
+                "写成 `无 — <为什么这次不需要设计文档>`。"
+            )
+        else:
+            warnings.append(f"本次不产出设计文档，理由：{reason}")
+        return errors, warnings
+
+    norm = declared.replace("\\", "/").lstrip("/")
+    if norm.startswith(".workflow/") or "/.workflow/" in norm:
+        errors.append(
+            f"设计文档不能放在 `{declared}`——`.workflow/` 是自忽略的状态目录，"
+            "收尾后随工作树消失，等于没有设计记录。"
+            "放到项目仓库里（如 `docs/<模块>方案.md`）。"
+        )
+        return errors, warnings
+
+    full = os.path.join(root, norm)
+    if not os.path.isfile(full):
+        errors.append(
+            f"声明的设计文档不存在：{declared}——P 轮就要起草（基于已批准的方案），"
+            "不是执行完再补。"
+        )
+        return errors, warnings
+
+    try:
+        with open(full, encoding="utf-8", errors="ignore") as fh:
+            text = fh.read()
+    except OSError:
+        errors.append(f"读不到设计文档 {declared}。")
+        return errors, warnings
+
+    headings = {m.group(1).strip() for m in H2_ANYWHERE.finditer(text)}
+    missing = [s for s in DESIGN_DOC_SECTIONS if s not in headings]
+    if missing:
+        errors.append(
+            f"设计文档 {declared} 缺必填小节（二级标题）：{'、'.join(missing)}。"
+        )
+    else:
+        # 有标题但正文是空的，等于没写。不适用的小节写「无（<理由>）」——
+        # 给诚实的省略留出口，否则会逼出凑数的空话。
+        empty = []
+        for s in DESIGN_DOC_SECTIONS:
+            body = [
+                l for l in _md_section(text, s).splitlines()
+                if l.strip() and not l.strip().startswith("<!--")
+            ]
+            if not body:
+                empty.append(s)
+        if empty:
+            errors.append(
+                f"设计文档 {declared} 有 {len(empty)} 个必填小节是空的：{'、'.join(empty)}。"
+                "不适用的小节写「无（<理由>）」，不要留空。"
+            )
+
+    for idx, line in enumerate(text.splitlines(), 1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("<!--"):
+            continue
+        for token in PLACEHOLDERS:
+            if token in line:
+                errors.append(
+                    f"设计文档 {declared}:L{idx} 含占位符 '{token}'：{stripped[:60]}"
+                )
+                break
+
+    summary = _md_section(text, "决策摘要")
+    refs = set(DECISION_REF.findall(summary))
+    gap = sorted({d["id"] for d in plan.decisions} - refs)
+    if gap:
+        errors.append(
+            f"设计文档的『决策摘要』没有引用 {', '.join(gap)}——"
+            "决策不许只留在任务报告或账本里，设计文档必须给出合并视图。"
+        )
+    return errors, warnings
+
+
 # ---------------------------------------------------------------- 计划检查
 
-def check_plan(plan):
+def check_plan(plan, root=None):
     """返回 [{level, task, message}]，level ∈ ERROR/WARNING/INFO。"""
     out = []
     by_id = {t.id: t for t in plan.tasks}
@@ -570,6 +717,14 @@ def check_plan(plan):
             )
         if plan.verify_command == "":
             add("ERROR", "bug 工作流的验证命令必须声明：修复后要能一键重跑复现与全量测试。")
+
+    # 9. 设计文档：独立产物，落在项目仓库里（root 缺失时只查声明）
+    if root is not None:
+        doc_errors, doc_warnings = design_doc_problems(root, plan)
+        for msg in doc_errors:
+            add("ERROR", msg)
+        for msg in doc_warnings:
+            add("WARNING", msg)
 
     return out
 
@@ -886,6 +1041,11 @@ TODO（为什么错。说不清根因就只是在让症状消失，不是在修�
 **Slug**: {slug}
 **类型**: {kind}
 **Created**: {datetime.now().strftime('%Y-%m-%d')}
+**设计文档**: TODO
+<!-- 项目仓库内的路径（如 docs/<模块>方案.md），八节骨架见 references/design-doc.md。
+     不需要设计文档就写「无 — <理由>」。四类情形必须写一份：跨模块改动 /
+     新外部依赖或数据模型变化 / 安全·性能·迁移 / 需要先定技术决策才能开工。
+     不要放在 .workflow/ 下——那是自忽略的状态目录，收尾后随工作树消失。 -->
 
 ## 验证命令
 
@@ -1119,7 +1279,7 @@ def cmd_approve(args):
             raise WorkflowError("『方案』一节还是空的（或含 TODO），无可审批内容。")
         fp = section_hash(plan.path, "方案")
     else:
-        findings = [f for f in check_plan(plan) if f["level"] == "ERROR"]
+        findings = [f for f in check_plan(plan, root) if f["level"] == "ERROR"]
         if findings:
             raise WorkflowError(
                 f"计划还有 {len(findings)} 个 ERROR，不能审批。先跑 `check` 修掉。"
@@ -1242,6 +1402,18 @@ def cmd_slice(args):
     constraints = _section_lines(plan.lines, "全局约束")
     header += constraints or ["- （无）"]
 
+    doc_decl, _doc_reason = design_doc_decl(plan)
+    if doc_decl:
+        header += [
+            "",
+            "## 设计文档（接口以它为准）",
+            "",
+            f"`{doc_decl}`",
+            "动手前读它的「接口与数据形状」一节——那是权威签名，不要自己另定。",
+            "**不要修改该文档**（回写由控制器在末尾统一做）；发现它和代码不符，",
+            "在报告里记一条「文档与实现不符：<文档第几节> → <实际是什么>」。",
+        ]
+
     if batch:
         header += ["", f"## 批次任务（{len(tasks)} 个）"]
         for t in tasks:
@@ -1268,6 +1440,11 @@ def cmd_slice(args):
         f"正文写入 `.workflow/{slug}/reports/{report_name}.md`（详细内容都放这里）。",
         "回话只给 ≤15 行，必须包含：状态（DONE / DONE_WITH_CONCERNS / NEEDS_CONTEXT / BLOCKED）、",
         "改了哪些文件、跑了什么命令、结果、遗留问题。",
+        "",
+        "**报告只装证据，不装判断**：命令与退出码、产物路径、实测结果、与计划的偏离、",
+        "阻塞、待人工验收的部分。技术选择与边界裁定必须显式交出来，写成",
+        "`候选决策：<选择> — <理由> — <代价>`，由控制器归位到设计文档或计划；",
+        "**留在报告里的判断，收尾后会随 `.workflow/` 消失。**",
     ]
     if batch:
         header.append(
@@ -1368,7 +1545,7 @@ def cmd_check(args):
     root = find_project_root()
     slug = resolve_slug(root, args.slug)
     plan = load_plan(root, slug)
-    findings = check_plan(plan)
+    findings = check_plan(plan, root)
 
     errors = [f for f in findings if f["level"] == "ERROR"]
     warnings = [f for f in findings if f["level"] == "WARNING"]
@@ -1562,6 +1739,15 @@ def cmd_close(args):
             f"还有未完成的任务（{', '.join(incomplete)}），不得收尾。"
         )
 
+    # 设计文档是无条件的：它不随验证方式变化（--manual-confirmed 也不豁免）
+    doc_errors, _doc_warnings = design_doc_problems(root, plan)
+    if doc_errors:
+        detail = "\n".join(f"  - {e}" for e in doc_errors)
+        raise WorkflowError(
+            f"设计文档未就绪（{len(doc_errors)} 项）：\n{detail}\n"
+            "它是本次唯一会留在版本库里的设计记录，不能带着缺口收尾。"
+        )
+
     fp = fingerprint(root)
     manual = (args.manual_confirmed or "").strip()
 
@@ -1585,6 +1771,7 @@ def cmd_close(args):
                 f"工作树内容与最近一次验证时不一致"
                 f"（验证时 {last['fingerprint']}，当前 {fp}），该验证已失效。"
                 "先重跑 `verify` 绑定当前内容，再收尾。"
+                "常见原因：验证之后又回写了设计文档——回写要在 V 轮之前做完。"
             )
         coverage = audit_coverage(root, plan)
         gaps = [c for c in coverage if c["status"] == "missing"]
