@@ -1,6 +1,6 @@
 # skills
 
-Claude Code / Codex / OpenCode 的 skill 集合仓库。每个 skill 以 `SKILL.md`（prompt-as-code）为主体、各自自包含，skill 之间无共享代码。写 skill 遵循 [`模板.md`](模板.md) 的四段式规范。
+skill 集合仓库。每个 skill 以 `SKILL.md`（prompt-as-code）为主体、各自自包含，skill 之间无共享代码。写 skill 遵循 [`模板.md`](模板.md) 的四段式规范。
 
 ## 安装与卸载
 
