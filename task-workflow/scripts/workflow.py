@@ -54,12 +54,31 @@ PLACEHOLDERS = [
     "xxx",
 ]
 
-TASK_FIELD_KEYS = ["文件", "依赖", "并行", "接口", "验收", "失败信号", "决策", "状态"]
+TASK_FIELD_KEYS = ["文件", "依赖", "并行", "做法", "接口", "预期", "验收", "失败信号", "决策", "状态"]
 VALID_STATUS = ["pending", "in_progress", "complete", "blocked"]
+
+# 计划格式版本：2 起新增『做法』『预期』两个任务字段与方案的『背景与目标』节。
+# 不写 `**格式**` 的计划按 1 处理——本次升级前建的、正在进行中的工作流不该被新校验打断。
+PLAN_FORMAT_KEY = "格式"
+PLAN_FORMAT_CURRENT = 2
 
 # 设计文档：与状态控制分开的独立产物，必须落在项目仓库里（.workflow/ 自忽略）
 DESIGN_DOC_KEY = "设计文档"
 DESIGN_DOC_SECTIONS = [
+    "一句话方案",
+    "背景与目标",
+    "做法",
+    "备选与取舍",
+    "接口与数据形状",
+    "明确不做",
+    "实际交付",
+    "已知限制",
+    "验收标准",
+    "决策摘要",
+]
+# 格式 1 的设计文档骨架（本次升级前）：不带「背景与目标」「实际交付」。
+# 老文档按这一份校验，避免升级动作把进行中的工作流卡住。
+DESIGN_DOC_SECTIONS_V1 = [
     "一句话方案",
     "做法",
     "备选与取舍",
@@ -93,6 +112,16 @@ def _git(root, *args):
         return out.stdout if out.returncode == 0 else ""
     except (OSError, subprocess.SubprocessError):
         return ""
+
+
+def _git_ok(root, *args):
+    """只关心退出码的 git 命令（如 merge-base --is-ancestor，成功时 stdout 是空的）。"""
+    try:
+        return subprocess.run(
+            ["git", *args], cwd=root, capture_output=True, text=True, timeout=30
+        ).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def find_project_root(start=None):
@@ -223,6 +252,21 @@ class Plan:
     @property
     def is_bug(self):
         return self.kind == "bug"
+
+    @property
+    def format_version(self):
+        """计划格式版本。头部没写 `**格式**` 的项目按 1 处理（升级前建的计划）。"""
+        m = re.match(r"(\d+)", (self.meta.get(PLAN_FORMAT_KEY) or "").strip())
+        return int(m.group(1)) if m else 1
+
+    @property
+    def is_v2(self):
+        return self.format_version >= PLAN_FORMAT_CURRENT
+
+    @property
+    def design_doc_sections(self):
+        """本计划该按哪份骨架核对设计文档。"""
+        return DESIGN_DOC_SECTIONS if self.is_v2 else DESIGN_DOC_SECTIONS_V1
 
     def _parse(self):
         section = None
@@ -412,20 +456,24 @@ def design_doc_decl(plan):
     return raw.split()[0].strip("`"), ""
 
 
-def design_doc_problems(root, plan):
+def design_doc_problems(root, plan, stage="plan"):
     """设计文档的问题清单，返回 (errors, warnings)。
 
     为什么必须落在项目仓库里：`.workflow/` 是自忽略的状态目录，收尾后随工作树
     消失。状态控制（计划/账本/报告）可以是一次性的，设计记录不行——它得进版本库，
     半年后还有人读得到。
+
+    stage="close" 时额外要求「实际交付」已回写：起草阶段它只能是「无（尚未实现…）」，
+    收尾时还那样就等于这次改动到底交付了什么没有记录。
     """
     errors, warnings = [], []
     declared, reason = design_doc_decl(plan)
+    sections = plan.design_doc_sections
 
     if declared is None:
         errors.append(
             "计划头部缺少 `**设计文档**` 声明——设计记录没有归属产物。"
-            "写一份（八节骨架见 references/design-doc.md），或写 `无 — <理由>`。"
+            "写一份（十节骨架见 references/design-doc.md），或写 `无 — <理由>`。"
         )
         return errors, warnings
 
@@ -464,7 +512,7 @@ def design_doc_problems(root, plan):
         return errors, warnings
 
     headings = {m.group(1).strip() for m in H2_ANYWHERE.finditer(text)}
-    missing = [s for s in DESIGN_DOC_SECTIONS if s not in headings]
+    missing = [s for s in sections if s not in headings]
     if missing:
         errors.append(
             f"设计文档 {declared} 缺必填小节（二级标题）：{'、'.join(missing)}。"
@@ -473,7 +521,7 @@ def design_doc_problems(root, plan):
         # 有标题但正文是空的，等于没写。不适用的小节写「无（<理由>）」——
         # 给诚实的省略留出口，否则会逼出凑数的空话。
         empty = []
-        for s in DESIGN_DOC_SECTIONS:
+        for s in sections:
             body = [
                 l for l in _md_section(text, s).splitlines()
                 if l.strip() and not l.strip().startswith("<!--")
@@ -505,10 +553,44 @@ def design_doc_problems(root, plan):
             f"设计文档的『决策摘要』没有引用 {', '.join(gap)}——"
             "决策不许只留在任务报告或账本里，设计文档必须给出合并视图。"
         )
+
+    # 收尾时「实际交付」必须已回写：起草阶段写「无（尚未实现…）」是合法的，
+    # 但带着它收尾就等于这次改动交付了什么没有留下记录。
+    if stage == "close" and plan.is_v2:
+        body = "\n".join(
+            l for l in _md_section(text, "实际交付").splitlines()
+            if l.strip() and not l.strip().startswith("<!--")
+        ).strip()
+        if body.startswith(DESIGN_DOC_NONE_MARKERS):
+            errors.append(
+                f"设计文档 {declared} 的『实际交付』还是未回写状态——"
+                "收尾前把它补成：交付物清单（文件/接口/表/脚本）、与计划的偏离及原因、遗留项。"
+                "三个月后读到这份文档的人，只能靠这一节知道当时到底改了什么。"
+            )
     return errors, warnings
 
 
 # ---------------------------------------------------------------- 计划检查
+
+def _plan_subsection(plan, section, sub):
+    """取 `## <section>` 里 `### <sub>` 的正文行。
+
+    返回 (是否存在, 正文行列表)。计划解析器已经把各二级节的正文行收集在
+    plan.sections 里，这里再按三级标题切一刀。
+    """
+    found, collecting, body = False, False, []
+    for line in plan.sections.get(section, []):
+        m = re.match(r"^###\s+(.+?)\s*$", line)
+        if m:
+            if collecting:
+                break
+            if m.group(1).strip() == sub:
+                found, collecting = True, True
+            continue
+        if collecting:
+            body.append(line)
+    return found, body
+
 
 def check_plan(plan, root=None):
     """返回 [{level, task, message}]，level ∈ ERROR/WARNING/INFO。"""
@@ -571,6 +653,21 @@ def check_plan(plan, root=None):
                 "缺少『失败信号』字段——没有失败信号的验收标准无法判定，等于没写。",
                 t.id,
             )
+        if plan.is_v2:
+            if not t.get("做法"):
+                add(
+                    "ERROR",
+                    "缺少『做法』字段——执行者只知道改哪些文件，不知道这一步具体做什么；"
+                    "它会自己去补设计决策。写清动作、关键取值、边界。",
+                    t.id,
+                )
+            if not t.get("预期"):
+                add(
+                    "ERROR",
+                    "缺少『预期』字段——没有可观察的预期结果，"
+                    "做完也无法判断结果是否符合预期（只能判断命令跑没跑过）。",
+                    t.id,
+                )
         if t.status not in VALID_STATUS:
             add(
                 "ERROR",
@@ -585,6 +682,32 @@ def check_plan(plan, root=None):
                 f"单任务涉及 {len(t.files)} 个文件（上限 {MAX_FILES_PER_TASK}），建议拆分。",
                 t.id,
             )
+
+    # 2b. 格式 1 的计划：新字段缺失只提示，不打断进行中的工作流（见 PLAN_FORMAT_KEY）
+    if not plan.is_v2:
+        legacy = [t.id for t in plan.tasks if not t.get("做法") or not t.get("预期")]
+        if legacy:
+            add(
+                "WARNING",
+                f"本计划是格式 1：{', '.join(legacy)} 缺『做法』/『预期』。"
+                "这两个字段是本次升级新增的（执行者需要知道每步做什么、预期看到什么）。"
+                "在计划头部加 `**格式**: 2` 并补齐，check 就会强制它们；"
+                "老计划不补也能继续跑完。",
+            )
+
+    # 2c. 方案的「背景与目标」：为什么做 + 预期结果 + 承接关系
+    # bug 路径例外：它的"为什么"已经在 `## 复现` + `## 根因` 两节里，不重复要求。
+    found, body = _plan_subsection(plan, "方案", "背景与目标")
+    lvl = "ERROR" if plan.is_v2 else "WARNING"
+    if not found and not plan.is_bug:
+        add(
+            lvl,
+            "『方案』缺少 `### 背景与目标` 小节——没有它，"
+            "读者（和三个月后的你）不知道这个改动为什么做、要做成什么样。"
+            "已有设计来源时，这一节还要写明承接关系（源路径 + 继承什么 + 本次增量）。",
+        )
+    elif found and not body:
+        add(lvl, "『方案』的 `### 背景与目标` 是空的——把问题现状与预期结果写上去。")
 
     # 3. 决策覆盖（双向）
     declared = {d["id"] for d in plan.decisions}
@@ -1029,6 +1152,21 @@ TODO（为什么错。说不清根因就只是在让症状消失，不是在修�
         if args.bug
         else ""
     )
+    # bug 路径不要求 `### 背景与目标`：为什么做已在 `## 复现` + `## 根因` 里
+    goal_section = (
+        """<!-- bug 路径不写 `### 背景与目标`：为什么做已在 `## 复现` + `## 根因` 两节里 -->
+
+"""
+        if args.bug
+        else """### 背景与目标
+
+TODO（为什么做 + 做成什么样 + 承接关系。问题现状（现在是什么样、不改会怎样）、
+预期结果（做完后谁看到什么不同）、关键约束。**已有设计来源时在这里写明**：
+承接哪份文档、继承它的哪些结论、本次增量/修正了什么——有来源就不要从零重写，
+缺什么补什么。这一节不写实现细节，做法节不重复动机）
+
+"""
+    )
     regression_row = (
         "| 回归测试（捕获本 bug） | TODO | 自动化 |\n" if args.bug else ""
     )
@@ -1041,8 +1179,9 @@ TODO（为什么错。说不清根因就只是在让症状消失，不是在修�
 **Slug**: {slug}
 **类型**: {kind}
 **Created**: {datetime.now().strftime('%Y-%m-%d')}
+**格式**: {PLAN_FORMAT_CURRENT}
 **设计文档**: TODO
-<!-- 项目仓库内的路径（如 docs/<模块>方案.md），八节骨架见 references/design-doc.md。
+<!-- 项目仓库内的路径（如 docs/<模块>方案.md），十节骨架见 references/design-doc.md。
      不需要设计文档就写「无 — <理由>」。四类情形必须写一份：跨模块改动 /
      新外部依赖或数据模型变化 / 安全·性能·迁移 / 需要先定技术决策才能开工。
      不要放在 .workflow/ 下——那是自忽略的状态目录，收尾后随工作树消失。 -->
@@ -1059,9 +1198,9 @@ TODO（为什么错。说不清根因就只是在让症状消失，不是在修�
 {bug_sections}
 ## 方案
 
-### 做法
+{goal_section}### 做法
 
-TODO（2-3 句到一节，随任务规模伸缩。写清怎么实现，不写文件清单）
+TODO（2-3 句到一节，随任务规模伸缩。写清怎么实现，不写文件清单。见 references/plan-format.md）
 
 ### 备选与取舍
 
@@ -1101,9 +1240,11 @@ TODO（这次范围外的事。范围边界是四类敏感决策之一，用户�
 - **文件**：TODO
 - **依赖**：无
 - **并行**：否
+- **做法**：TODO（这一步具体做什么：动作 + 关键取值 + 边界/禁止项。判据是「换一个执行者，不追问就能做完」）
 - **接口**：consumes 无 / produces 无
-- **验收**：TODO
-- **失败信号**：TODO
+- **预期**：TODO（做完后应观察到什么——可观察的行为/产物，不是「实现完成」这类实现细节）
+- **验收**：TODO（用什么证明：命令/检查，可判定）
+- **失败信号**：TODO（什么现象说明它没做对）
 - **决策**：D-01
 - **状态**：pending
 """
@@ -1402,6 +1543,18 @@ def cmd_slice(args):
     constraints = _section_lines(plan.lines, "全局约束")
     header += constraints or ["- （无）"]
 
+    header += [
+        "",
+        "## 提交契约（完成的一部分）",
+        "",
+        "- 做完**自己提交**：只 stage 你改过的文件（逐个写明路径，"
+        "**不要 `git add -A` / `git add .`**——那会把工作树里别人的改动一起带走）",
+        "- 提交信息用 `T<N>: <任务名>`（批次写 `T3+T4: <批次名>`），正文一两句说清改了什么",
+        "- **不要攒到最后**：单任务至少一次提交；批次一次提交即可，但批次内部也要按顺序做",
+        "- **不要 push / merge / rebase / 改历史**——远端动作由用户在确认后单独做",
+        f"- 报告里给出提交范围 `<base7>..<head7>`（本任务的 base 是 `{_git(root, 'rev-parse', '--short', 'HEAD').strip() or 'HEAD'}`）",
+    ]
+
     doc_decl, _doc_reason = design_doc_decl(plan)
     if doc_decl:
         header += [
@@ -1410,6 +1563,8 @@ def cmd_slice(args):
             "",
             f"`{doc_decl}`",
             "动手前读它的「接口与数据形状」一节——那是权威签名，不要自己另定。",
+            "顺手扫一眼「背景与目标」：知道为什么做这个改动，遇到本任务没覆盖的边界时，",
+            "按它写的目标判断，而不是自己发明。",
             "**不要修改该文档**（回写由控制器在末尾统一做）；发现它和代码不符，",
             "在报告里记一条「文档与实现不符：<文档第几节> → <实际是什么>」。",
         ]
@@ -1482,6 +1637,80 @@ def _section_lines(lines, name):
     return out
 
 
+def _check_commit_range(root, raw, plan, has_note):
+    """校验 record 的 `--commits <base>..<head>`，返回 [(level, message)]。
+
+    为什么值得校验：提交范围是账本里「这个任务改了什么」的唯一记录，终审也按它取
+    diff。空范围（base == head）或写错的 sha 会让这两件事同时失效，而账本本身看不出来。
+
+    **阶段性提交**是硬要求：每个任务完成即提交，别把几个任务攒成一次。
+    格式 2 的计划按 ERROR 拦；老计划降为 WARNING——那批计划可能是按「不提交」的
+    约定跑起来的（有的项目全局约束就写着"提交只在用户明确要求时做"），不该被升级打断。
+    """
+    out = []
+
+    def add(level, message):
+        if level == "ERROR" and not plan.is_v2:
+            level = "WARNING"
+        out.append((level, message))
+
+    if not _git_ok(root, "rev-parse", "--git-dir"):
+        add("WARNING", "当前目录不是 git 仓库，提交范围没有校验。")
+        return out
+
+    raw = (raw or "").strip()
+    if not raw or raw in ("—", "-"):
+        add(
+            "ERROR",
+            "record 必须给 `--commits <base>..<head>`："
+            "阶段性提交是硬要求（任务完成即提交，不攒到最后）。",
+        )
+        return out
+
+    if ".." not in raw:
+        add("ERROR", f"--commits 期望 `<base>..<head>` 形式，收到 '{raw}'。")
+        return out
+
+    base, _, head = raw.partition("..")
+    base, head = base.strip(), head.strip()
+
+    for label, rev in (("base", base), ("head", head)):
+        if not rev:
+            add("ERROR", f"--commits 的 {label} 是空的。")
+            return out
+        if not _git(root, "rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}").strip():
+            add("ERROR", f"--commits 里的 {label} '{rev}' 在这个仓库里查不到。")
+            return out
+
+    if _git(root, "rev-parse", f"{base}^{{commit}}") == _git(
+        root, "rev-parse", f"{head}^{{commit}}"
+    ):
+        if has_note:
+            add(
+                "WARNING",
+                "本任务没有产生提交（base 与 head 指向同一个提交）——"
+                "已按 `--note` 记下理由。",
+            )
+        else:
+            add(
+                "ERROR",
+                "本任务没有产生提交（base 与 head 指向同一个提交）。"
+                "确实无需改动时，把理由写进 `--note \"<为什么这个任务没有产生提交>\"` 即可放行。",
+            )
+        return out
+
+    if not _git_ok(root, "merge-base", "--is-ancestor", base, head):
+        add("ERROR", f"base '{base}' 不是 head '{head}' 的祖先——范围写反了或跨了分支。")
+
+    if not _git_ok(root, "merge-base", "--is-ancestor", head, "HEAD"):
+        add(
+            "WARNING",
+            f"head '{head}' 不在当前 HEAD 的历史里（可能 rebase 过，或提交在别的分支）"
+            "——确认这个范围确实属于本任务。",
+        )
+    return out
+
+
 def cmd_record(args):
     root = find_project_root()
     slug = resolve_slug(root, args.slug)
@@ -1496,7 +1725,18 @@ def cmd_record(args):
             raise WorkflowError(f"计划里没有 {tid}。")
         tasks.append(t)
 
+    commit_problems = _check_commit_range(root, args.commits, plan, bool(args.note))
+    blockers = [m for lvl, m in commit_problems if lvl == "ERROR"]
+    if blockers:
+        detail = "\n".join(f"  - {m}" for m in blockers)
+        raise WorkflowError(
+            f"提交范围不合法，先修正再记账：\n{detail}\n"
+            "（提交范围是账本里「这个任务改了什么」的唯一记录，"
+            "终审也按它取 diff——空范围或写错的 sha 会让这两件事同时失效。）"
+        )
+
     warnings = validate_batch(plan, tasks) if len(tasks) > 1 else []
+    warnings += [m for lvl, m in commit_problems if lvl == "WARNING"]
     batch = len(tasks) > 1
     status = "complete" if args.verdict == "clean" else "in_progress"
 
@@ -1740,7 +1980,7 @@ def cmd_close(args):
         )
 
     # 设计文档是无条件的：它不随验证方式变化（--manual-confirmed 也不豁免）
-    doc_errors, _doc_warnings = design_doc_problems(root, plan)
+    doc_errors, _doc_warnings = design_doc_problems(root, plan, stage="close")
     if doc_errors:
         detail = "\n".join(f"  - {e}" for e in doc_errors)
         raise WorkflowError(
