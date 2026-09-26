@@ -57,10 +57,16 @@ PLACEHOLDERS = [
 TASK_FIELD_KEYS = ["文件", "依赖", "并行", "做法", "接口", "预期", "验收", "失败信号", "决策", "状态"]
 VALID_STATUS = ["pending", "in_progress", "complete", "blocked"]
 
-# 计划格式版本：2 起新增『做法』『预期』两个任务字段与方案的『背景与目标』节。
-# 不写 `**格式**` 的计划按 1 处理——本次升级前建的、正在进行中的工作流不该被新校验打断。
+# 计划格式版本。逐档只加不删，老档按老规则跑完：
+#   2 起：任务新增『做法』『预期』两个字段；方案新增『背景与目标』节。
+#   3 起：方案只写一遍——声明了设计文档时，`## 方案` 退化为承接 + 增量 + 指针，
+#          方案审批的指纹绑设计文档的「一句话方案 / 背景与目标 / 做法 /
+#          备选与取舍 / 明确不做」五节（同一份内容写两遍，改一处忘一处）。
+# 不写 `**格式**` 的计划按 1 处理——升级前建的、正在进行中的工作流不该被新校验打断。
 PLAN_FORMAT_KEY = "格式"
-PLAN_FORMAT_CURRENT = 2
+PLAN_FORMAT_V2 = 2
+PLAN_FORMAT_V3 = 3
+PLAN_FORMAT_CURRENT = PLAN_FORMAT_V3
 
 # 设计文档：与状态控制分开的独立产物，必须落在项目仓库里（.workflow/ 自忽略）
 DESIGN_DOC_KEY = "设计文档"
@@ -90,6 +96,16 @@ DESIGN_DOC_SECTIONS_V1 = [
 ]
 DESIGN_DOC_MIN_REASON = 10  # 声明「无」时理由的最短长度（挡掉「无 — 不需要」这类凑数）
 DESIGN_DOC_NONE_MARKERS = ("无", "不适用", "n/a", "N/A")
+
+# 格式 3：方案的唯一真源。声明了设计文档时，方案审批绑的是文档里这五节，
+# 计划只留承接、增量与指针——同一份内容不写两遍。
+DESIGN_DOC_PLAN_SECTIONS = [
+    "一句话方案",
+    "背景与目标",
+    "做法",
+    "备选与取舍",
+    "明确不做",
+]
 
 MAX_TASKS = 8          # 超过则建议拆分
 MAX_FILES_PER_TASK = 5  # 单任务文件数上限
@@ -261,7 +277,11 @@ class Plan:
 
     @property
     def is_v2(self):
-        return self.format_version >= PLAN_FORMAT_CURRENT
+        return self.format_version >= PLAN_FORMAT_V2
+
+    @property
+    def is_v3(self):
+        return self.format_version >= PLAN_FORMAT_V3
 
     @property
     def design_doc_sections(self):
@@ -316,8 +336,10 @@ class Plan:
                     current_task.field_lines[key] = idx
                 continue
 
+            # 头部字段只在第一个二级标题之前认。进入小节之后，`**承接**：…`
+            # 这类行是小节正文，不是头部字段——吞掉它会让 `check` 误报「该节是空的」。
             fld = META_FIELD.match(line)
-            if fld:
+            if fld and section is None:
                 self.meta[fld.group("key").strip()] = fld.group("value").strip()
                 continue
 
@@ -690,8 +712,8 @@ def check_plan(plan, root=None):
             add(
                 "WARNING",
                 f"本计划是格式 1：{', '.join(legacy)} 缺『做法』/『预期』。"
-                "这两个字段是本次升级新增的（执行者需要知道每步做什么、预期看到什么）。"
-                "在计划头部加 `**格式**: 2` 并补齐，check 就会强制它们；"
+                "这两个字段是升级新增的（执行者需要知道每步做什么、预期看到什么）。"
+                "把头部 `**格式**` 改成 2 或更高并补齐，check 就会强制它们；"
                 "老计划不补也能继续跑完。",
             )
 
@@ -761,7 +783,11 @@ def check_plan(plan, root=None):
     if len(plan.tasks) > MAX_TASKS:
         add(
             "WARNING",
-            f"计划有 {len(plan.tasks)} 个任务（上限 {MAX_TASKS}），考虑拆成多个工作流。",
+            f"计划有 {len(plan.tasks)} 个任务（上限 {MAX_TASKS}）。"
+            "规模直接决定两道门的成败：任务越多，计划越长，人在门上越审不动，"
+            "审批就越容易退化成走过场。**首选拆成多个工作流**；确实不拆时，"
+            "请在决策表里记一条「接受超限，因为 <理由>——代价是两道门的审阅有效性下降」，"
+            "让这个取舍被看见而不是留到事后才发现。",
         )
 
     # 6. 验证命令
@@ -931,6 +957,44 @@ def section_hash(plan_path, section_name):
     return hashlib.sha256("\n".join(body).encode()).hexdigest()[:16]
 
 
+def design_doc_plan_hash(path, sections):
+    """设计文档里承载方案的那几节的联合指纹（格式 3）。"""
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    parts = [_md_section(text, name) for name in sections]
+    return hashlib.sha256("\n\n".join(parts).encode()).hexdigest()[:16]
+
+
+def plan_section_target(root, plan):
+    """『方案』的载体在哪。
+
+    返回 (kind, path, sections)：
+      - ("design", 设计文档绝对路径, 五节名单)：格式 3+ 且声明了设计文档——
+        方案的真源在项目仓库的设计文档里，它比计划命长。
+      - ("plan", 计划路径, None)：其余情形（格式 ≤2，或设计文档声明为「无」）——
+        方案就是计划的 `## 方案` 一节。
+    """
+    declared, _reason = design_doc_decl(plan)
+    if plan.is_v3 and declared:
+        return "design", os.path.join(root, declared), DESIGN_DOC_PLAN_SECTIONS
+    return "plan", plan.path, None
+
+
+def plan_section_hash(root, plan):
+    """『方案』当前的内容指纹（绑定对象见 plan_section_target）。"""
+    kind, path, sections = plan_section_target(root, plan)
+    if kind != "design":
+        return section_hash(plan.path, "方案")
+    if not os.path.isfile(path):
+        raise WorkflowError(
+            "本计划把『方案』的真源放在设计文档里，但 "
+            f"{os.path.relpath(path, root)} 不存在。先起草它的这五节——"
+            + " / ".join(sections)
+            + "——再走方案门。"
+        )
+    return design_doc_plan_hash(path, sections)
+
+
 def _read_approvals(root, slug):
     """读出审批记录：{阶段: {"time","fingerprint","basis"}}，同一阶段取最后一条。"""
     path = ledger_path(root, slug)
@@ -954,14 +1018,14 @@ def _read_approvals(root, slug):
     return out
 
 
-def require_plan_approval(root, slug, plan_path):
+def require_plan_approval(root, slug, plan):
     """执行前的门：方案与计划都须经用户审批，且内容未在审批后被改动。
 
     bug 工作流是例外：它的"需求"是一个症状而不是规格，没有可审的方案。
     补偿控制是 bug 类型强制的『复现 / 根因 / 回归测试』三项（见 check_plan），
     以及 V 轮对回归测试是否真实存在的校验。
     """
-    plan_text = open(plan_path, encoding="utf-8").read()
+    plan_text = open(plan.path, encoding="utf-8").read()
     if (re.search(r"^\*\*类型\*\*\s*[:：]\s*bug\s*$", plan_text, re.M)):
         return {"_skipped": {"time": _now(), "fingerprint": "—", "basis": "bug 工作流免门"}}
 
@@ -973,11 +1037,18 @@ def require_plan_approval(root, slug, plan_path):
             "先把方案呈现给用户审阅，得到明确答复后运行："
             f" workflow.py approve {slug} 方案 --by '<用户的原话或说明>'"
         )
-    got = section_hash(plan_path, "方案")
+    got = plan_section_hash(root, plan)
     if approvals["方案"]["fingerprint"] != got:
+        kind, path, _sections = plan_section_target(root, plan)
+        where = (
+            f"设计文档 `{os.path.relpath(path, root)}`"
+            if kind == "design"
+            else "计划的 `## 方案` 一节"
+        )
         raise WorkflowError(
             f"『方案』在审批之后被修改过（审批时 {approvals['方案']['fingerprint']}，"
-            f"当前 {got}），该审批已失效。请把改动呈现给用户，重新审批。"
+            f"当前 {got}），该审批已失效。方案的正文在{where}，"
+            "请把改动呈现给用户，重新审批。"
         )
 
     if "计划" not in approvals:
@@ -986,7 +1057,7 @@ def require_plan_approval(root, slug, plan_path):
             "先把计划呈现给用户审阅，得到明确答复后运行："
             f" workflow.py approve {slug} 计划 --by '<用户的原话或说明>'"
         )
-    want = plan_content_hash(plan_path)
+    want = plan_content_hash(plan.path)
     if approvals["计划"]["fingerprint"] != want:
         raise WorkflowError(
             f"『计划』在审批之后被修改过（审批时 {approvals['计划']['fingerprint']}，"
@@ -1184,7 +1255,11 @@ TODO（为什么做 + 做成什么样 + 承接关系。问题现状（现在是�
 <!-- 项目仓库内的路径（如 docs/<模块>方案.md），十节骨架见 references/design-doc.md。
      不需要设计文档就写「无 — <理由>」。四类情形必须写一份：跨模块改动 /
      新外部依赖或数据模型变化 / 安全·性能·迁移 / 需要先定技术决策才能开工。
-     不要放在 .workflow/ 下——那是自忽略的状态目录，收尾后随工作树消失。 -->
+     不要放在 .workflow/ 下——那是自忽略的状态目录，收尾后随工作树消失。
+
+     声明了路径时（格式 3）：方案的正文归这份文档——它的「一句话方案 / 背景与目标 /
+     做法 / 备选与取舍 / 明确不做」五节就是方案门的审阅对象，方案审批的指纹也绑在这五节上；
+     下面的 `## 方案` 只写承接、增量与指针。声明「无」时，方案四段写在这里。 -->
 
 ## 验证命令
 
@@ -1198,17 +1273,24 @@ TODO（为什么做 + 做成什么样 + 承接关系。问题现状（现在是�
 {bug_sections}
 ## 方案
 
+<!-- 方案只写一遍。声明了设计文档：正文在文档的对应五节里，这一节写承接关系、
+     本次增量、以及指向文档的指针；「做法 / 备选与取舍 / 明确不做」各留一行指针即可。
+     声明「无」：四段都写在这里。写两遍的代价是改一处忘一处，读者不知道信哪个。 -->
+
 {goal_section}### 做法
 
-TODO（2-3 句到一节，随任务规模伸缩。写清怎么实现，不写文件清单。见 references/plan-format.md）
+TODO（有设计文档：一行指针 + 本次特有的实现机制。无设计文档：2-3 句到一节，
+随任务规模伸缩。写清怎么实现，不写文件清单。见 references/plan-format.md）
 
 ### 备选与取舍
 
-TODO（考虑过的其他做法，以及为什么没选。只有一种做法时写"无备选"并给理由）
+TODO（有设计文档：一行指针。无设计文档：考虑过的其他做法，以及为什么没选。
+只有一种做法时写"无备选"并给理由）
 
 ### 明确不做
 
-TODO（这次范围外的事。范围边界是四类敏感决策之一，用户要在这里看到它）
+TODO（有设计文档：一行指针。无设计文档：这次范围外的事。
+范围边界是四类敏感决策之一，用户要在这里看到它）
 
 ## 决策
 
@@ -1415,10 +1497,28 @@ def cmd_approve(args):
         )
 
     if stage == "方案":
-        body = _section_lines(plan.lines, "方案")
-        if not body or any("TODO" in l for l in body):
-            raise WorkflowError("『方案』一节还是空的（或含 TODO），无可审批内容。")
-        fp = section_hash(plan.path, "方案")
+        kind, path, sections = plan_section_target(root, plan)
+        if kind == "design":
+            if not os.path.isfile(path):
+                raise WorkflowError(
+                    f"『方案』的载体是设计文档（{os.path.relpath(path, root)}）的五节："
+                    + " / ".join(sections)
+                    + "。文件还不存在，无可审批内容——先起草它，再走方案门。"
+                )
+            with open(path, encoding="utf-8") as fh:
+                doc = fh.read()
+            body = "\n".join(_md_section(doc, name) for name in sections)
+            if not body.strip() or "TODO" in body:
+                raise WorkflowError(
+                    "设计文档里承载方案的五节还是空的（或含 TODO），无可审批内容。"
+                    "方案门审的就是这五节：一句话方案 / 背景与目标 / 做法 / 备选与取舍 / 明确不做。"
+                )
+            fp = design_doc_plan_hash(path, sections)
+        else:
+            body = _section_lines(plan.lines, "方案")
+            if not body or any("TODO" in l for l in body):
+                raise WorkflowError("『方案』一节还是空的（或含 TODO），无可审批内容。")
+            fp = section_hash(plan.path, "方案")
     else:
         findings = [f for f in check_plan(plan, root) if f["level"] == "ERROR"]
         if findings:
@@ -1512,7 +1612,7 @@ def cmd_slice(args):
     root = find_project_root()
     slug = resolve_slug(root, args.slug)
     plan = load_plan(root, slug)
-    require_plan_approval(root, slug, plan.path)   # 执行门：方案与计划都须已审批
+    require_plan_approval(root, slug, plan)   # 执行门：方案与计划都须已审批
 
     ids = list(args.task_id)
     tasks = []
@@ -1559,10 +1659,11 @@ def cmd_slice(args):
     if doc_decl:
         header += [
             "",
-            "## 设计文档（接口以它为准）",
+            "## 设计文档（设计以它为准）",
             "",
             f"`{doc_decl}`",
-            "动手前读它的「接口与数据形状」一节——那是权威签名，不要自己另定。",
+            "动手前读它的「接口与数据形状」一节——那是权威签名，不要自己另定"
+            "（参考型小节，可能排在文档末尾）。",
             "顺手扫一眼「背景与目标」：知道为什么做这个改动，遇到本任务没覆盖的边界时，",
             "按它写的目标判断，而不是自己发明。",
             "**不要修改该文档**（回写由控制器在末尾统一做）；发现它和代码不符，",
@@ -1715,7 +1816,7 @@ def cmd_record(args):
     root = find_project_root()
     slug = resolve_slug(root, args.slug)
     plan = load_plan(root, slug)
-    require_plan_approval(root, slug, plan.path)   # 与 slice 同一道门，防绕过
+    require_plan_approval(root, slug, plan)   # 与 slice 同一道门，防绕过
     ledger_check_owner(root, slug)
 
     tasks = []
