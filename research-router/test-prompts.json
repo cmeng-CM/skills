@@ -1,0 +1,42 @@
+[
+  {
+    "id": 1,
+    "prompt": "帮我搜一下，网上有没有人写过「技术设计文档」相关的 agent skill？我想参考一下。",
+    "expected": "走第 0 步判动作 = 检索；第 1 步判类型 = agent skill（不是普通网页文章）；第 2 步**必须查 references/sites.md**——这是本 skill 的核心动作，也是默认最容易跳过的一步。应识别出 skills.sh 是这类资源的专门索引并按其登记路线执行：`tavily_search` 配 `include_domains:[\"skills.sh\"]`、`search_depth: advanced`，一次拿到多个 skill 的摘要加 SKILL.md 正文。同时用 `gh search code --filename SKILL.md` 做互补覆盖（skills.sh 只收已进目录的，gh 覆盖没进目录的），并说明两者是互补而非替代关系。交付时声明覆盖范围与缺口"
+  },
+  {
+    "id": 2,
+    "prompt": "designdocs.dev 这个站上收录了哪些公司的设计文档？我想挨个看看。",
+    "expected": "识别为**穷举**动作而不是检索——用户要的是「某站上的全部条目」。第 0 步就要切到穷举路线：`tavily_map`（`max_depth:1`、`max_breadth:30`、`limit:40`），实测 0.72 秒返回 30 条。**不能只做一次 tavily_search 就交付**，那是本 skill 写明的典型事故：知道有这个站、甚至引用了它，却没进去。取回条目后按需对目标站点继续 `tavily_extract` 取正文，最终给出条目清单（含 rust-lang/rfcs、kubernetes/enhancements 等仓库地址）"
+  },
+  {
+    "id": 3,
+    "prompt": "GitLab 官方对设计文档的流程要求是什么？有状态字段和审批规定吗？我要准确的，不要大意。",
+    "expected": "用户明确要「准确的、不要大意」，因此**不能用 WebFetch**——它经小模型二次摘要，实测在这个 GitLab 页面上只返回了导航链接、正文和表格全丢。应走 `tavily_extract`（`extract_depth: advanced`）或 `curl` 直接取，实测能拿到正文段落与完整的状态表（Status/Title/Authors/Coach/Owning Stage/Created）。若结果里含表格，必须原样保留字段名，不做概括"
+  },
+  {
+    "id": 4,
+    "prompt": "帮我在这个仓库里找一下 parse_config 这个函数在第几行。",
+    "expected": "识别为本 skill 边界之外：这是**已知仓库内的代码定位**，属于 grep / gh 的活，不是「联网搜指定类型的资源」。不启动本 skill 的路由流程、不查 references/sites.md、不做 tavily 检索，直接用 grep 或 gh 完成。可一句话说明边界，但不借机推销本 skill"
+  },
+  {
+    "id": 5,
+    "prompt": "最近大家在讨论什么 AI 编程工具？我想看看风向。",
+    "expected": "第 1 步判资源类型 = **近 30 天的讨论 / 风向 / 互动量**，这一类的专有工具是 `last30days`（时间窗 + 互动量是 tavily 给不了的），而不是 `tavily_search`。若 last30days 需要凭证或某些源未配置，按 Exit Criteria 把**失败的源单独列出**（超时 / 限流 / 未登录 / 未配置），不得写成「没人在讨论 X」。需要补静态资料时再叠加 `tavily_search`"
+  },
+  {
+    "id": 6,
+    "prompt": "帮我看看 https://example.com/some-blog-post 这篇讲啥，我想先知道个大意就行。",
+    "expected": "用户明确只要「大意」，此时用 `WebFetch` 是**可接受**的——它的摘要损耗在这个场景下不构成问题。不因为「WebFetch 会丢内容」就无脑升级到 tavily_extract，但若内容涉及事实、数字、表格或用户后来要求准确，应主动换成 `tavily_extract`。这题考的是不把硬约束过度泛化：约束是「要事实时别用摘要工具」，不是「永远别用 WebFetch」"
+  },
+  {
+    "id": 7,
+    "prompt": "我在另一个站点上看到好多设计文档，比之前搜到的全，是 xxx-docs.com，你要不要记下来？",
+    "expected": "不擅自写入 `references/sites.md`。先说明该站的覆盖范围、用户是怎么找到它的、以及它比现有路线多给了什么（对照已有登记项 skills.sh / GitHub / designdocs.dev 判断是否有增量）。然后**提议登记并等用户确认**。若确认，按表里的收录规程执行：固定五栏、必须实测过检索路线、必须写「保底」、状态栏标日期——**禁止凭「这个站应该有搜索」填一条未经验证的路线**"
+  },
+  {
+    "id": 8,
+    "prompt": "帮我查查 X（推特）上大家对设计文档这件事怎么看。",
+    "expected": "识别出 X/Twitter 在本机**当前不可用**（`twitter` CLI 报 not_authenticated、无 cookies），属于「没查成」而不是「没有」。正确处理：明确报告这条通道不可用及原因，给出可行的替代路线（`rdt` 查 Reddit、`last30days` 覆盖 X 的间接数据、`tavily_search` 补网页），并建议如需第一方 X 数据要先解决凭证。**不得因为 X 查不了就写「没找到相关讨论」**——把未查与没有混为一谈是本 skill 点名禁止的"
+  }
+]
