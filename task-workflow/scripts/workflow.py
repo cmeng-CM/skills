@@ -12,6 +12,7 @@
     workflow.py record  [slug] <task-id> --commits <range> --verdict <clean|issues>
     workflow.py check   [slug]
     workflow.py approve [slug] <方案|计划> --by "<用户的原话>"
+    workflow.py gate    [slug] --reason "<升级原因>"
     workflow.py verify  [slug] [--label <name>]
     workflow.py close   [slug] --next-step "<建议>"
 
@@ -64,6 +65,9 @@ VALID_STATUS = ["pending", "in_progress", "complete", "blocked"]
 #          备选与取舍 / 明确不做」五节（同一份内容写两遍，改一处忘一处）。
 # 不写 `**格式**` 的计划按 1 处理——升级前建的、正在进行中的工作流不该被新校验打断。
 PLAN_FORMAT_KEY = "格式"
+APPROVAL_MODE_KEY = "审批模式"
+APPROVAL_MODE_GATED = "gated"
+APPROVAL_MODE_EXECUTION = "execution"
 PLAN_FORMAT_V2 = 2
 PLAN_FORMAT_V3 = 3
 PLAN_FORMAT_CURRENT = PLAN_FORMAT_V3
@@ -261,8 +265,22 @@ class Plan:
         self._parse()
 
     @property
+    def approval_mode(self):
+        """审批模式：老计划和显式 gated 计划走两道审批门。"""
+        mode = (self.meta.get(APPROVAL_MODE_KEY) or APPROVAL_MODE_GATED).strip().lower()
+        return mode if mode in (APPROVAL_MODE_GATED, APPROVAL_MODE_EXECUTION) else mode
+
+    @property
+    def is_execution(self):
+        return self.approval_mode == APPROVAL_MODE_EXECUTION
+
+    @property
+    def is_gated(self):
+        return self.approval_mode == APPROVAL_MODE_GATED
+
+    @property
     def kind(self):
-        """工作流类型：bug 走免门路径，其余为 feature。"""
+        """工作流类型：bug 走 bug 补偿路径，其余为 feature。"""
         return (self.meta.get("类型") or "feature").strip().lower()
 
     @property
@@ -622,6 +640,12 @@ def check_plan(plan, root=None):
     def add(level, message, task=None):
         out.append({"level": level, "task": task, "message": message})
 
+    if plan.approval_mode not in (APPROVAL_MODE_GATED, APPROVAL_MODE_EXECUTION):
+        add(
+            "ERROR",
+            f"审批模式必须是 gated 或 execution，当前是『{plan.approval_mode}』。",
+        )
+
     if not plan.tasks:
         add("ERROR", "计划里没有任何任务（缺少 `#### T1 <名称>` 任务块）。")
         return out
@@ -884,20 +908,24 @@ def _now():
     return datetime.now().strftime("%Y-%m-%d %H:%M")
 
 
-def ledger_init(root, slug, plan_rel):
+def ledger_init(root, slug, plan_rel, approval_mode=APPROVAL_MODE_GATED, mode_reason=""):
     path = ledger_path(root, slug)
     if os.path.exists(path):
         return path
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    mode_note = mode_reason.replace("|", "／").replace("\n", " ").strip() or "（未提供）"
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(
             f"""# Ledger: {slug}
 
 Plan: {plan_rel}
 Created: {datetime.now().strftime('%Y-%m-%d')}
+Approval-mode: {approval_mode}
+Approval-basis: {mode_note}
 
 > 账本是压缩/清空上下文后唯一可信的恢复点。**不相信对话回忆，只相信账本与 git log。**
 > 首行的 `Plan:` 用于防止多个工作流串账——首行指向别的计划时，这份账本属于那个计划。
+> `Approval-mode` 记录的是审批路径，不是质量豁免：execution 仍须 check、审查、verify 和 close。
 
 ## 审批
 
@@ -995,6 +1023,99 @@ def plan_section_hash(root, plan):
     return design_doc_plan_hash(path, sections)
 
 
+def _read_ledger_meta(root, slug):
+    """读取账本中持久化的路径模式，区分无审批与漏审批。"""
+    path = ledger_path(root, slug)
+    out = {}
+    if not os.path.isfile(path):
+        return out
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            if line.startswith("Approval-mode:"):
+                out["approval_mode"] = line.split(":", 1)[1].strip()
+            elif line.startswith("Approval-basis:"):
+                out["approval_basis"] = line.split(":", 1)[1].strip()
+    return out
+
+
+def _append_ledger_decision(root, slug, decision, reason):
+    stamp = _now()
+    ledger_append(root, slug, "裁决", f"| {stamp} | {decision} | {reason} | — |")
+
+
+def _set_approval_mode(root, slug, plan, mode, reason):
+    """切换审批模式并同步计划/账本；不允许静默改模式。"""
+    if mode not in (APPROVAL_MODE_GATED, APPROVAL_MODE_EXECUTION):
+        raise WorkflowError(f"未知审批模式 '{mode}'。只能是 gated 或 execution。")
+    reason = (reason or "").replace("|", "／").replace("\n", " ").strip()
+    if not reason:
+        raise WorkflowError("切换审批模式必须提供原因。")
+
+    lines = plan.lines[:]
+    found = False
+    for i, line in enumerate(lines):
+        if re.match(r"^\*\*审批模式\*\*\s*[:：]", line):
+            lines[i] = f"**审批模式**: {mode}"
+            found = True
+            break
+    if not found:
+        insert_at = 0
+        while insert_at < len(lines) and (
+            not lines[insert_at].strip() or lines[insert_at].startswith("#")
+        ):
+            insert_at += 1
+        lines.insert(insert_at, f"**审批模式**: {mode}")
+    with open(plan.path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+    plan.lines = lines
+    plan.text = "\n".join(lines)
+    plan.meta[APPROVAL_MODE_KEY] = mode
+    for i, line in enumerate(plan.lines):
+        if re.match(r"^\*\*审批模式依据\*\*\s*[:：]", line):
+            plan.lines[i] = f"**审批模式依据**: {reason}"
+            plan.meta["审批模式依据"] = reason
+            break
+    with open(plan.path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(plan.lines) + "\n")
+
+    ledger_pathname = ledger_path(root, slug)
+    if os.path.isfile(ledger_pathname):
+        with open(ledger_pathname, encoding="utf-8") as fh:
+            ledger_lines = fh.read().splitlines()
+        mode_found = False
+        basis_found = False
+        for i, line in enumerate(ledger_lines):
+            if line.startswith("Approval-mode:"):
+                ledger_lines[i] = f"Approval-mode: {mode}"
+                mode_found = True
+            elif line.startswith("Approval-basis:"):
+                ledger_lines[i] = f"Approval-basis: {reason}"
+                basis_found = True
+        if not mode_found:
+            # 老账本没有该元数据时，在 Created 后补上，不破坏既有表格。
+            insert_at = next(
+                (i + 1 for i, line in enumerate(ledger_lines) if line.startswith("Created:")),
+                3,
+            )
+            ledger_lines.insert(insert_at, f"Approval-mode: {mode}")
+        if not basis_found:
+            insert_at = next(
+                (i + 1 for i, line in enumerate(ledger_lines) if line.startswith("Approval-mode:")),
+                4,
+            )
+            ledger_lines.insert(insert_at, f"Approval-basis: {reason}")
+        with open(ledger_pathname, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(ledger_lines) + "\n")
+
+    _append_ledger_decision(
+        root,
+        slug,
+        "升级为 gated 审批路径" if mode == APPROVAL_MODE_GATED else "切换为 execution 路径",
+        reason,
+    )
+    return mode
+
+
 def _read_approvals(root, slug):
     """读出审批记录：{阶段: {"time","fingerprint","basis"}}，同一阶段取最后一条。"""
     path = ledger_path(root, slug)
@@ -1018,16 +1139,54 @@ def _read_approvals(root, slug):
     return out
 
 
-def require_plan_approval(root, slug, plan):
-    """执行前的门：方案与计划都须经用户审批，且内容未在审批后被改动。
+def _require_plan_check(plan, root):
+    """execution/bug 免审批，但不能免计划结构检查。"""
+    errors = [f for f in check_plan(plan, root) if f["level"] == "ERROR"]
+    if errors:
+        detail = "\n".join(f"  - {f['message']}" for f in errors[:8])
+        suffix = "" if len(errors) <= 8 else f"\n  …另有 {len(errors) - 8} 个 ERROR"
+        raise WorkflowError(
+            f"计划检查未通过（{len(errors)} 个 ERROR），不得执行：\n{detail}{suffix}\n"
+            "先运行 `workflow.py check` 修正计划。"
+        )
 
-    bug 工作流是例外：它的"需求"是一个症状而不是规格，没有可审的方案。
-    补偿控制是 bug 类型强制的『复现 / 根因 / 回归测试』三项（见 check_plan），
-    以及 V 轮对回归测试是否真实存在的校验。
-    """
-    plan_text = open(plan.path, encoding="utf-8").read()
-    if (re.search(r"^\*\*类型\*\*\s*[:：]\s*bug\s*$", plan_text, re.M)):
+
+def _effective_approval_mode(root, slug, plan):
+    """以账本为准确认审批模式，防止手改计划字段偷偷绕门。"""
+    persisted = _read_ledger_meta(root, slug).get("approval_mode")
+    declared = plan.approval_mode
+    if persisted:
+        if persisted not in (APPROVAL_MODE_GATED, APPROVAL_MODE_EXECUTION):
+            raise WorkflowError(f"账本里的审批模式无效：{persisted}")
+        if declared != persisted:
+            raise WorkflowError(
+                f"计划声明的审批模式 {declared} 与账本记录的 {persisted} 不一致。"
+                "不要手改审批模式；需要升级时运行 `gate <slug> --reason \"...\"`。"
+            )
+        return persisted
+    # 老账本没有模式元数据，兼容规则是 gated；不能靠手加字段获得 execution。
+    if declared == APPROVAL_MODE_EXECUTION:
+        raise WorkflowError(
+            "老账本没有审批模式记录，按 gated 处理；不能手改计划字段切到 execution。"
+        )
+    return APPROVAL_MODE_GATED
+
+
+def require_plan_approval(root, slug, plan):
+    """执行前的门：gated 校验审批；bug/execution 保留质量控制但不等用户审批。"""
+    mode = _effective_approval_mode(root, slug, plan)
+    if plan.is_bug or mode == APPROVAL_MODE_EXECUTION:
+        _require_plan_check(plan, root)
+    if plan.is_bug:
         return {"_skipped": {"time": _now(), "fingerprint": "—", "basis": "bug 工作流免门"}}
+    if mode == APPROVAL_MODE_EXECUTION:
+        return {
+            "_skipped": {
+                "time": _now(),
+                "fingerprint": "—",
+                "basis": "execution 工作流无审批门（仍须 check、审查、verify、close）",
+            }
+        }
 
     approvals = _read_approvals(root, slug)
 
@@ -1210,6 +1369,11 @@ def cmd_init(args):
 
     plan_rel = os.path.relpath(plan_path(root, slug), root)
     kind = "bug" if args.bug else "feature"
+    approval_mode = APPROVAL_MODE_EXECUTION if args.execution else APPROVAL_MODE_GATED
+    if args.bug and args.execution:
+        raise WorkflowError("--bug 与 --execution 不能同时使用；bug 使用自身的免门补偿路径。")
+    if args.execution and not (args.execution_reason or "").strip():
+        raise WorkflowError("--execution 必须同时提供 --execution-reason，说明为何没有新增用户判断。")
     bug_sections = (
         """
 ## 复现
@@ -1249,6 +1413,8 @@ TODO（为什么做 + 做成什么样 + 承接关系。问题现状（现在是�
 **Goal**: {args.goal or 'TODO'}
 **Slug**: {slug}
 **类型**: {kind}
+**审批模式**: {approval_mode}
+**审批模式依据**: {args.execution_reason.strip() if args.execution_reason.strip() else '进入 gated 路径，待方案与计划审阅'}
 **Created**: {datetime.now().strftime('%Y-%m-%d')}
 **格式**: {PLAN_FORMAT_CURRENT}
 **设计文档**: TODO
@@ -1332,21 +1498,25 @@ TODO（有设计文档：一行指针。无设计文档：这次范围外的事�
 """
         )
 
-    ledger_init(root, slug, plan_rel)
+    ledger_init(root, slug, plan_rel, approval_mode, args.execution_reason.strip())
 
     result = {
         "root": root,
         "slug": slug,
         "kind": kind,
+        "approval_mode": approval_mode,
+        "approval_basis": args.execution_reason.strip(),
         "plan": plan_path(root, slug),
         "ledger": ledger_path(root, slug),
         "reports": reports_dir(root, slug),
     }
-    note = (
-        "  bug 路径：免两道审批门，但强制『复现 / 根因 / 回归测试』三项\n" if args.bug else ""
-    )
+    note = ""
+    if args.bug:
+        note = "  bug 路径：免两道审批门，但强制『复现 / 根因 / 回归测试』三项\n"
+    elif args.execution:
+        note = "  execution 路径：不暂停审批门，但仍强制 check、审查、verify、close\n"
     return result, (
-        f"✓ 已创建 .workflow/{slug}/（类型 {kind}）\n"
+        f"✓ 已创建 .workflow/{slug}/（类型 {kind}，审批模式 {approval_mode}）\n"
         f"  计划：{result['plan']}\n  账本：{result['ledger']}\n{note}"
     )
 
@@ -1355,6 +1525,8 @@ def cmd_status(args):
     root = find_project_root()
     slug = resolve_slug(root, args.slug)
     plan = load_plan(root, slug)
+    ledger_check_owner(root, slug)
+    approval_mode = _effective_approval_mode(root, slug, plan)
     st = plan.states()
     counts = {}
     for state in st.values():
@@ -1372,6 +1544,14 @@ def cmd_status(args):
         "root": root,
         "slug": slug,
         "stage": stage,
+        "kind": plan.kind,
+        "approval_mode": approval_mode,
+        "approval_path": (
+            "bug（免审批，受复现/根因/回归测试约束）"
+            if plan.is_bug
+            else ("execution（无审批门，保留全部质量控制）" if approval_mode == APPROVAL_MODE_EXECUTION else "gated（方案门 + 计划门）")
+        ),
+        "approval_basis": plan.meta.get("审批模式依据", ""),
         "goal": plan.meta.get("Goal", ""),
         "phase": phase,
         "phase_name": plan.phase_name(phase) if phase else "",
@@ -1393,6 +1573,7 @@ def cmd_status(args):
 
     lines = [
         f"工作流 {slug} — {stage}",
+        f"类型：{plan.kind}；路径：{result['approval_path']}",
         f"目标：{result['goal']}",
         f"进度：{counts.get('DONE', 0)}/{len(plan.tasks)} 完成"
         + (f"，{counts.get('READY', 0)} 可执行" if counts.get("READY") else "")
@@ -1414,6 +1595,30 @@ def cmd_status(args):
         lines.append("")
         lines.append("⚠ 未声明验证命令")
     return result, "\n".join(lines)
+
+
+def cmd_gate(args):
+    """把 execution 工作流升级为 gated，记录原因后恢复两道审批门。"""
+    root = find_project_root()
+    slug = resolve_slug(root, args.slug)
+    plan = load_plan(root, slug)
+    ledger_check_owner(root, slug)
+    reason = (args.reason or "").strip()
+    if not reason:
+        raise WorkflowError("升级为 gated 必须用 --reason 说明触发了什么新的判断。")
+    if plan.is_bug:
+        raise WorkflowError(
+            "bug 工作流不能用 gate 切换；命中升级条件时，应按完整路径新建或承接 feature 工作流。"
+        )
+    current_mode = _effective_approval_mode(root, slug, plan)
+    if current_mode == APPROVAL_MODE_GATED:
+        raise WorkflowError("该工作流已经是 gated 审批路径，无需重复升级。")
+    _set_approval_mode(root, slug, plan, APPROVAL_MODE_GATED, reason)
+    return (
+        {"slug": slug, "approval_mode": APPROVAL_MODE_GATED, "reason": reason},
+        f"✓ 工作流 {slug} 已升级为 gated；原因：{reason}\n"
+        "  后续 slice/record 前须分别完成方案门与计划门。",
+    )
 
 
 def cmd_next(args):
@@ -1485,6 +1690,13 @@ def cmd_approve(args):
     plan = load_plan(root, slug)
     ledger_check_owner(root, slug)
 
+    approval_mode = _effective_approval_mode(root, slug, plan)
+    if approval_mode == APPROVAL_MODE_EXECUTION:
+        raise WorkflowError(
+            "execution 工作流按设计不走方案/计划审批，不能伪造 approve 记录。"
+            "若执行中出现新的范围、设计或取舍判断，先运行 `gate <slug> --reason \"...\"` 升级。"
+        )
+
     stage = args.stage
     if stage not in ("方案", "计划"):
         raise WorkflowError(f"未知阶段 '{stage}'，只能是『方案』或『计划』。")
@@ -1533,6 +1745,8 @@ def cmd_approve(args):
     result = {
         "slug": slug,
         "stage": stage,
+        "kind": plan.kind,
+        "approval_mode": approval_mode,
         "fingerprint": fp,
         "basis": basis,
         "approved_at": stamp,
@@ -1863,6 +2077,17 @@ def cmd_record(args):
             root, slug, "裁决", f"| {stamp} | {label} | {args.note} | — |"
         )
 
+    # 阶段末提醒：本次记录让某个阶段的任务全部完成了 → 把该阶段的 Checkpoint 摆出来。
+    # 只提醒、不校验——"检查点成立没成立"要人判，引擎查不了；给它假的强制力比不验更坏。
+    done_ids = {t.id for t in tasks}
+    finished = None
+    for num, name, cp in plan.phases:
+        ptasks = [t for t in plan.tasks if t.phase == num]
+        if ptasks and any(t.id in done_ids for t in ptasks) and all(
+            plan.states()[t.id] == "DONE" for t in ptasks
+        ):
+            finished = (num, name, cp)
+
     result = {
         "slug": slug,
         "tasks": [t.id for t in tasks],
@@ -1871,6 +2096,11 @@ def cmd_record(args):
         "status": status,
         "verdict": args.verdict,
         "ledger": ledger_path(root, slug),
+        "phase_completed": (
+            {"num": finished[0], "name": finished[1], "checkpoint": finished[2]}
+            if finished
+            else None
+        ),
     }
     text = (
         f"✓ {label} → {status}（{review_note}），已记账本"
@@ -1879,6 +2109,13 @@ def cmd_record(args):
     )
     if warnings:
         text = "⚠ " + "\n⚠ ".join(warnings) + "\n" + text
+    if finished:
+        num, name, cp = finished
+        text += (
+            f"\n\n▸ Phase {num}「{name}」的任务已全部完成——**推进下一阶段前逐条核对检查点**："
+            f"\n  {cp if cp else '（本阶段没写 Checkpoint，补上：本阶段做完该看到什么）'}"
+            f"\n  核对结论记进账本「裁决」区。引擎只提醒，不替你判它成立不成立。"
+        )
     return result, text
 
 
@@ -2169,6 +2406,16 @@ def build_parser():
     s.add_argument("--goal", default="")
     s.add_argument("--bug", action="store_true",
                    help="bug 修复工作流：免两道审批门，强制复现/根因/回归测试")
+    s.add_argument(
+        "--execution",
+        action="store_true",
+        help="执行型工作流：不暂停审批门，但仍执行 check、审查、验证和收尾",
+    )
+    s.add_argument(
+        "--execution-reason",
+        default="",
+        help="execution 模式的依据：说明范围/规则已明确且没有新增用户判断",
+    )
     _add_json(s)
     s.set_defaults(func=cmd_init)
 
@@ -2191,6 +2438,12 @@ def build_parser():
     s.add_argument("task_id", nargs="+", help="一个或多个任务 ID；多个即为合并批次")
     _add_json(s)
     s.set_defaults(func=cmd_slice)
+
+    s = sub.add_parser("gate", help="把 execution 工作流升级为 gated 审批路径")
+    s.add_argument("slug", nargs="?")
+    s.add_argument("--reason", required=True, help="升级原因：新增的范围、设计或取舍判断")
+    _add_json(s)
+    s.set_defaults(func=cmd_gate)
 
     s = sub.add_parser("approve", help="记录用户对『方案』或『计划』的审批")
     s.add_argument("slug", nargs="?")
