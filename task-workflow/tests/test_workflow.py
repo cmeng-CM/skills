@@ -980,6 +980,76 @@ class WorkflowCLI(unittest.TestCase):
         self.assertEqual((self.root / ".workflow/old/ledger.md").read_bytes(), original)
         self.assertFalse(self.events("old"))
 
+    def test_scope_exclusions_end_at_sibling_or_new_coverage_section(self):
+        for index, heading in enumerate(("## 验证覆盖：额外必验", "### 补充验证", "### 必验分组")):
+            with self.subTest(heading=heading):
+                slug = f"scope-{index}"
+                self.make_plan(slug)
+                plan = self.coverage_table(
+                    "| 对象 | 验证手段 | 类型 | 必需性 | 证据 |\n|---|---|---|---|---|\n"
+                    "| D-01 | `source.py` | 自动化 | 必需 | |\n"
+                    "### 不验证的部分\n- 无\n" + heading + "\n"
+                    "| 对象 | 验证手段 | 类型 |\n|---|---|---|\n| A2 | `missing.txt` | 自动化 |", slug)
+                result = self.cli("verify", slug, expected=2)
+                self.assertEqual([item["id"] for item in result["gaps"]], ["A2"])
+                self.assertEqual([item["id"] for item in plan.coverage], ["D-01", "A2"])
+                self.assertTrue(plan.exclusions_present)
+                self.cli("close", slug, expected=1)
+
+    def test_scope_nested_exclusion_stays_excluded_until_equal_depth(self):
+        self.coverage_table(
+            "| 对象 | 验证手段 | 类型 |\n|---|---|---|\n| A1 | `source.py` | 自动化 |\n"
+            "### 不验证的部分\n#### 排除依据\n"
+            "| 对象 | 验证手段 | 类型 |\n|---|---|---|\n| excluded | `missing.txt` | 自动化 |")
+        result = self.cli("verify", "probe")
+        self.assertEqual([item["id"] for item in result["coverage"]], ["A1"])
+        self.cli("close", "probe")
+
+    def test_scope_exclusion_condition_table_is_fully_bound(self):
+        original = self.plan().read_text().replace("## 阶段", "### 不验证的部分\n"
+            "| 排除项 | 范围 | 依据 | 负责人 | 排除成立条件 |\n|---|---|---|---|---|\n"
+            "| 外部集成 | 发布环境 | 已批准 | 控制器 | 仅无需发布时排除 |\n## 阶段")
+        self.plan().write_text(original)
+        verified = self.cli("verify", "probe")
+        self.plan().write_text(original.replace("仅无需发布时排除", "所有发布情况均排除"))
+        result = self.cli("status", "probe")["acceptance"]
+        self.assertNotEqual(result["acceptance"], verified["acceptance"])
+        self.assertFalse(result["passed"])
+        self.cli("close", "probe", expected=1)
+
+    def test_scope_indented_evidence_correction_preserves_binding_without_rerun(self):
+        for index, indent in enumerate((" ", "  ", "\t")):
+            with self.subTest(indent=repr(indent)):
+                slug = f"indent-{index}"
+                self.make_plan(slug, command=f"printf run >> .workflow/{slug}/counter",
+                               rows=["| A1 | inspect output | 自动化 | 必需 | `missing.txt` |"])
+                table = "\n".join(indent + line for line in (
+                    "| 对象 | 验证手段 | 类型 | 必需性 | 证据 |", "|---|---|---|---|---|",
+                    "| A1 | inspect output | 自动化 | 必需 | `missing.txt` |"))
+                self.coverage_table(table, slug)
+                result = self.cli("verify", slug, expected=2)
+                original = self.plan(slug).read_text()
+                self.plan(slug).write_text(original.replace("`missing.txt`", "`source.py`"))
+                self.assertEqual(self.cli("status", slug)["acceptance"]["acceptance"], result["acceptance"])
+                self.cli("evidence", slug, "--verify", result["event"], "--item", "A1",
+                         "--ref", "source.py", "--source", "fixture 纯引用拼写修正")
+                self.cli("close", slug)
+                self.assertEqual((self.root / f".workflow/{slug}/counter").read_text(), "run")
+
+    def test_scope_resumed_table_structure_and_requirement_changes_are_checked(self):
+        self.coverage_table("| 对象 | 验证手段 | 类型 |\n| A1 | source.py | 自动化 |\n"
+            "### 不验证的部分\n#### 排除依据\n| 说明 | 未验证条件 |\n"
+            "### 必验分组\n| 对象 | 验证手段 | 类型 |\n| A2 | source.py | 自动化 | extra |")
+        self.cli("verify", "probe", expected=1)
+        self.cli("close", "probe", expected=1)
+        self.make_plan("bound")
+        self.coverage_table(" | 对象 | 验证手段 | 类型 | 证据 |\n |---|---|---|---|\n"
+                            " | A1 | inspect output | 自动化 | source.py |", "bound")
+        self.cli("verify", "bound")
+        self.plan("bound").write_text(self.plan("bound").read_text().replace("inspect output", "inspect new requirement"))
+        self.assertFalse(self.cli("status", "bound")["acceptance"]["passed"])
+        self.cli("close", "bound", expected=1)
+
 
 if __name__ == "__main__":
     unittest.main()

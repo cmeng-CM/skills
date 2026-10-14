@@ -283,6 +283,7 @@ class Plan:
         self.tasks = []
         self.coverage = []    # [{target, means, type}]
         self.coverage_errors = []  # 结构诊断留在计划中，不阻断历史 closed 的只读解析。
+        self.coverage_rows = {}  # 实际覆盖行及独立证据列身份；指纹复用，不再推断范围。
         self.exclusions_present = False   # 是否有「不验证的部分」
         self.sections = {}    # 各段的正文行，供 bug 类型检查用
         self.verify_command = ""
@@ -338,6 +339,7 @@ class Plan:
         verify_buf = []
         collecting_verify = False
         coverage_headers = []
+        exclusion_depth = None
 
         for idx, line in enumerate(self.lines):
             if FENCE.match(line):
@@ -358,8 +360,23 @@ class Plan:
             if sec and not in_fence:
                 section = sec.group(1).strip()
                 coverage_headers = []
+                exclusion_depth = None
                 current_task = None
                 continue
+
+            if section and section.startswith("验证覆盖"):
+                heading = re.match(r"^(#{3,6})\s+(.+)$", line.strip())
+                if heading:
+                    depth = len(heading.group(1))
+                    if exclusion_depth is not None and depth <= exclusion_depth:
+                        exclusion_depth = None
+                        coverage_headers = []
+                    if "不验证" in heading.group(2):
+                        self.exclusions_present = True
+                        if exclusion_depth is None:
+                            exclusion_depth = depth
+                    self.sections.setdefault(section, []).append(line.strip())
+                    continue
 
             phase = PHASE_HEADER.match(line)
             if phase and not in_fence:
@@ -416,9 +433,7 @@ class Plan:
                                 }
                             )
                 elif section.startswith("验证覆盖"):
-                    if line.strip().startswith("###") and "不验证" in line:
-                        self.exclusions_present = True
-                    if not self.exclusions_present:
+                    if exclusion_depth is None:
                         coverage_headers = self._coverage_row(line, idx, coverage_headers)
 
             if current_phase and current_task is None:
@@ -437,6 +452,10 @@ class Plan:
         def error(message):
             self.coverage_errors.append({"line": idx + 1, "message": message, "text": line})
 
+        def remember(names, separator=False):
+            self.coverage_rows[idx] = {"cells": cells, "separator": separator,
+                                       "evidence_column": names.index("证据") if "证据" in names else None}
+
         row = TABLE_ROW.fullmatch(line.strip())
         if not row:
             error("覆盖表行必须完整包围在 | ... | 中；不支持单元格内的管道字符")
@@ -445,14 +464,19 @@ class Plan:
         if _table_separator(cells):
             if (headers and len(cells) != len(headers)) or (not headers and len(cells) not in (3, 4)):
                 error("完整分隔行的列数与覆盖表不符")
+            elif not headers or not _coverage_header_problems(headers):
+                remember(headers, separator=True)
             return headers
         next_row = TABLE_ROW.fullmatch(self.lines[idx + 1].strip()) if idx + 1 < len(self.lines) else None
         followed_by_separator = next_row and _table_separator([c.strip() for c in next_row.group(1).split("|")])
         is_header = (followed_by_separator or COVERAGE_REQUIRED_COLUMNS.issubset(cells)
                      or (not {"自动化", "人工"}.intersection(cells) and COVERAGE_COLUMNS.intersection(cells)))
         if is_header:
-            for problem in _coverage_header_problems(cells):
+            problems = _coverage_header_problems(cells)
+            for problem in problems:
                 error(problem)
+            if not problems:
+                remember(cells)
             return cells
         if headers:
             if _coverage_header_problems(headers):
@@ -464,6 +488,7 @@ class Plan:
             error("无表头旧覆盖表只支持三列或四列")
             return headers
         names = headers or ["对象", "验证手段", "类型", "必需性"][:len(cells)]
+        remember(names)
         mapped = dict(zip(names, cells))  # 列数已完整校验。
         requirement = mapped.get("必需性", mapped.get("必需", "必需"))
         self.coverage.append({"id": mapped.get("ID", mapped["对象"]),
@@ -1442,25 +1467,18 @@ def acceptance_fingerprint(plan):
     不枚举少数验收字段，避免漏掉 Checkpoint、围栏约束或附加验收说明。
     表格规范化只为允许独立引用修正；引用本身另由验证/补证摘要约束。
     """
-    canonical, section, evidence_column = [], "", None
+    canonical = []
     in_fence = False
-    for line in plan.lines:
+    for idx, line in enumerate(plan.lines):
         if FENCE.match(line):
             in_fence = not in_fence
-        heading = SECTION_HEADER.match(line) if not in_fence else None
-        if heading:
-            section = heading.group(1).strip()
-            evidence_column = None
         if STATUS_LINE.match(line) and not in_fence:
             continue
-        row = TABLE_ROW.match(line) if section.startswith("验证覆盖") and not in_fence else None
-        if row:
-            cells = [cell.strip() for cell in row.group(1).split("|")]
-            if "对象" in cells and "类型" in cells:
-                evidence_column = cells.index("证据") if "证据" in cells else None
-            if all(re.fullmatch(r":?-+:?", cell) for cell in cells):
+        row = plan.coverage_rows.get(idx)
+        if row is not None:
+            if row["separator"]:
                 continue
-            canonical.append([cell for index, cell in enumerate(cells) if index != evidence_column])
+            canonical.append([cell for index, cell in enumerate(row["cells"]) if index != row["evidence_column"]])
         else:
             canonical.append(line.rstrip())
     return _digest(canonical)
