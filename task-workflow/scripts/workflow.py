@@ -1468,11 +1468,9 @@ def acceptance_fingerprint(plan):
     表格规范化只为允许独立引用修正；引用本身另由验证/补证摘要约束。
     """
     canonical = []
-    in_fence = False
+    task_status_lines = {task.field_lines["状态"] for task in plan.tasks if "状态" in task.field_lines}
     for idx, line in enumerate(plan.lines):
-        if FENCE.match(line):
-            in_fence = not in_fence
-        if STATUS_LINE.match(line) and not in_fence:
+        if idx in task_status_lines:
             continue
         row = plan.coverage_rows.get(idx)
         if row is not None:

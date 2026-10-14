@@ -1050,6 +1050,55 @@ class WorkflowCLI(unittest.TestCase):
         self.assertFalse(self.cli("status", "bound")["acceptance"]["passed"])
         self.cli("close", "bound", expected=1)
 
+    def test_status_binding_non_task_requirements_cannot_be_skipped(self):
+        for index, section in enumerate(("全局约束", "额外验收")):
+            with self.subTest(section=section):
+                slug = f"requirement-{index}"
+                self.make_plan(slug)
+                self.plan(slug).write_text(self.plan(slug).read_text().replace("## 方案",
+                    f"## {section}\n- **状态**：离线模式下也必须返回成功\n\n## 方案"))
+                verified = self.cli("verify", slug)
+                self.plan(slug).write_text(self.plan(slug).read_text().replace(
+                    "离线模式下也必须返回成功", "离线模式下必须拒绝执行"))
+                state = self.cli("status", slug)["acceptance"]
+                self.assertNotEqual(state["acceptance"], verified["acceptance"])
+                self.assertFalse(state["passed"])
+                self.cli("close", slug, expected=1)
+
+    def test_status_binding_parsed_task_bookkeeping_keeps_acceptance(self):
+        for index, spaces in enumerate((" ", "  ")):
+            with self.subTest(spaces=repr(spaces)):
+                slug = f"task-status-{index}"
+                self.make_plan(slug)
+                original = self.plan(slug).read_text().replace("- **状态**：complete", f"-{spaces}**状态**：complete")
+                self.plan(slug).write_text(original)
+                verified = self.cli("verify", slug)
+                for status in ("pending", "in_progress"):
+                    self.plan(slug).write_text(original.replace("**状态**：complete", f"**状态**：{status}"))
+                    self.assertEqual(workflow.load_plan(str(self.root), slug).tasks[0].status, status)
+                    self.assertEqual(self.cli("acceptance", slug)["acceptance"], verified["acceptance"])
+                    self.cli("close", slug, expected=1)
+                self.plan(slug).write_text(original)
+                self.cli("close", slug)
+                self.assertEqual(len([event for event in self.events(slug) if event["type"] == "verify"]), 1)
+
+    def test_status_binding_fenced_text_stays_bound_even_inside_task(self):
+        for location in ("global", "task"):
+            with self.subTest(location=location):
+                slug = f"fenced-status-{location}"
+                self.make_plan(slug)
+                text = self.plan(slug).read_text()
+                fenced = "```text\n- **状态**：离线模式下也必须返回成功\n```\n"
+                text = text.replace("## 方案", "## 全局约束\n" + fenced + "\n## 方案") if location == "global" else text + fenced
+                self.plan(slug).write_text(text)
+                verified = self.cli("verify", slug)
+                self.plan(slug).write_text(text.replace("离线模式下也必须返回成功", "离线模式下必须拒绝执行"))
+                self.assertEqual(workflow.load_plan(str(self.root), slug).tasks[0].status, "complete")
+                state = self.cli("status", slug)["acceptance"]
+                self.assertNotEqual(state["acceptance"], verified["acceptance"])
+                self.assertFalse(state["passed"])
+                self.cli("close", slug, expected=1)
+
 
 if __name__ == "__main__":
     unittest.main()
