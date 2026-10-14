@@ -1,7 +1,9 @@
 """真实 CLI 回归与解析输入矩阵；所有仓库、命令及旧账本均为隔离 fixture。"""
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -1098,6 +1100,155 @@ class WorkflowCLI(unittest.TestCase):
                 self.assertNotEqual(state["acceptance"], verified["acceptance"])
                 self.assertFalse(state["passed"])
                 self.cli("close", slug, expected=1)
+
+    def approval_plan(self, slug="probe", spaces=" ", extra="", mode=None):
+        if mode:
+            options = ["--execution", "--execution-reason", "fixture 范围和验收已明确"] if mode == "execution" else ["--bug"]
+            self.cli("init", slug, "--goal", "fixture", *options)
+        self.make_plan(slug, status="pending")
+        text = self.plan(slug).read_text().replace("| A1 |", "| D-01 |")
+        text = text.replace("## 阶段", "### 不验证的部分\n- 无\n## 阶段\n### Phase 1: fixture")
+        text = text.replace("- **验收**", "- **决策**：D-01\n- **验收**")
+        text += "#### T2 followup\n- **依赖**：T1\n- **决策**：D-01\n- **验收**：后续结果正确\n- **失败信号**：后续结果错误\n- **状态**：pending\n"
+        text = text.replace("- **状态**：pending", f"-{spaces}**状态**：pending")
+        text = text.replace("## 方案", extra + "## 方案")
+        if mode == "execution":
+            text = "**审批模式**: execution\n**审批模式依据**: fixture 范围和验收已明确\n" + text
+        elif mode == "bug":
+            text = "**类型**: bug\n" + text
+            text += "## 复现\n运行 fixture 会失败\n## 根因\nfixture 的边界处理遗漏\n"
+            text = text.replace("| D-01 | `source.py::test_example`", "| D-01 回归测试 | `source.py::test_example`")
+        self.plan(slug).write_text(text)
+
+    def legacy_approval_hash(self, path):
+        with path.open(encoding="utf-8") as fh:
+            text = fh.read()
+        replaced = re.sub(r"^- \*\*状态\*\*[:：].*$", "- **状态**：<忽略>", text, flags=re.M)
+        return hashlib.sha256(replaced.encode()).hexdigest()[:16]
+
+    def add_legacy_plan_approval(self, slug="probe"):
+        digest = self.legacy_approval_hash(self.plan(slug))
+        row = f"| 2026-01-01 12:00 | 计划 | {digest} | fixture 原始旧审批 |"
+        workflow.ledger_append(str(self.root), slug, "审批", row)
+        return row
+
+    def test_approval_hash_non_task_requirements_block_slice_and_record(self):
+        for index, extra in enumerate((
+            "## 全局约束\n- **状态**：原要求\n",
+            "## 额外验收\n- **状态**：原要求\n",
+            "## 全局约束\n```text\n- **状态**：原要求\n```\n")):
+            with self.subTest(extra=extra):
+                slug = f"approval-requirement-{index}"
+                self.approval_plan(slug, extra=extra)
+                self.cli("approve", slug, "方案", "--by", "fixture 原方案确认")
+                self.cli("approve", slug, "计划", "--by", "fixture 原计划确认")
+                self.cli("slice", slug, "T1")
+                self.plan(slug).write_text(self.plan(slug).read_text().replace("原要求", "新要求"))
+                self.assertIn("计划", self.cli("slice", slug, "T1", expected=1)["error"])
+                self.assertIn("计划", self.cli("record", slug, "T1", "--commits", "HEAD..HEAD", "--note", "fixture", expected=1)["error"])
+                self.cli("verify", slug)
+                self.cli("record", slug, "T1", "--commits", "HEAD..HEAD", "--note", "新验证不代审批", expected=1)
+                self.cli("slice", slug, "T1", expected=1)
+
+    def test_approval_hash_real_task_record_preserves_next_task_access(self):
+        for index, (spaces, colon) in enumerate(((" ", "："), (" ", ":"), ("  ", "："), ("\t", ":"))):
+            with self.subTest(spaces=repr(spaces), colon=colon):
+                slug = f"approval-record-{index}"
+                self.approval_plan(slug, spaces=spaces)
+                self.plan(slug).write_text(self.plan(slug).read_text().replace("**状态**：", f"**状态**{colon}"))
+                self.cli("approve", slug, "方案", "--by", "fixture 原方案确认")
+                approval = self.cli("approve", slug, "计划", "--by", "fixture 原计划确认")
+                self.cli("slice", slug, "T1")
+                self.cli("record", slug, "T1", "--commits", "HEAD..HEAD", "--note", "fixture 无代码变更")
+                self.assertEqual(workflow.plan_content_hash(self.plan(slug)), approval["fingerprint"])
+                self.cli("slice", slug, "T2")
+                self.cli("record", slug, "T2", "--commits", "HEAD..HEAD", "--note", "fixture 后续完成")
+
+    def test_approval_hash_standard_legacy_digest_and_line_endings(self):
+        text = "## 阶段\n#### T1 fixture\n- **状态**：pending\n- **验收**：保留尾部要求\n"
+        path = self.root / ".workflow/probe/hash-fixture.md"
+        observed = {}
+        for colon in ("：", ":"):
+            for ending in ("\n", "\r\n", "\r"):
+                for final_newline in (True, False):
+                    with self.subTest(colon=colon, ending=repr(ending), final_newline=final_newline):
+                        sample = (text if final_newline else text.rstrip("\n")).replace("**状态**：", f"**状态**{colon}")
+                        path.write_bytes(sample.replace("\n", ending).encode())
+                        digest = workflow.plan_content_hash(path)
+                        self.assertEqual(digest, self.legacy_approval_hash(path))
+                        self.assertEqual(len(digest), 16)
+                        observed[colon, ending, final_newline] = digest
+                        path.write_bytes(sample.replace("保留尾部要求", "修改尾部要求").replace("\n", ending).encode())
+                        self.assertNotEqual(workflow.plan_content_hash(path), digest)
+        self.assertEqual(len({digest for (_, _, final), digest in observed.items() if final}), 1)
+        self.assertEqual(len({digest for (_, _, final), digest in observed.items() if not final}), 1)
+        self.assertNotEqual(observed["：", "\n", True], observed["：", "\n", False])
+        path.write_text("## 阶段\n#### T1 fixture\n- **状态**：pending")
+        self.assertEqual(workflow.plan_content_hash(path), self.legacy_approval_hash(path))
+
+    def test_approval_hash_standard_old_approval_remains_usable(self):
+        self.approval_plan()
+        self.cli("approve", "probe", "方案", "--by", "fixture 原方案确认")
+        old_row = self.add_legacy_plan_approval()
+        self.assertEqual(workflow.plan_content_hash(self.plan()), self.legacy_approval_hash(self.plan()))
+        self.cli("slice", "probe", "T1")
+        self.cli("record", "probe", "T1", "--commits", "HEAD..HEAD", "--note", "fixture")
+        self.cli("slice", "probe", "T2")
+        ledger = (self.root / ".workflow/probe/ledger.md").read_text()
+        self.assertIn(old_row, ledger)
+        self.assertEqual(ledger.count("fixture 原始旧审批"), 1)
+
+    def test_approval_hash_legacy_placeholder_ambiguity_never_reuses_old_authorization(self):
+        for index, extra in enumerate(("## 全局约束\n- **状态**：原要求\n",
+                                       "## 额外验收\n- **状态**：原要求\n",
+                                       "## 全局约束\n```text\n- **状态**：原要求\n```\n")):
+            with self.subTest(extra=extra):
+                slug = f"legacy-placeholder-{index}"
+                self.approval_plan(slug, extra=extra)
+                self.cli("approve", slug, "方案", "--by", "fixture 原方案确认")
+                old_row = self.add_legacy_plan_approval(slug)
+                old_hash = self.legacy_approval_hash(self.plan(slug))
+                self.plan(slug).write_text(self.plan(slug).read_text().replace("原要求", "<忽略>"))
+                self.assertEqual(self.legacy_approval_hash(self.plan(slug)), old_hash)
+                self.assertNotEqual(workflow.plan_content_hash(self.plan(slug)), old_hash)
+                self.cli("slice", slug, "T1", expected=1)
+                self.cli("verify", slug)
+                self.cli("record", slug, "T1", "--commits", "HEAD..HEAD", "--note", "fixture", expected=1)
+                self.cli("approve", slug, "计划", "--by", "fixture 核对当前完整要求后明确确认")
+                self.cli("slice", slug, "T1")
+                self.cli("record", slug, "T1", "--commits", "HEAD..HEAD", "--note", "fixture 新审批后继续")
+                self.cli("slice", slug, "T2")
+                self.assertIn(old_row, (self.root / f".workflow/{slug}/ledger.md").read_text())
+
+    def test_approval_hash_does_not_rewrite_historical_closed_or_approval(self):
+        self.make_plan()
+        self.plan().write_text(self.plan().read_text().replace("## 方案", "## 全局约束\n- **状态**：原要求\n## 方案"))
+        old_row = self.add_legacy_plan_approval()
+        self.legacy_close()
+        ledger = self.root / ".workflow/probe/ledger.md"
+        original = ledger.read_bytes()
+        self.plan().write_text(self.plan().read_text().replace("原要求", "<忽略>"))
+        self.assertTrue(self.cli("status", "probe")["closed"])
+        self.assertTrue(self.cli("close", "probe")["already_closed"])
+        self.cli("slice", "probe", "T1", expected=1)
+        self.cli("record", "probe", "T1", expected=1)
+        self.assertEqual(ledger.read_bytes(), original)
+        self.assertIn(old_row, ledger.read_text())
+
+    def test_approval_hash_keeps_execution_bug_and_scheme_gates(self):
+        for mode in ("execution", "bug"):
+            with self.subTest(mode=mode):
+                self.approval_plan(mode, extra="## 全局约束\n- **状态**：原要求\n", mode=mode)
+                self.plan(mode).write_text(self.plan(mode).read_text().replace("原要求", "新要求"))
+                self.cli("slice", mode, "T1")
+                self.cli("record", mode, "T1", "--commits", "HEAD..HEAD", "--note", "fixture 免门模式")
+                self.cli("slice", mode, "T2")
+                self.assertNotIn("计划", workflow._read_approvals(str(self.root), mode))
+        self.approval_plan()
+        self.cli("approve", "probe", "方案", "--by", "fixture 原方案确认")
+        self.cli("approve", "probe", "计划", "--by", "fixture 原计划确认")
+        self.plan().write_text(self.plan().read_text().replace("fixture scheme", "changed scheme"))
+        self.assertIn("方案", self.cli("slice", "probe", "T1", expected=1)["error"])
 
 
 if __name__ == "__main__":

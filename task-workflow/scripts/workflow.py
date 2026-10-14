@@ -1060,15 +1060,27 @@ STATUS_LINE = re.compile(r"^- \*\*状态\*\*[:：].*$", re.M)
 
 
 def plan_content_hash(plan_path):
-    """审批依据指纹：计划内容的哈希，**剥离任务状态字段**。
+    """审批依据指纹：只占位真实任务状态，其余原文保持绑定。
 
-    剥离状态是必须的——`record` 每次完成任务都要改状态，若不剥离，正常的
-    执行流程会让自己刚获得的审批立刻失效。其余任何改动（改需求、改任务、
-    改验收标准）都会让指纹变化，从而让旧审批失效。
+    保留标准旧占位形状与默认换行读取，使有效旧审批继续可用。
+    旧正则曾忽略非任务正文时使用内部域，不能让字面占位文本复用旧授权。
     """
     with open(plan_path, encoding="utf-8") as fh:
         text = fh.read()
-    stripped = STATUS_LINE.sub("- **状态**：<忽略>", text)
+    plan = Plan(plan_path, text)
+    status_lines = {task.field_lines["状态"] for task in plan.tasks if "状态" in task.field_lines}
+    parts, status_spans, offset = [], set(), 0
+    for idx, line in enumerate(text.splitlines(keepends=True)):
+        if idx in status_lines:
+            body_length = len(plan.lines[idx])
+            status_spans.add((offset, offset + body_length))
+            parts.append("- **状态**：<忽略>" + line[body_length:])
+        else:
+            parts.append(line)
+        offset += len(line)
+    stripped = "".join(parts)
+    if any(match.span() not in status_spans for match in STATUS_LINE.finditer(text)):
+        stripped = "workflow-plan-approval:task-status-v1\0" + stripped
     return hashlib.sha256(stripped.encode()).hexdigest()[:16]
 
 
