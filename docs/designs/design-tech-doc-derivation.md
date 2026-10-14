@@ -121,7 +121,7 @@
 | 任务 | 提交范围 | 实际改动 |
 |---|---|---|
 | T1 落地技能协议文本与迁移用例 | `bbe631d..4d43793`（提交 `4d43793`；2 files changed, 9 insertions(+), 4 deletions(-)） | `SKILL.md`：四处改动与 §接口与数据形状 逐字一致——§3 组合约束段落替换为推演步骤、§3 成文前检查点加入来源归属与未决项、§4 联用段末追加一句、Exit Criteria 第三条替换（4 个 hunk，各 1 删 1 增）。`test-prompts.json`：末尾追加用例 24（内容与 §接口与数据形状 代码块一致，缩进沿用文件既有 2 空格风格），共 24 例，既有 23 例无字节改动。 |
-| T2 回写评估事实与设计记录状态（本记录） | 紧随 `4d43793` 的单一提交，仅含本文件 | 更新头部状态与 §实际交付、§已知限制（本回写）；其余各节未改动。提交哈希与逐项核对见 `.workflow/design-tech-doc-derivation/reports/T2.md`。 |
+| T2 回写评估事实与设计记录状态（本记录） | 提交 `05c91d8`（回写评估事实）、`ca90667`（审查 Minor 措辞修正）及本表述修正提交，各次仅含该文档 | 更新头部状态与 §实际交付、§已知限制（本回写）；其余各节未改动。提交哈希与逐项核对见 `.workflow/design-tech-doc-derivation/reports/T2.md`。 |
 
 未改动边界：`design-tech-doc/references/review.md` 相对 `614e544` 无差异（sha256 `8166397de4ace9cee98adc1e80745e07a766270aaec83bb4e60d2984f78a9a98`，由 `validate.py` 逐字节核对）；其它 skill、安装脚本与客户端配置未动；工作树内 `research-router`、`folo/` 的他人未提交改动未被触碰或提交。
 
