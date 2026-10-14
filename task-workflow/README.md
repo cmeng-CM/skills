@@ -310,6 +310,8 @@ $W record <slug> T3 --commits <base7>..<head7> --verdict clean
 
 人工验收先 `acceptance` 展示具体 ID、步骤和预期，再按用户实际答复 `confirm`。允许明确清单后一次确认多项，但每项独立记账、保留来源；部分答复不补齐其它项，“继续”不算通过。可选项事先声明；取消必验要求要用户明确决定，并用 `waive` 留下具体项、理由和来源，不能用人工确认/豁免覆盖命令失败。
 
+用户明确取消旧命令要求、改为当前人工清单时，先更新计划、用 `acceptance` 呈现新旧差异，再用 `retire-command --verify ID --checklist HASH --by 原答复 --source 来源 --reason 理由` 单独记录。仅允许当前无命令、非空清单、无未豁免必验自动化项且非 bug；新旧绑定与完整旧输出必须可追溯。JSON 用 `command_status: retired`、`command_passed: null` 表示旧要求已撤销，真实旧退出码在 `retired_verification`；后续还须验收当前清单。删命令/泛确认/普通豁免不能代替它，新绑定、后来 verify 或重开使旧授权失效。
+
 ### 验证覆盖与补证
 
 原三列表保持兼容、默认必需，可增加 `ID`、`必需性` 和独立 `证据` 列。完整手段文字属于验收，独立引用可修。格式示例见 [plan-format.md](references/plan-format.md)。每条决策仍须被覆盖并明确“不验证的部分”；不因未知而自行缩减验收。
@@ -317,6 +319,8 @@ $W record <slug> T3 --commits <base7>..<head7> --verdict clean
 文件/符号存在性与摘要是确定性检查，测试是否真实覆盖行为仍归独立审查。必验 unknown/missing 优先检查旧输出和引用：`evidence` 只关联最近一次同周期、同版本、同要求且成功稳定的结构化验证，不执行命令。不支持旧 Markdown PASS 或外部结果导入；不能用当前计划替历史结果补造绑定。
 
 引用修正不使原验证绑定失效，但新引用需登记摘要才能收尾。校验对象是该项的完整采纳链：原验证引用加每一次补证引用；任一已采纳产物变更/损坏/缺失都保持失效，不能靠重复登记或换路径清洗历史。确认真正缺实现/缺测试后才追加任务回 E；没有可信证据时保持待核实。
+
+当前声明的每个路径/摘要必须已被该链采纳，符号按当前声明检查；旧补证不遮蔽新文件或符号缺口。没有独立证据声明且手段只是说明文字时，仍支持用真实 evidence 解决 unknown。
 
 ### bug 路径
 
@@ -350,7 +354,7 @@ $W init <slug> --bug --goal "<症状>"
 $W close <slug> --next-step "<建议>"
 ```
 
-`close` 要求任务完成、设计记录就绪，且当前周期所有必验通过或明确豁免；最近计划命令成功、双指纹有效、输出和引用链完整，人工结论有逐项来源。无命令时也须有明确非空验收，不能用 `--manual-confirmed` 泛确认旁路。
+`close` 要求任务完成、设计记录就绪，且当前周期所有必验通过或明确豁免；有效命令要求成功、双指纹有效、输出和引用链完整，人工结论有逐项来源。无命令也须有明确非空验收；存在旧验证时必须明确撤销旧命令要求，保留旧结果，不能用 `--manual-confirmed` 泛确认旁路。
 
 close 保存快照并幂等返回历史结论；原目标修补要 `reopen`，新增 pending 任务、新周期重新验收；新目标 `init --from`。保留原 close、事件、receipt 和报告，无关提交不改变历史 closed。
 
@@ -609,7 +613,7 @@ execution 执行中发现新判断 → `gate <slug> --reason ...` → gated（�
 | `references/plan-review.md` | 计划语义审查 | `check` 之后、计划门之前的独立审查：三维清单、输出格式、纪律、处理流程 |
 | `references/dispatch-protocol.md` | 派发协议 | 派发/报告契约（只装证据）/四态/fix 循环/防误报/整体终审与文档对齐/隔离 |
 | `references/verification.md` | 验证与恢复协议 | 状态分流、逐项确认/豁免、补证、保守失效、close/reopen、旧兼容和失败处理 |
-| `scripts/workflow.py` | 引擎 | 原命令 + acceptance/confirm/waive/evidence/reopen/sync；init --from |
+| `scripts/workflow.py` | 引擎 | 原命令 + acceptance/confirm/waive/evidence/retire-command/reopen/sync；init --from |
 | `tests/test_workflow.py` | 可执行回归 | 临时 Git 仓库中的真实 CLI 验证，覆盖证据门禁及生命周期 |
 | `test-prompts.json` | 交互验收用例 | 评估 skill 行为，不能替代执行回归 |
 

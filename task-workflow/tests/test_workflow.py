@@ -533,6 +533,241 @@ class WorkflowCLI(unittest.TestCase):
         self.cli("close", "probe")
         self.assertEqual((self.root / ".workflow/probe/counter").read_text(), "run")
 
+    def test_overall_i1_supplement_does_not_hide_changed_declaration(self):
+        for reference in ("missing.py", "source.py::absent_symbol", "unparseable reference"):
+            with self.subTest(reference=reference):
+                self.make_plan(rows=["| A1 | inspect test output | 自动化 | 必需 | `source.py` |"])
+                result = self.cli("verify", "probe")
+                self.cli("evidence", "probe", "--verify", result["event"], "--item", "A1",
+                         "--ref", "source.py", "--source", "fixture 原始关联")
+                self.plan().write_text(self.plan().read_text().replace("`source.py`", f"`{reference}`"))
+                self.assertFalse(self.cli("status", "probe")["acceptance"]["passed"])
+                self.cli("close", "probe", expected=1)
+
+    def test_overall_i1_new_declared_reference_needs_adoption_then_no_rerun(self):
+        replacement = ".workflow/probe/replacement.txt"
+        (self.root / replacement).write_text("intact replacement")
+        self.make_plan(command="printf run >> .workflow/probe/counter",
+                       rows=["| A1 | inspect test output | 自动化 | 必需 | `source.py` |"])
+        result = self.cli("verify", "probe")
+        self.cli("evidence", "probe", "--verify", result["event"], "--item", "A1",
+                 "--ref", "source.py", "--source", "fixture 原始关联")
+        self.plan().write_text(self.plan().read_text().replace("`source.py`", f"`{replacement}`"))
+        self.cli("close", "probe", expected=1)
+        self.cli("evidence", "probe", "--verify", result["event"], "--item", "A1",
+                 "--ref", replacement, "--source", "fixture 当前声明关联")
+        self.cli("close", "probe")
+        self.assertEqual((self.root / ".workflow/probe/counter").read_text(), "run")
+
+    def retire(self, verification, slug="probe", expected=0, **extra):
+        values = {"verify": verification, "checklist": self.cli("acceptance", slug)["checklist"],
+                  "by": "fixture 用户明确取消旧命令要求，改为当前人工清单", "source": "fixture:change#1",
+                  "reason": "当前目标改用人工验收"}
+        values.update(extra)
+        args = ["retire-command", slug]
+        for key, value in values.items():
+            args.extend(["--" + key, value])
+        return self.cli(*args, expected=expected)
+
+    def manual_plan(self, slug="probe"):
+        self.make_plan(slug, command="", rows=["| M1 | 打开页面，预期结果正确 | 人工 | 必需 | |"])
+
+    def test_overall_i2_explicit_retirement_allows_manual_contract_preserves_history(self):
+        for command, exit_code in (("true", 0), ("false", 1)):
+            with self.subTest(command=command):
+                slug = "manual-" + command
+                self.make_plan(slug, command=command)
+                old = self.cli("verify", slug, expected=0 if exit_code == 0 else 2)
+                original = self.events(slug)[-1]
+                receipt = self.root / original["data"]["receipt"]
+                receipt_bytes = receipt.read_bytes()
+                self.manual_plan(slug)
+                listing = self.cli("acceptance", slug)
+                self.assertEqual(listing["command_change"]["previous"]["command"], command)
+                self.assertEqual(listing["command_change"]["current"]["command"], "")
+                self.assertNotEqual(listing["command_change"]["previous"]["acceptance"], listing["acceptance"])
+                self.confirm("M1", slug=slug)
+                self.cli("close", slug, expected=1)
+                retired = self.retire(old["event"], slug)
+                result = self.cli("verify", slug)
+                self.assertTrue(result["passed"])
+                self.assertFalse(result["executed"])
+                self.assertEqual(result["command_status"], "retired")
+                self.assertIsNone(result["command_passed"])
+                self.assertIsNone(result["command_exit_code"])
+                self.assertIsNone(result["verification"])
+                self.assertFalse(result["command_required"])
+                self.assertEqual(result["retired_verification"]["exit_code"], exit_code)
+                self.assertEqual(result["command_retirement"], retired["event"])
+                self.cli("close", slug)
+                self.assertTrue(self.cli("status", slug)["closed"])
+                self.cli("sync", slug)
+                self.cli("close", slug)
+                self.assertEqual([e for e in self.events(slug) if e["type"] == "verify"], [original])
+                self.assertEqual(receipt.read_bytes(), receipt_bytes)
+
+    def test_overall_i1_every_declared_reference_must_be_adopted(self):
+        extra = ".workflow/probe/extra.txt"
+        (self.root / extra).write_text("additional original result")
+        self.make_plan(rows=["| A1 | inspect output | 自动化 | 必需 | `source.py` |"])
+        result = self.cli("verify", "probe")
+        self.cli("evidence", "probe", "--verify", result["event"], "--item", "A1",
+                 "--ref", "source.py", "--source", "fixture 关联")
+        self.plan().write_text(self.plan().read_text().replace("`source.py`", f"`source.py` `{extra}`"))
+        self.cli("close", "probe", expected=1)
+        self.cli("evidence", "probe", "--verify", result["event"], "--item", "A1",
+                 "--ref", extra, "--source", "fixture 补齐第二条当前引用")
+        # 当前声明来自 verify + 两条补证的并集，不要求只匹配最后一次补证。
+        self.cli("close", "probe")
+
+    def test_retirement_is_not_implied_by_confirm_waive_or_deleting_command(self):
+        self.make_plan(command="false")
+        self.cli("verify", "probe", expected=2)
+        self.manual_plan()
+        self.cli("close", "probe", expected=1)
+        self.confirm("M1", by="fixture 泛继续，不能当撤销命令授权")
+        self.cli("close", "probe", expected=1)
+        self.confirm("M1", command="waive", reason="fixture 仅豁免 M1")
+        self.cli("close", "probe", expected=1)
+        self.cli("close", "probe", "--manual-confirmed", "泛确认", expected=1)
+        self.assertFalse(any(e["type"] == "command_retired" for e in self.events()))
+
+    def test_retirement_requires_latest_identity_and_all_authorization_fields(self):
+        self.make_plan(command="false")
+        first = self.cli("verify", "probe", expected=2)
+        last = self.cli("verify", "probe", expected=2)
+        self.manual_plan()
+        self.retire(first["event"], expected=1)
+        self.retire("not-a-verification", expected=1)
+        for field in ("by", "source", "reason"):
+            with self.subTest(field=field):
+                self.retire(last["event"], expected=1, **{field: " "})
+        old_checklist = self.cli("acceptance", "probe")["checklist"]
+        self.plan().write_text(self.plan().read_text().replace("结果正确", "结果完整正确"))
+        self.retire(last["event"], checklist=old_checklist, expected=1)
+        self.assertFalse(any(e["type"] == "command_retired" for e in self.events()))
+
+    def test_retirement_rejects_current_command_required_auto_empty_and_bug(self):
+        result = self.cli("verify", "probe")
+        self.retire(result["event"], expected=1)  # 当前命令仍存在。
+        self.make_plan(command="")  # 当前仍有必验自动化项。
+        self.retire(result["event"], expected=1)
+        self.make_plan(command="", rows=[])
+        self.retire(result["event"], expected=1)
+        self.manual_plan()
+        self.plan().write_text("**类型**: bug\n" + self.plan().read_text())
+        self.retire(result["event"], expected=1)
+        self.manual_plan("no-history")
+        self.retire(result["event"], slug="no-history", expected=1)
+
+    def test_retirement_after_specific_auto_waiver_still_requires_manual_result(self):
+        self.make_plan(command="false")
+        result = self.cli("verify", "probe", expected=2)
+        self.make_plan(command="", rows=["| A1 | `source.py` | 自动化 | 必需 | |",
+                                         "| M1 | 打开页面，预期结果正确 | 人工 | 必需 | |"])
+        self.retire(result["event"], expected=1)
+        self.confirm("A1", command="waive", reason="fixture 用户明确取消 A1 自动化要求")
+        self.retire(result["event"])
+        self.assertIn("等待人工验收", self.cli("status", "probe")["stage"])
+        self.cli("close", "probe", expected=1)
+        self.confirm("M1")
+        self.cli("close", "probe")
+
+    def test_retirement_binding_invalidates_on_plan_and_worktree_changes(self):
+        for mutation in ("plan", "worktree"):
+            with self.subTest(mutation=mutation):
+                slug = mutation
+                self.make_plan(slug, command="false")
+                result = self.cli("verify", slug, expected=2)
+                self.manual_plan(slug)
+                self.retire(result["event"], slug)
+                self.confirm("M1", slug=slug)
+                if mutation == "plan":
+                    self.plan(slug).write_text(self.plan(slug).read_text() + "\n## 额外验收\n新增结果要求\n")
+                else:
+                    (self.root / "source.py").write_text("changed source\n")
+                self.confirm("M1", slug=slug)
+                self.assertIsNone(self.cli("status", slug)["acceptance"]["command_retirement"])
+                self.cli("close", slug, expected=1)
+
+    def test_retirement_does_not_cover_later_verification(self):
+        self.make_plan(command="false")
+        old = self.cli("verify", "probe", expected=2)
+        self.manual_plan()
+        self.retire(old["event"])
+        self.confirm("M1")
+        self.cli("verify", "probe", "--command", "false", expected=2)
+        self.assertIsNone(self.cli("status", "probe")["acceptance"]["command_retirement"])
+        self.retire(old["event"], expected=1)
+        self.cli("close", "probe", expected=1)
+
+    def test_retirement_closed_guard_and_reopen_do_not_reuse_authorization(self):
+        self.make_plan(command="false")
+        old = self.cli("verify", "probe", expected=2)
+        self.manual_plan()
+        self.retire(old["event"])
+        self.confirm("M1")
+        self.cli("close", "probe")
+        self.assertFalse(self.cli("acceptance", "probe")["command_change"]["retirement_eligible"])
+        self.retire(old["event"], expected=1)
+        self.cli("reopen", "probe", "--reason", "原目标遗漏", "--by", "fixture 请修补", "--work", "修补遗漏")
+        self.retire(old["event"], expected=1)
+        self.plan().write_text(self.plan().read_text().replace("：pending", "：complete"))
+        current = self.cli("status", "probe")["acceptance"]
+        self.assertIsNone(current["command_retirement"])
+        self.assertTrue(current["pending"])
+        self.cli("close", "probe", expected=1)
+
+    def test_retirement_requires_intact_old_receipt_at_append_and_close(self):
+        self.make_plan(command="false")
+        old = self.cli("verify", "probe", expected=2)
+        receipt = self.root / self.events()[-1]["data"]["receipt"]
+        original = receipt.read_bytes()
+        self.manual_plan()
+        receipt.write_text("damaged")
+        self.retire(old["event"], expected=1)
+        receipt.write_bytes(original)
+        self.retire(old["event"])
+        self.confirm("M1")
+        receipt.unlink()
+        self.cli("close", "probe", expected=1)
+
+    def test_retirement_corrupt_previous_binding_is_rejected(self):
+        self.make_plan(command="false")
+        old = self.cli("verify", "probe", expected=2)
+        self.manual_plan()
+        self.retire(old["event"])
+        events = self.events()
+        events[-1]["data"]["previous"]["exit_code"] = 0
+        path = self.root / ".workflow/probe/events.jsonl"
+        path.write_text("".join(json.dumps(e, ensure_ascii=False) + "\n" for e in events))
+        self.cli("status", "probe", expected=1)
+        self.cli("close", "probe", expected=1)
+
+    def test_retired_close_cannot_claim_old_command_passed(self):
+        self.make_plan(command="false")
+        old = self.cli("verify", "probe", expected=2)
+        self.manual_plan()
+        self.retire(old["event"])
+        self.confirm("M1")
+        self.cli("close", "probe")
+        events = self.events()
+        events[-1]["data"]["snapshot"]["command_passed"] = True
+        (self.root / ".workflow/probe/events.jsonl").write_text(
+            "".join(json.dumps(e, ensure_ascii=False) + "\n" for e in events))
+        self.cli("status", "probe", expected=1)
+
+    def test_legacy_structured_close_without_command_status_remains_readable(self):
+        self.cli("verify", "probe")
+        self.cli("close", "probe")
+        events = self.events()
+        for key in ("command_status", "command_required", "command_change", "command_retirement", "retired_verification"):
+            events[-1]["data"]["snapshot"].pop(key)
+        (self.root / ".workflow/probe/events.jsonl").write_text(
+            "".join(json.dumps(e, ensure_ascii=False) + "\n" for e in events))
+        self.assertTrue(self.cli("status", "probe")["closed"])
+        self.assertTrue(self.cli("close", "probe")["already_closed"])
+
 
 if __name__ == "__main__":
     unittest.main()

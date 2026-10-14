@@ -1366,7 +1366,7 @@ def _hash_file(h, path):
 
 # ---------------------------------------------------------------- 结构化证据（旧账本只读兼容）
 
-EVENT_TYPES = {"start", "verify", "manual", "waiver", "evidence", "close", "reopen"}
+EVENT_TYPES = {"start", "verify", "manual", "waiver", "evidence", "command_retired", "close", "reopen"}
 VIEW_MARKER = "<!-- workflow-events-view -->"
 
 
@@ -1450,6 +1450,11 @@ def _legacy_lifecycle(root, slug):
     return result
 
 
+def _verification_summary(event):
+    return {"id": event["id"], **{key: event["data"][key] for key in
+                                ("command", "exit_code", "fingerprint", "acceptance")}}
+
+
 def read_events(root, slug):
     path = events_path(root, slug)
     if not os.path.exists(path):
@@ -1494,7 +1499,7 @@ def read_events(root, slug):
                 else:
                     if event["cycle"] != cycle or closed:
                         raise ValueError("关闭周期仍写入证据或周期不符")
-                    if kind in ("verify", "manual", "waiver", "evidence"):
+                    if kind in ("verify", "manual", "waiver", "evidence", "command_retired"):
                         for key in ("fingerprint", "acceptance"):
                             if not isinstance(data.get(key), str) or not re.fullmatch(r"[a-f0-9]{64}", data[key]):
                                 raise ValueError(f"缺少有效 {key}")
@@ -1541,16 +1546,40 @@ def read_events(root, slug):
                                 or any(source["data"][key] != data[key] for key in ("fingerprint", "acceptance"))
                                 or any(e["type"] == "verify" for e in events[events.index(source) + 1:])):
                             raise ValueError("补证越过失败/不同版本或绑定了非验证记录")
+                    if kind == "command_retired":
+                        prior = [e for e in events if e["type"] == "verify" and e["cycle"] == cycle]
+                        if (not prior or data.get("verification") != prior[-1]["id"]
+                                or data.get("previous") != _verification_summary(prior[-1])
+                                or data.get("replacement_command") != ""
+                                or data.get("checklist") != _digest({k: data[k] for k in ("fingerprint", "acceptance")})
+                                or any(not isinstance(data.get(k), str) or not data[k].strip()
+                                       for k in ("by", "source", "reason"))):
+                            raise ValueError("撤销旧命令要求缺少最新验证、新旧绑定或具体授权")
                     if kind == "close":
                         snapshot = data.get("snapshot")
                         if (not isinstance(snapshot, dict) or not data.get("closed_at")
-                                or snapshot.get("passed") is not True or snapshot.get("command_passed") is not True
+                                or snapshot.get("passed") is not True
                                 or snapshot.get("cycle") != cycle or type(data.get("tasks")) is not int
                                 or data["tasks"] <= 0 or not isinstance(data.get("next_step"), str)
                                 or any(snapshot.get(k) != [] for k in ("blockers", "pending", "gaps", "unknown"))
                                 or not isinstance(snapshot.get("coverage"), list)
                                 or any(not isinstance(snapshot.get(k), str) or not re.fullmatch(r"[a-f0-9]{64}", snapshot[k]) for k in ("fingerprint", "acceptance"))):
                             raise ValueError("close 缺少结论快照")
+                        if snapshot.get("command_status") == "retired":
+                            retirement = next((e for e in events if e["id"] == snapshot.get("command_retirement")), None)
+                            prior = [e for e in events if e["type"] == "verify" and e["cycle"] == cycle]
+                            if (not retirement or retirement["type"] != "command_retired"
+                                    or retirement["cycle"] != cycle or not prior
+                                    or retirement["data"]["verification"] != prior[-1]["id"]
+                                    or snapshot.get("retired_verification") != retirement["data"]["previous"]
+                                    or any(snapshot[k] != retirement["data"][k] for k in ("fingerprint", "acceptance"))
+                                    or snapshot.get("command_passed") is not None
+                                    or snapshot.get("command_required") is not False
+                                    or snapshot.get("command_exit_code") is not None
+                                    or snapshot.get("verification") is not None):
+                                raise ValueError("close 的旧命令撤销快照无效")
+                        elif snapshot.get("command_passed") is not True:
+                            raise ValueError("close 缺少成功命令或显式撤销结论")
                         closed = True
                 seen.add(event["id"])
                 events.append(event)
@@ -1744,9 +1773,10 @@ def acceptance_state(root, slug, plan, binding=None):
     for entry in coverage:
         identity = entry["id"]
         chain_error = None
+        adopted = []
         if latest and entry["type"] == "自动化" and identity not in waivers:
             try:
-                _adopted_references(root, current, latest, identity)
+                adopted = _adopted_references(root, current, latest, identity)
             except WorkflowError as exc:
                 chain_error = str(exc)
         if identity in waivers:
@@ -1758,28 +1788,31 @@ def acceptance_state(root, slug, plan, binding=None):
             entry["status"] = verdict["data"]["status"] if verdict else "pending"
             if entry["required"] and entry["status"] != "passed":
                 pending.append(entry)
-        elif identity in supplements:
-            refs = supplements[identity]["data"]["references"]
-            try:
-                for ref in refs:
-                    if _file_digest(os.path.join(root, ref["path"])) != ref["hash"]:
-                        raise WorkflowError("补证引用内容已变化")
-                entry.update(status="ok", note="已关联既有验证：" + latest["id"])
-                entry["references"] = refs
-            except WorkflowError as exc:
-                entry.update(status="unknown", note=str(exc))
         elif entry["status"] == "ok":
-            recorded = latest["data"]["artifacts"].get(identity, []) if latest else []
-            if not recorded or recorded != entry.get("references", []):
-                entry.update(status="unknown", note="引用无原验证内容摘要或内容已变化；先用 evidence 核对关联，不能只凭存在放行")
+            if not entry["references"] or any(ref not in adopted for ref in entry["references"]):
+                entry.update(status="unknown", note="当前声明引用尚无原验证/补证内容摘要；先用 evidence 核对关联")
+        elif (entry["status"] == "unknown" and not entry.get("evidence", "").strip()
+              and identity in supplements):
+            # 无声明引用的说明文字可补证；明确路径/符号缺口不能被旧补证遮蔽。
+            refs = supplements[identity]["data"]["references"]
+            entry.update(status="ok", note="已关联既有验证：" + latest["id"], references=refs)
         if entry["required"] and entry["status"] == "unknown":
             unknown.append(entry)
         if entry["required"] and entry["status"] == "missing":
             gaps.append(entry)
     required_auto = [c for c in coverage if c["required"] and c["type"] == "自动化" and c["status"] != "waived"]
-    command_needed = bool(plan.verify_command or required_auto or latest)
+    retirement_eligible = bool(not state["closed"] and latest and items and not plan.verify_command
+                               and not required_auto and not plan.is_bug)
+    retirement = next((e for e in reversed(valid) if e["type"] == "command_retired"
+                       and retirement_eligible and e["data"]["verification"] == latest["id"]), None)
+    command_needed = bool(plan.verify_command or required_auto or (latest and not retirement))
     command_ok = not command_needed
-    if command_needed:
+    if retirement:
+        try:
+            _receipt(root, slug, latest)
+        except WorkflowError as exc:
+            blockers.append(str(exc))
+    elif command_needed:
         if not latest:
             blockers.append("没有绑定当前验收要求的结构化验证；旧 PASS 不能事后补造验收绑定，先核实既有证据")
         elif not _bound(latest, state, binding):
@@ -1796,7 +1829,7 @@ def acceptance_state(root, slug, plan, binding=None):
                 command_ok = True
             except WorkflowError as exc:
                 blockers.append(str(exc))
-    elif not items or not (verdicts or waivers):
+    if not command_needed and (not items or not (verdicts or waivers)):
         blockers.append("无验证命令时，必须有明确验收项和逐项人工结论/用户豁免依据；空验收不通过")
     if pending:
         blockers.append("实现完成，等待人工验收：" + "、".join(c["id"] for c in pending))
@@ -1804,9 +1837,18 @@ def acceptance_state(root, slug, plan, binding=None):
         blockers.append("必验证据待核实：" + "、".join(c["id"] for c in unknown))
     if gaps:
         blockers.append("必验覆盖缺少产物：" + "、".join(c["id"] for c in gaps))
-    return {"passed": not blockers, "command_passed": command_ok,
-            "command_exit_code": latest["data"]["exit_code"] if latest else None,
-            "verification": latest["id"] if latest else None,
+    return {"passed": not blockers, "command_passed": None if retirement else command_ok,
+            "command_required": command_needed,
+            "command_status": "retired" if retirement else ("passed" if command_ok and command_needed
+                                                            else "not_required" if not command_needed else "blocked"),
+            "command_exit_code": latest["data"]["exit_code"] if latest and not retirement else None,
+            "verification": latest["id"] if latest and not retirement else None,
+            "command_retirement": retirement["id"] if retirement else None,
+            "retired_verification": _verification_summary(latest) if retirement else None,
+            "command_change": {"previous": _verification_summary(latest) if latest else None,
+                               "current": {"command": plan.verify_command, **binding,
+                                           "required_automatic": [c["id"] for c in required_auto]},
+                               "retirement_eligible": retirement_eligible},
             "pending": pending, "manual": [c for c in coverage if c["type"] == "人工"],
             "unknown": unknown, "gaps": gaps, "coverage": coverage, "blockers": blockers,
             **binding, "cycle": state["cycle"]}
@@ -1819,11 +1861,46 @@ def cmd_acceptance(args):
     items = _coverage_items(plan)
     binding = _binding(root, plan)
     result = {"slug": slug, **binding, "checklist": _digest(binding), "items": list(items.values())}
+    result["command_change"] = acceptance_state(root, slug, plan, binding)["command_change"]
     lines = ["请依据以下逐项手段/步骤及预期核对；可一次答复明确清单中的多项。",
              f"清单绑定：{result['checklist']}"]
     lines += [f"{c['id']} [{c['type']}, {'必需' if c['required'] else '可选'}] {c['target']}：{c['means']}"
               for c in items.values()]
+    change = result["command_change"]
+    if change["previous"]:
+        old = change["previous"]
+        lines += [f"旧验证 {old['id']}：{old['command']}；退出码 {old['exit_code']}",
+                  f"旧工作树/验收：{old['fingerprint']} / {old['acceptance']}",
+                  f"当前命令：{plan.verify_command or '无'}；当前工作树/验收：{binding['fingerprint']} / {binding['acceptance']}",
+                  "仅修改计划或确认人工项不撤销旧命令要求；具体撤销授权须用 retire-command 单独登记。"]
     return result, "\n".join(lines)
+
+
+def cmd_retire_command(args):
+    root = find_project_root()
+    slug = resolve_slug(root, args.slug)
+    state = require_active(root, slug)
+    plan = load_plan(root, slug)
+    binding = _binding(root, plan)
+    if args.checklist != _digest(binding):
+        raise WorkflowError("当前清单绑定已失效；先 acceptance 核对新旧命令和要求")
+    if any(not getattr(args, key).strip() for key in ("by", "source", "reason")):
+        raise WorkflowError("撤销旧命令要求必须有具体用户答复、来源和理由")
+    current = acceptance_state(root, slug, plan, binding)
+    if not current["command_change"]["retirement_eligible"]:
+        raise WorkflowError("仅可在当前清单非空、无命令、无未豁免必验自动化项且非 bug 时撤销旧命令要求")
+    events = read_events(root, slug)
+    latest = [e for e in events if e["cycle"] == state["cycle"] and e["type"] == "verify"][-1]
+    if args.verify != latest["id"]:
+        raise WorkflowError("必须明确指向当前周期最近一次验证，不能越过后来的结果")
+    _receipt(root, slug, latest)
+    event = _event(slug, state["cycle"], "command_retired", {
+        **binding, "verification": latest["id"], "previous": _verification_summary(latest),
+        "replacement_command": "", "checklist": args.checklist,
+        "by": args.by, "source": args.source, "reason": args.reason})
+    append_events(root, slug, [event])
+    return {"slug": slug, "event": event["id"], "retired_verification": event["data"]["previous"],
+            "executed": False}, "✓ 已记录旧命令要求的明确撤销；旧结果保留，当前清单仍须逐项验收"
 
 
 def cmd_confirmation(args):
@@ -2128,7 +2205,7 @@ def cmd_status(args):
             stage = "V（证据待核实）"
         elif acceptance["command_exit_code"] not in (None, 0):
             stage = "V（自动验证失败）"
-        elif acceptance["pending"] and acceptance["command_passed"]:
+        elif acceptance["pending"] and (acceptance["command_passed"] or not acceptance["command_required"]):
             stage = "V（实现完成，等待人工验收）"
     else:
         stage = "E（执行中）"
@@ -2992,6 +3069,16 @@ def build_parser():
     s.add_argument("--work", required=True, help="原目标内新增工作，生成待完善的任务条目")
     _add_json(s)
     s.set_defaults(func=cmd_reopen)
+
+    s = sub.add_parser("retire-command", help="明确撤销旧命令要求并绑定新验收；保留旧成功/失败")
+    s.add_argument("slug", nargs="?")
+    s.add_argument("--verify", required=True, help="当前周期最近一次验证 ID")
+    s.add_argument("--checklist", required=True, help="acceptance 返回的当前清单绑定")
+    s.add_argument("--by", required=True, help="用户对撤销旧命令要求的具体答复")
+    s.add_argument("--source", required=True, help="答复的可追溯来源")
+    s.add_argument("--reason", required=True)
+    _add_json(s)
+    s.set_defaults(func=cmd_retire_command)
 
     return p
 

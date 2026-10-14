@@ -1,6 +1,6 @@
 # Workflow 验证证据与收尾生命周期修复
 
-状态：引擎已实现，使用契约已同步，待整体终审。更新：2026-10-14。来源：本次对话逐项确认的七项边界，以及 agw、gourd、Runwu 的实际记录。
+状态：已实现，接口与使用契约已同步。更新：2026-10-14。来源：本次对话逐项确认的七项边界，以及 agw、gourd、Runwu 的实际记录。
 
 ## 一句话方案
 
@@ -36,9 +36,10 @@ close 保存结论快照，无关提交不改变历史 closed。原目标修补�
 
 | 入口 | 参数及行为 |
 |---|---|
-| `acceptance [slug]` | 返回 `items`、工作树 `fingerprint`、验收 `acceptance` 和清单绑定 `checklist`；先向用户呈现具体项、步骤与预期 |
+| `acceptance [slug]` | 返回 `items`、工作树 `fingerprint`、验收 `acceptance`、清单绑定 `checklist` 和新旧命令/绑定 `command_change`；向用户呈现具体项、步骤、预期及变更 |
 | `confirm [slug]` | `--item ID` 可重复；必填 `--checklist HASH --by 答复 --source 来源`；`--status passed\|rejected` 默认 passed；只登记人工项，每项一个事件 |
 | `waive [slug]` | 同样逐项，另必填 `--reason 理由`；记录用户明确取消要求，不覆盖失败命令 |
+| `retire-command [slug]` | `--verify ID --checklist HASH --by 具体撤销答复 --source 来源 --reason 理由`；只在当前无命令、非空清单、无未豁免必验自动化项且非 bug 时，绑定旧最近验证与新要求，保留旧结果 |
 | `evidence [slug]` | `--verify EVENT_ID --item ID --ref PATH --source 关联依据`；ref 可重复；仅给本周期最近一次验证关联既有文件，不执行命令 |
 | `verify [slug]` | 保留 `--command`、`--label`；只执行验证节中三反引号围栏内命令，完整保留管道/多行/heredoc；无命令时只汇总验收 |
 | `close [slug]` | 可选 `--next-step`；通过全部门禁后存快照，重复调用幂等。兼容解析 `--manual-confirmed`，活跃工作流拒绝并提示逐项确认 |
@@ -48,21 +49,27 @@ close 保存结论快照，无关提交不改变历史 closed。原目标修补�
 
 `verify` 整体通过退出 0，失败或必验待验/待核实退出 2，输入或记录错误退出 1。JSON 的 `exit_code` 是实际命令退出码；`passed` 是整体验收，另有 `command_passed`、`command_exit_code`、`pending`、`manual`、`unknown`、`gaps`、`blockers` 和 `verification`。命令退出 0 不代表整体通过。`--command` 可诊断，但与计划命令不同的成功结果不能用于 close。
 
-无命令时，必须没有尚未豁免的必验自动化项、所有必验人工通过，且清单非空、有逐项人工结论或明确用户豁免依据；已有最近验证仍参与门禁，删除命令不能清洗失败。bug 计划仍要求声明验证命令。
+无命令时，必须没有尚未豁免的必验自动化项、所有必验人工通过，且清单非空、有逐项人工结论或明确用户豁免依据；已有最近验证仍参与门禁，删除命令不能清洗失败。用户明确把旧命令要求改为当前人工清单时，先按原审批模式处理验收变更，展示 acceptance 的新旧差异，再用 retire-command 单独登记具体撤销授权；普通 confirm/waive 不替代它。bug 计划仍要求声明验证命令。
 
-`status` 只读；显式 slug 可看历史，缺省只选活跃。closed 的 verify/record/confirm/waive/evidence/slice/approve/gate 写入口拒绝，须先 reopen。新周期不继承旧验证。任务 complete 只表示实现完成，没有 close 时仍活跃。
+有效撤销时，`command_status` 为 `retired`、`command_required` 为 false，`command_passed`、`command_exit_code`、`verification` 为 null；旧 ID/命令/真实退出码/双绑定留在 `retired_verification`，`command_retirement` 是授权事件 ID。整体 passed 只描述当前要求，不表示旧失败变为通过。其它状态为 `passed/not_required/blocked`。新工作树/验收绑定、后来新增 verify 或新周期都使旧撤销失效；旧 receipt 仍须完整。
+
+`status` 只读；显式 slug 可看历史，缺省只选活跃。closed 的 verify/record/confirm/waive/evidence/retire-command/slice/approve/gate 写入口拒绝，须先 reopen。新周期不继承旧验证或撤销授权。任务 complete 只表示实现完成，没有 close 时仍活跃。
 
 ### 记录与内容绑定
 
-标准库实现 `.workflow/<slug>/events.jsonl`，每行结构为 `{schema: 1, id, type, time, workflow, cycle, data}`。ID 为 UUID 十六进制串，time 为带时区 ISO 时间；类型为 start/verify/manual/waiver/evidence/close/reopen。读写校验已有事件，追加后 fsync；账本视图原子替换。旧账本仍承载旧审批、完成和裁决，新事件以 JSONL 为机器真源。
+标准库实现 `.workflow/<slug>/events.jsonl`，每行结构为 `{schema: 1, id, type, time, workflow, cycle, data}`。ID 为 UUID 十六进制串，time 为带时区 ISO 时间；类型为 start/verify/manual/waiver/evidence/command_retired/close/reopen。读写校验已有事件，追加后 fsync；账本视图原子替换。旧账本仍承载旧审批、完成和裁决，新事件以 JSONL 为机器真源。
 
 verify 事件保存原命令、退出码、运行前后双指纹、stable、引用摘要和 receipt 路径/摘要。完整 stdout/stderr 写入 `evidence/<事件 ID>.json`。人工与豁免事件保存 item、双指纹、checklist、原答复/source 和状态/理由。补证保存 verification、item、双指纹、references/source。close 保存完整验收 snapshot、时间、任务数、目标和下一步；reopen 保存 reason/by/work/task/previous_close。
+
+command_retired 的 data 为当前 fingerprint/acceptance、verification、previous（旧 id/command/exit_code/fingerprint/acceptance）、空 replacement_command、checklist、by/source/reason。读入时核对所指验证为当时本周期最近一次且旧信息逐字段一致。retired close 快照必须对应有效撤销事件与历史结果，禁止把 command_passed 写 true；已有 schema 1 的正常 close 快照继续可读。
 
 覆盖表兼容三列，默认必需；可增加 `ID`、`必需性`（或 `必需`）和独立 `证据` 列。稳定 ID 缺省用唯一对象名，歧义拒绝。`可选/optional/否/false/no` 识别为可选，其它值保守视为必需。类型为 `自动化/人工`。自动化引用必须是可读取文件，支持 `::符号` 存在性检查，不支持把目录当作已摘要文件。覆盖表可引用项目外文件并记录其摘要；只有 `evidence --ref` 补证入口强制引用位于项目内。
 
 工作树指纹包含 HEAD、二进制 diff、Git 状态和未跟踪完整内容（含大文件），排除 `.workflow`；读取失败不能略过。验收指纹绑定**整份计划规范化正文**，只排除围栏外任务状态行和覆盖表明确的独立 `证据` 列，并规范化表格分隔行。Checkpoint、全局约束、完整手段/人工步骤和额外验收文字都在绑定内，普通文字修改也可能保守失效。验证期间漂移不许 close。
 
 独立证据列修正不改变验收指纹，但新引用须通过 evidence 与原验证关联、取得内容摘要，存在性本身不够。补证要求最近一次结构化验证同周期、同双指纹、命令成功且稳定、receipt 完整，不能回选后来失败之前的成功。
+
+当前明确声明的每个路径/摘要须属于完整采纳链，符号按当前声明核查。旧补证不能遮蔽之后的缺失文件、缺失符号或未登记新文件；无独立声明、手段仅为无法解析引用的说明文字时，仍可用真实补证解决 unknown。
 
 同一验证、同一验收项的**全部已采纳引用**组成完整证据链，包括 verify 自带引用和每次 evidence 追加引用。补证与 status/close 都核验整条链；任何原文件改变/缺失/损坏，重复登记或换路径都不能洗回通过。只有原链仍完整、同版本同要求时才可补真实关联；文件内容语义是否等价仍由控制器及独立审查判断。`.workflow` 内被采纳的输出另受摘要保护，不借记账排除绕过。
 
@@ -74,19 +81,21 @@ verify 事件保存原命令、退出码、运行前后双指纹、stable、引�
 
 ## 实际交付
 
-- 引擎：结构化事件/输出、确定性门禁、逐项确认/豁免、补证、保守绑定、历史 closed 与 reopen/source 关联；仅标准库。实现提交 `ec435f7`、`5b452b8`、`6169b3e`。
-- 回归：`task-workflow/tests/test_workflow.py` 的 50 项隔离真实 CLI 测试通过。覆盖独立引用摘要、Checkpoint/约束哈希、旧固定时间列、裁决备注和完整引用链，含独立审查发现后的反例复现与修复；未执行三个业务项目命令。
-- 使用契约：SKILL、README、计划格式、新增 `references/verification.md` 与 50 条 `test-prompts.json` 行为用例同步。行为提示是后续模型评估材料，不能把 JSON 校验称为 50 条模型评估已通过。
+- 引擎：结构化事件/输出、确定性门禁、逐项确认/豁免、补证、保守绑定、历史 closed 与 reopen/source 关联；终审修复补齐当前声明引用一致性与显式 retire-command。仅标准库。
+- 回归：`task-workflow/tests/test_workflow.py` 的 65 项隔离真实 CLI 测试全部通过；本轮复现旧补证遮蔽声明和无法转人工两项反例，补足正反例与原有 schema 1 close 兼容。另有 15 次新入口隔离 CLI 冒烟通过，证据保存在 T3 报告，最终工作流验证/收尾由事件记录。
+- 使用契约：SKILL、README、计划格式、新增 `references/verification.md` 与 56 条行为提示同步，新增当前引用一致性及显式撤销的提示。行为提示是后续模型评估材料，JSON 校验不等于模型评估已通过。
+- 原样本：未执行三个原项目业务验证或写入命令，仅只读状态核对。67 份计划的初始 60 份历史 closed 全部保留，4 份 complete 无 close 仍活跃；并行工作另新增历史收尾不算本次迁移。统计与原始记录见过程报告 `compatibility.md`。
 - 实际边界：仅补充本引擎当前周期最近一次结构化验证的引用；设计中“关联外部既有结果”的条件保留为未来接口门槛，本次没有提供导入实现。历史不完整证据保持待核实。
 
 ## 已知限制
 
 - 本地文件与摘要不提供防篡改认证，也不能证明答复确实来自用户；控制器负责真实来源，独立审查负责语义覆盖和关联是否可信。
+- retire-command 与 confirm/waive 一样属于证据写入口，不额外调用执行审批门。by/source/reason 只记录具体撤销授权，不代表方案/计划审批已通过；调用者仍须按原审批模式处理范围/验收变更，这是协议要求。
 - 整树/整计划保守绑定会使无关文档、提交或注释变化失效；不提供影响范围推断、缓存或旧/外部结果导入。历史 closed 保存当时结论，不验证后来的修改。
 - 引用只支持文件和符号文本存在性。已采纳链不允许删除坏引用后直接通过；不完整、变更或损坏证据需要取得当前版本的真实验证，不能只修记账。
 - 当前按单控制器串行操作；fsync 与原子视图替换不等于多写者事务，没有跨进程锁。结构化文件损坏须恢复完整原记录，sync 不修坏事件。
 - 支持非 Git 项目；存在 `.git` 却无法读取时硬失败。旧账本只有分钟精度，无法可靠判同分钟先后，也不从普通裁决散文推断执行意图。
-- 无命令只接受前述非空人工/豁免验收条件；历史命令失败仍阻塞。保留工作流记录，清理需另行决定，不以 close 自动授权删除。
+- 无命令只接受前述非空人工/豁免验收条件；没有明确有效的命令撤销授权时，历史失败仍阻塞。有授权也不改写旧结果。保留工作流记录，清理需另行决定，不以 close 自动授权删除。
 
 ## 验收标准
 
@@ -110,3 +119,4 @@ verify 事件保存原命令、退出码、运行前后双指纹、stable、引�
 | D-12 | 本次不提供旧/外部验证导入，绑定不明保持待核实、不自动重跑 | agent，落实 D-02/D-04；关联范围小于未来可扩展设计 |
 | D-13 | reopen 自动追加 pending 任务模板；新目标来源写入新计划 | agent，落实 D-06；任务字段仍须完善/审查 |
 | D-14 | 旧时间按各表固定列读取，普通裁决备注不算新执行 | agent，落实 D-02；分钟精度与自由文本意图不推断 |
+| D-15 | 专门 retire-command/command_retired 绑定旧最近验证与当前人工契约，记录具体变更授权；旧结果单列，不作通过。验收变更审批仍按原协议，不新增证据入口审批门 | agent，控制器采纳，落实 D-01/D-04；无命令/非空清单/无未豁免必验自动项/非 bug 限制，旧输出须完整，新绑定或后来验证使授权失效 |
