@@ -486,6 +486,53 @@ class WorkflowCLI(unittest.TestCase):
         self.assertTrue(self.cli("status", "probe")["closed"])
         self.assertTrue(self.cli("close", "probe")["already_closed"])
 
+    def test_residual_i1_repeated_supplement_cannot_rebind_changed_artifact(self):
+        artifact = self.root / ".workflow/probe/output.txt"
+        artifact.write_text("original output")
+        self.make_plan(rows=["| A1 | inspect test output | 自动化 | 必需 | |"])
+        result = self.cli("verify", "probe", expected=2)
+        arguments = ["evidence", "probe", "--verify", result["event"], "--item", "A1",
+                     "--ref", ".workflow/probe/output.txt", "--source", "关联原验证输出"]
+        self.cli(*arguments)
+        artifact.write_text("changed output")
+        self.assertFalse(self.cli("status", "probe")["acceptance"]["passed"])
+        self.cli(*arguments, expected=1)
+        self.cli("close", "probe", expected=1)
+
+    def test_residual_i1_different_path_cannot_replace_damaged_original(self):
+        artifact = self.root / ".workflow/probe/output.txt"
+        artifact.write_text("original output")
+        (self.root / ".workflow/probe/replacement.txt").write_text("original output")
+        self.make_plan(rows=["| A1 | `.workflow/probe/output.txt` | 自动化 | 必需 | |"])
+        result = self.cli("verify", "probe")
+        artifact.write_text("changed output")
+        self.cli("evidence", "probe", "--verify", result["event"], "--item", "A1",
+                 "--ref", ".workflow/probe/replacement.txt", "--source", "试图换路径", expected=1)
+        self.cli("close", "probe", expected=1)
+
+    def test_residual_i1_superseded_reference_remains_in_close_chain(self):
+        artifact = self.root / ".workflow/probe/output.txt"
+        artifact.write_text("original output")
+        (self.root / ".workflow/probe/replacement.txt").write_text("original output")
+        self.make_plan(rows=["| A1 | `.workflow/probe/output.txt` | 自动化 | 必需 | |"])
+        result = self.cli("verify", "probe")
+        self.cli("evidence", "probe", "--verify", result["event"], "--item", "A1",
+                 "--ref", ".workflow/probe/replacement.txt", "--source", "原件完整，同内容引用")
+        artifact.unlink()
+        self.assertFalse(self.cli("status", "probe")["acceptance"]["passed"])
+        self.cli("close", "probe", expected=1)
+
+    def test_residual_i1_equivalent_reference_with_intact_chain_needs_no_rerun(self):
+        (self.root / ".workflow/probe/output.txt").write_text("original output")
+        (self.root / ".workflow/probe/replacement.txt").write_text("original output")
+        self.make_plan(command="printf run >> .workflow/probe/counter",
+                       rows=["| A1 | `.workflow/probe/output.txt` | 自动化 | 必需 | |"])
+        result = self.cli("verify", "probe")
+        self.cli("evidence", "probe", "--verify", result["event"], "--item", "A1",
+                 "--ref", ".workflow/probe/replacement.txt", "--source", "原件完整，同内容引用")
+        self.cli("close", "probe")
+        self.assertEqual((self.root / ".workflow/probe/counter").read_text(), "run")
+
 
 if __name__ == "__main__":
     unittest.main()

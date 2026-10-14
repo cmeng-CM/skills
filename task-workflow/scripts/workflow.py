@@ -1700,6 +1700,24 @@ def _receipt(root, slug, event):
         raise WorkflowError(f"验证输出绑定无法确认：{exc}") from exc
 
 
+def _adopted_references(root, events, verification, item):
+    """检查该项完整采纳链，不允许最新引用覆盖历史损坏事实。"""
+    references = list(verification["data"]["artifacts"].get(item, []))
+    for event in events:
+        if (event["type"] == "evidence" and event["cycle"] == verification["cycle"]
+                and event["data"]["verification"] == verification["id"]
+                and event["data"]["item"] == item):
+            references.extend(event["data"]["references"])
+    for reference in references:
+        try:
+            current = _file_digest(os.path.join(root, reference["path"]))
+        except WorkflowError as exc:
+            raise WorkflowError(f"已采纳证据链存在缺失/损坏产物，不能替换或重复登记放行：{reference['path']}") from exc
+        if current != reference["hash"]:
+            raise WorkflowError(f"已采纳证据链产物已变化，不能替换或重复登记放行：{reference['path']}")
+    return references
+
+
 def acceptance_state(root, slug, plan, binding=None):
     events = read_events(root, slug)
     state = lifecycle(root, slug, events)
@@ -1725,8 +1743,16 @@ def acceptance_state(root, slug, plan, binding=None):
     coverage = audit_coverage(root, plan)
     for entry in coverage:
         identity = entry["id"]
+        chain_error = None
+        if latest and entry["type"] == "自动化" and identity not in waivers:
+            try:
+                _adopted_references(root, current, latest, identity)
+            except WorkflowError as exc:
+                chain_error = str(exc)
         if identity in waivers:
             entry.update(status="waived", note=waivers[identity]["data"]["reason"])
+        elif chain_error:
+            entry.update(status="unknown", note=chain_error)
         elif entry["type"] == "人工":
             verdict = verdicts.get(identity)
             entry["status"] = verdict["data"]["status"] if verdict else "pending"
@@ -1850,6 +1876,7 @@ def cmd_evidence(args):
     if not _bound(latest, state, binding) or latest["data"]["exit_code"] != 0 or not latest["data"]["stable"]:
         raise WorkflowError("该验证失败、期间漂移或工作树/验收要求已改变，不能补证放行")
     _receipt(root, slug, latest)
+    _adopted_references(root, events, latest, args.item)
     if not args.source.strip():
         raise WorkflowError("补证必须给出与原验证的关联依据 --source")
     refs = []
@@ -1858,10 +1885,6 @@ def cmd_evidence(args):
         if os.path.commonpath([os.path.realpath(root), os.path.realpath(path)]) != os.path.realpath(root):
             raise WorkflowError("补证引用须在项目内；不支持无历史绑定的外部结果导入")
         digest = _file_digest(path)
-        original = latest["data"]["artifacts"].get(args.item, [])
-        if any(os.path.realpath(os.path.join(root, ref["path"])) == os.path.realpath(path)
-               and ref["hash"] != digest for ref in original):
-            raise WorkflowError("原验证已绑定的产物内容发生变化；补引用不能把改变/损坏的原输出重新认定成功")
         refs.append({"path": os.path.relpath(path, root), "hash": digest})
     event = _event(slug, state["cycle"], "evidence", {**binding, "item": args.item,
                    "verification": latest["id"], "references": refs, "source": args.source})
