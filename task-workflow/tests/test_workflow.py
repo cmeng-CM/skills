@@ -152,10 +152,15 @@ class WorkflowCLI(unittest.TestCase):
         self.cli("close", "probe")
 
     def test_independent_reference_can_be_corrected_without_rerun(self):
-        self.make_plan(rows=["| A1 | inspect test result | 自动化 | 必需 | `missing.py` |"])
-        self.cli("verify", "probe", expected=2)
+        self.make_plan(command="printf run >> .workflow/probe/counter",
+                       rows=["| A1 | inspect test result | 自动化 | 必需 | `missing.py` |"])
+        result = self.cli("verify", "probe", expected=2)
         self.plan().write_text(self.plan().read_text().replace("`missing.py`", "`source.py`"))
+        self.cli("close", "probe", expected=1)
+        self.cli("evidence", "probe", "--verify", result["event"], "--item", "A1",
+                 "--ref", "source.py", "--source", "原验收引用拼写修正，关联原命令结果")
         self.cli("close", "probe")
+        self.assertEqual((self.root / ".workflow/probe/counter").read_text(), "run")
 
     def test_changed_means_with_same_path_invalidates_and_cannot_supplement(self):
         result = self.cli("verify", "probe")
@@ -425,6 +430,61 @@ class WorkflowCLI(unittest.TestCase):
         self.plan().write_text(text)
         self.confirm("M1", "M2")
         self.cli("close", "probe")
+
+    def test_review_i1_independent_workflow_artifact_mutation_blocks_close(self):
+        artifact = self.root / ".workflow/probe/result.txt"
+        artifact.write_text("verified result")
+        self.make_plan(rows=["| A1 | inspect output | 自动化 | 必需 | `.workflow/probe/result.txt` |"])
+        self.cli("verify", "probe")
+        artifact.write_text("different result")
+        self.assertFalse(self.cli("status", "probe")["acceptance"]["passed"])
+        self.cli("close", "probe", expected=1)
+
+    def test_review_i1_means_workflow_artifact_also_has_content_binding(self):
+        artifact = self.root / ".workflow/probe/result.txt"
+        artifact.write_text("verified result")
+        self.make_plan(rows=["| A1 | `.workflow/probe/result.txt` | 自动化 | 必需 | |"])
+        self.cli("verify", "probe")
+        artifact.write_text("different result")
+        self.cli("close", "probe", expected=1)
+
+    def test_review_i1_changed_artifact_cannot_be_reblessed_by_evidence(self):
+        artifact = self.root / ".workflow/probe/result.txt"
+        artifact.write_text("verified result")
+        self.make_plan(rows=["| A1 | inspect output | 自动化 | 必需 | `.workflow/probe/result.txt` |"])
+        result = self.cli("verify", "probe")
+        artifact.write_text("different result")
+        self.cli("evidence", "probe", "--verify", result["event"], "--item", "A1",
+                 "--ref", ".workflow/probe/result.txt", "--source", "试图更新为新输出", expected=1)
+        self.cli("close", "probe", expected=1)
+
+    def test_review_i2_checkpoint_change_invalidates_acceptance(self):
+        self.plan().write_text(self.plan().read_text().replace("#### T1", "### Phase 1: fixture\n**Checkpoint**: 输出 A\n#### T1"))
+        self.cli("verify", "probe")
+        self.plan().write_text(self.plan().read_text().replace("输出 A", "输出 B"))
+        self.cli("close", "probe", expected=1)
+
+    def test_review_i2_fenced_constraints_and_additional_acceptance_are_bound(self):
+        for before, after in [("## 全局约束\n```\n最大值 A\n```", "## 全局约束\n```\n最大值 B\n```"),
+                              ("## 额外验收说明\n预期 A", "## 额外验收说明\n预期 B")]:
+            with self.subTest(before=before):
+                self.make_plan()
+                self.plan().write_text(self.plan().read_text() + "\n" + before + "\n")
+                self.cli("verify", "probe")
+                self.plan().write_text(self.plan().read_text().replace(before, after))
+                self.cli("close", "probe", expected=1)
+
+    def test_review_i3_legacy_next_step_date_is_not_close_timestamp(self):
+        self.legacy_close(after="\n## 验证记录\n| 2026-01-02 12:00 | later | abc | `false` | 1 | 0123456789abcdef | FAIL |\n")
+        ledger = self.root / ".workflow/probe/ledger.md"
+        ledger.write_text(ledger.read_text().replace("0123456789abcdef | — |", "0123456789abcdef | 2026-01-03 09:00 检查发布 |"))
+        self.assertFalse(self.cli("status", "probe")["closed"])
+        self.cli("close", "probe", expected=1)
+
+    def test_review_m1_bookkeeping_after_legacy_close_does_not_reopen(self):
+        self.legacy_close(after="\n## 裁决\n| 2026-01-02 12:00 | 已通知用户 | 未变更任务与验收 | — |\n")
+        self.assertTrue(self.cli("status", "probe")["closed"])
+        self.assertTrue(self.cli("close", "probe")["already_closed"])
 
 
 if __name__ == "__main__":

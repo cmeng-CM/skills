@@ -1380,24 +1380,33 @@ def _digest(value):
 
 
 def acceptance_fingerprint(plan):
-    """状态和独立证据引用是记账；手段（包括人工步骤）是验收要求。"""
-    tasks = []
-    for task in plan.tasks:
-        lines = []
-        for line in plan.lines[task.line_start + 1:]:
-            if TASK_HEADER.match(line) or SECTION_HEADER.match(line) or PHASE_HEADER.match(line):
-                break
-            if not STATUS_LINE.match(line):
-                lines.append(line)
-        tasks.append({"id": task.id, "title": task.title, "body": "\n".join(lines).strip()})
-    return _digest({
-        "goal": plan.meta.get("Goal", ""), "decisions": plan.decisions,
-        "constraints": plan.sections.get("全局约束", []),
-        "tasks": tasks,
-        "command": plan.verify_command,
-        "coverage": [{k: v for k, v in c.items() if k != "evidence"}
-                     for c in plan.coverage],
-    })
+    """保守绑定完整计划语义；只排除任务状态和显式独立证据列。
+
+    不枚举少数验收字段，避免漏掉 Checkpoint、围栏约束或附加验收说明。
+    表格规范化只为允许独立引用修正；引用本身另由验证/补证摘要约束。
+    """
+    canonical, section, evidence_column = [], "", None
+    in_fence = False
+    for line in plan.lines:
+        if FENCE.match(line):
+            in_fence = not in_fence
+        heading = SECTION_HEADER.match(line) if not in_fence else None
+        if heading:
+            section = heading.group(1).strip()
+            evidence_column = None
+        if STATUS_LINE.match(line) and not in_fence:
+            continue
+        row = TABLE_ROW.match(line) if section.startswith("验证覆盖") and not in_fence else None
+        if row:
+            cells = [cell.strip() for cell in row.group(1).split("|")]
+            if "对象" in cells and "类型" in cells:
+                evidence_column = cells.index("证据") if "证据" in cells else None
+            if all(re.fullmatch(r":?-+:?", cell) for cell in cells):
+                continue
+            canonical.append([cell for index, cell in enumerate(cells) if index != evidence_column])
+        else:
+            canonical.append(line.rstrip())
+    return _digest(canonical)
 
 
 def _legacy_lifecycle(root, slug):
@@ -1416,18 +1425,21 @@ def _legacy_lifecycle(root, slug):
         if heading:
             section = heading.group(1)
             continue
-        times = time_re.findall(line)
-        if not times:
+        if not line.strip().startswith("|"):
             continue
-        stamp = max(t.replace("T", " ") for t in times)
-        if section == "收尾" and line.startswith("|"):
-            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        # 旧表的时间列固定；命令、下一步或备注中的日期绝不能充当事件时间。
+        time_index = 3 if section == "完成记录" else 0
+        if len(cells) <= time_index or not time_re.fullmatch(cells[time_index]):
+            continue
+        stamp = cells[time_index].replace("T", " ")
+        if section == "收尾":
             if len(cells) == 4 and re.fullmatch(r"\d+/\d+", cells[1]):
                 done, total = map(int, cells[1].split("/"))
                 if done == total:
                     closes.append({"closed_at": stamp, "tasks": total,
                                    "fingerprint": cells[2], "next_step": cells[3]})
-        elif section in ("完成记录", "验证记录", "裁决", "阻塞", "审批", "审批记录"):
+        elif section in ("完成记录", "验证记录", "审批", "审批记录"):
             activities.append(stamp)
     if closes:
         last = max(closes, key=lambda c: c["closed_at"])
@@ -1498,6 +1510,15 @@ def read_events(root, slug):
                                 or data["stable"] != all(after[k] == data[k] for k in after)
                                 or not re.fullmatch(r"[a-f0-9]{64}", data["receipt_hash"])):
                             raise ValueError("验证前后绑定无效")
+                        artifacts = data.get("artifacts")
+                        if not isinstance(artifacts, dict) or any(not isinstance(refs, list) for refs in artifacts.values()):
+                            raise ValueError("验证缺少逐项证据摘要")
+                        for refs in artifacts.values():
+                            for ref in refs:
+                                if (not isinstance(ref, dict) or not isinstance(ref.get("path"), str)
+                                        or not isinstance(ref.get("hash"), str)
+                                        or not re.fullmatch(r"[a-f0-9]{64}", ref["hash"])):
+                                    raise ValueError("验证证据摘要无效")
                     if kind in ("manual", "waiver", "evidence"):
                         for key in ("item", "source"):
                             if not isinstance(data.get(key), str) or not data[key].strip():
@@ -1669,7 +1690,7 @@ def _receipt(root, slug, event):
     try:
         with open(path, encoding="utf-8") as fh:
             receipt = json.load(fh)
-        for key in ("command", "exit_code", "fingerprint", "acceptance", "stable"):
+        for key in ("command", "exit_code", "fingerprint", "acceptance", "stable", "artifacts"):
             if receipt.get(key) != data[key]:
                 raise ValueError(f"{key} 不符")
         if receipt.get("id") != event["id"] or receipt.get("cycle") != event["cycle"]:
@@ -1718,8 +1739,13 @@ def acceptance_state(root, slug, plan, binding=None):
                     if _file_digest(os.path.join(root, ref["path"])) != ref["hash"]:
                         raise WorkflowError("补证引用内容已变化")
                 entry.update(status="ok", note="已关联既有验证：" + latest["id"])
+                entry["references"] = refs
             except WorkflowError as exc:
                 entry.update(status="unknown", note=str(exc))
+        elif entry["status"] == "ok":
+            recorded = latest["data"]["artifacts"].get(identity, []) if latest else []
+            if not recorded or recorded != entry.get("references", []):
+                entry.update(status="unknown", note="引用无原验证内容摘要或内容已变化；先用 evidence 核对关联，不能只凭存在放行")
         if entry["required"] and entry["status"] == "unknown":
             unknown.append(entry)
         if entry["required"] and entry["status"] == "missing":
@@ -1831,7 +1857,12 @@ def cmd_evidence(args):
         path = os.path.abspath(os.path.join(root, reference))
         if os.path.commonpath([os.path.realpath(root), os.path.realpath(path)]) != os.path.realpath(root):
             raise WorkflowError("补证引用须在项目内；不支持无历史绑定的外部结果导入")
-        refs.append({"path": os.path.relpath(path, root), "hash": _file_digest(path)})
+        digest = _file_digest(path)
+        original = latest["data"]["artifacts"].get(args.item, [])
+        if any(os.path.realpath(os.path.join(root, ref["path"])) == os.path.realpath(path)
+               and ref["hash"] != digest for ref in original):
+            raise WorkflowError("原验证已绑定的产物内容发生变化；补引用不能把改变/损坏的原输出重新认定成功")
+        refs.append({"path": os.path.relpath(path, root), "hash": digest})
     event = _event(slug, state["cycle"], "evidence", {**binding, "item": args.item,
                    "verification": latest["id"], "references": refs, "source": args.source})
     append_events(root, slug, [event])
@@ -2712,7 +2743,7 @@ def audit_coverage(root, plan):
         means = entry["means"]
         reference = entry.get("evidence", "") or means
         tokens = ARTIFACT_TOKEN.findall(reference) or [reference.strip()]
-        checked, missing = [], []
+        checked, missing, references = [], [], []
         for token in tokens:
             parts = token.split("::")
             path = parts[0].strip()
@@ -2734,7 +2765,14 @@ def audit_coverage(root, plan):
                 except (OSError, UnicodeError):
                     missing.append(f"{token}（读不到）")
                     continue
+            try:
+                references.append({"path": os.path.relpath(os.path.abspath(full), root),
+                                   "hash": _file_digest(full)})
+            except WorkflowError as exc:
+                missing.append(str(exc))
+                continue
             checked.append(token)
+        current["references"] = references
         if missing:
             current.update(status="missing", note="；".join(missing))
         elif checked:
@@ -2760,10 +2798,12 @@ def cmd_verify(args):
     print(f"$ {command}", file=sys.stderr)
     proc = subprocess.run(command, shell=True, cwd=root, capture_output=True, text=True, errors="replace")
     after = _binding(root, load_plan(root, slug))
+    coverage = audit_coverage(root, load_plan(root, slug))
     event = _event(slug, state["cycle"], "verify", {**before,
                    "command": command, "exit_code": proc.returncode,
                    "stable": before == after, "after": after,
                    "label": args.label or "verify",
+                   "artifacts": {c["id"]: c.get("references", []) for c in coverage if c["type"] == "自动化"},
                    "commit": _git(root, "rev-parse", "HEAD").strip() or "—"})
     directory = os.path.join(workflow_root(root), slug, "evidence")
     os.makedirs(directory, exist_ok=True)
