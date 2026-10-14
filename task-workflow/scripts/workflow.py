@@ -27,6 +27,8 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
+import uuid
 from datetime import datetime
 
 # ---------------------------------------------------------------- 解析规则
@@ -114,7 +116,6 @@ DESIGN_DOC_PLAN_SECTIONS = [
 MAX_TASKS = 8          # 超过则建议拆分
 MAX_FILES_PER_TASK = 5  # 单任务文件数上限
 MAX_BATCH_TASKS = 4     # 同批合并的任务数上限（一个 subagent 一次能高质量做完的量）
-UNTRACKED_HASH_LIMIT = 1 << 20  # 超大未跟踪文件只记大小，不读内容
 
 
 class WorkflowError(Exception):
@@ -194,6 +195,7 @@ def resolve_slug(root, slug):
                 f"未找到工作流 '{slug}'。现有：{', '.join(slugs) or '（无）'}"
             )
         return slug
+    slugs = [s for s in slugs if not lifecycle(root, s)["closed"]]
     if not slugs:
         raise WorkflowError("当前项目没有工作流。先运行 init，或由 skill 的 P 轮创建计划。")
     if len(slugs) > 1:
@@ -313,9 +315,12 @@ class Plan:
         in_fence = False
         verify_buf = []
         collecting_verify = False
+        coverage_headers = []
 
         for idx, line in enumerate(self.lines):
             if FENCE.match(line):
+                if section and section.startswith("验证命令"):
+                    collecting_verify = not in_fence
                 in_fence = not in_fence
                 if collecting_verify and not in_fence:
                     collecting_verify = False
@@ -323,6 +328,8 @@ class Plan:
 
             if collecting_verify:
                 verify_buf.append(line)
+                continue
+            if in_fence:
                 continue
 
             sec = SECTION_HEADER.match(line)
@@ -391,22 +398,28 @@ class Plan:
                     row = TABLE_ROW.match(line)
                     if row and not line.strip().startswith("|--"):
                         cells = [c.strip() for c in row.group(1).split("|")]
-                        if len(cells) >= 3 and cells[0] not in ("对象", "") and not cells[0].startswith("--"):
+                        if "对象" in cells and "类型" in cells:
+                            coverage_headers = cells
+                            continue
+                        if len(cells) >= 3 and cells[0] and not cells[0].startswith("--"):
+                            mapped = dict(zip(coverage_headers, cells))
+                            requirement = mapped.get("必需性", mapped.get("必需", cells[3] if not coverage_headers and len(cells) > 3 else "必需"))
+                            required = requirement.lower() not in ("可选", "optional", "否", "false", "no")
                             self.coverage.append(
-                                {"target": cells[0], "means": cells[1], "type": cells[2]}
+                                {"id": mapped.get("ID", mapped.get("对象", cells[0])),
+                                 "target": mapped.get("对象", cells[0]),
+                                 "means": mapped.get("验证手段", cells[1]),
+                                 "type": mapped.get("类型", cells[2]),
+                                 "required": required,
+                                 "evidence": mapped.get("证据", "")}
                             )
-                elif section.startswith("验证命令"):
-                    if FENCE.match(line) and not in_fence:
-                        collecting_verify = True
-                    elif line.strip() and not line.strip().startswith("```"):
-                        verify_buf.append(line.strip())
 
             if current_phase and current_task is None:
                 cp = META_FIELD.match(line)
                 if cp and "heckpoint" in cp.group("key"):
                     self.phases[-1][2] = cp.group("value").strip()
 
-        self.verify_command = "\n".join(l for l in verify_buf if l.strip()).strip()
+        self.verify_command = "\n".join(verify_buf).strip()
         if self.verify_command in ("未声明", "-", "无"):
             self.verify_command = ""
 
@@ -923,7 +936,7 @@ Created: {datetime.now().strftime('%Y-%m-%d')}
 Approval-mode: {approval_mode}
 Approval-basis: {mode_note}
 
-> 账本是压缩/清空上下文后唯一可信的恢复点。**不相信对话回忆，只相信账本与 git log。**
+> 恢复时读取计划、旧账本与 git log；新验证、人工结论和生命周期以 events.jsonl 为准，本账本同步呈现。
 > 首行的 `Plan:` 用于防止多个工作流串账——首行指向别的计划时，这份账本属于那个计划。
 > `Approval-mode` 记录的是审批路径，不是质量豁免：execution 仍须 check、审查、verify 和 close。
 
@@ -1239,7 +1252,9 @@ def _read_verify_records(root, slug):
                 continue
             if inside and s.startswith("|"):
                 cells = [c.strip() for c in s.strip("|").split("|")]
-                if len(cells) >= 7 and cells[0] != "时间" and not cells[0].startswith("--"):
+                if (len(cells) == 7 and re.fullmatch(r"-?\d+", cells[4])
+                        and cells[6] in ("PASS", "FAIL")
+                        and re.fullmatch(r"[a-f0-9]{16,64}", cells[5])):
                     rows.append(
                         {
                             "time": cells[0],
@@ -1302,50 +1317,555 @@ def ledger_check_owner(root, slug):
 # ---------------------------------------------------------------- 内容指纹
 
 def fingerprint(root):
-    """工作树内容指纹：内容变了指纹就变，与是否已提交无关。
-
-    **必须包含 HEAD**：只哈希 diff + status 的话，一棵干净的提交树两者都为空，
-    指纹会坍缩成空串的哈希——那样"提交了新代码"不会改变指纹，旧验证就被错误地
-    当成对新内容有效。加上 HEAD 之后，提交或换分支都会让指纹变化。
-
-    tracked 的改动走 git diff；未跟踪文件额外读内容（超大文件只记大小）。
-    """
+    """保守绑定 HEAD、索引/工作树和未跟踪完整内容，排除工作流记账。"""
     h = hashlib.sha256()
-    h.update(_git(root, "rev-parse", "HEAD").encode())
-    h.update(_git(root, "diff", "HEAD").encode())
-    status = _git(root, "status", "--porcelain")
-    h.update(status.encode())
-
-    for line in status.splitlines():
-        if not line.startswith("??"):
-            continue
-        rel = line[3:].strip().strip('"')
-        full = os.path.join(root, rel)
-        if os.path.isdir(full):
-            for dirpath, _dirs, names in os.walk(full):
-                for name in sorted(names):
-                    p = os.path.join(dirpath, name)
-                    h.update(os.path.relpath(p, root).encode())
-                    _hash_file(h, p)
+    is_git = _git_ok(root, "rev-parse", "--git-dir")
+    if os.path.exists(os.path.join(root, ".git")) and not is_git:
+        raise WorkflowError("项目含 .git，但无法读取 Git 状态；不能降级为无版本指纹")
+    if is_git:
+        def git_bytes(*args):
+            p = subprocess.run(["git", *args], cwd=root, capture_output=True)
+            if p.returncode:
+                raise WorkflowError(f"读取工作树失败：git {' '.join(args)}")
+            return p.stdout
+        head = _git(root, "rev-parse", "--verify", "HEAD").strip()
+        h.update(head.encode())
+        paths = ["--", ".", ":(exclude).workflow"]
+        if head:
+            h.update(git_bytes("diff", "--binary", "HEAD", *paths))
         else:
-            h.update(rel.encode())
-            _hash_file(h, full)
-    return h.hexdigest()[:16]
+            h.update(git_bytes("diff", "--binary", "--cached", *paths))
+            h.update(git_bytes("diff", "--binary", *paths))
+        h.update(git_bytes("status", "--porcelain=v1", "-z", "--untracked-files=all", *paths))
+        names = git_bytes("ls-files", "--others", "--exclude-standard", "-z", *paths)
+        for name in sorted(n for n in names.split(b"\0") if n):
+            h.update(name + b"\0")
+            _hash_file(h, os.path.join(root, os.fsdecode(name)))
+    else:
+        for directory, dirs, files in os.walk(root):
+            dirs[:] = sorted(d for d in dirs if d not in (".workflow", ".git"))
+            for name in sorted(files):
+                path = os.path.join(directory, name)
+                h.update(os.path.relpath(path, root).encode() + b"\0")
+                _hash_file(h, path)
+    return h.hexdigest()
 
 
 def _hash_file(h, path):
     try:
-        size = os.path.getsize(path)
-    except OSError:
-        return
-    h.update(str(size).encode())
-    if size > UNTRACKED_HASH_LIMIT:
-        return
-    try:
+        if os.path.islink(path):
+            h.update(b"symlink\0" + os.fsencode(os.readlink(path)))
+            return
+        h.update(str(os.path.getsize(path)).encode() + b"\0")
         with open(path, "rb") as fh:
-            h.update(fh.read())
-    except OSError:
-        pass
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                h.update(chunk)
+    except OSError as exc:
+        raise WorkflowError(f"无法读取证据/工作树文件 {path}：{exc}") from exc
+
+
+# ---------------------------------------------------------------- 结构化证据（旧账本只读兼容）
+
+EVENT_TYPES = {"start", "verify", "manual", "waiver", "evidence", "close", "reopen"}
+VIEW_MARKER = "<!-- workflow-events-view -->"
+
+
+def events_path(root, slug):
+    return os.path.join(workflow_root(root), slug, "events.jsonl")
+
+
+def _digest(value):
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
+                                     separators=(",", ":")).encode()).hexdigest()
+
+
+def acceptance_fingerprint(plan):
+    """状态和独立证据引用是记账；手段（包括人工步骤）是验收要求。"""
+    tasks = []
+    for task in plan.tasks:
+        lines = []
+        for line in plan.lines[task.line_start + 1:]:
+            if TASK_HEADER.match(line) or SECTION_HEADER.match(line) or PHASE_HEADER.match(line):
+                break
+            if not STATUS_LINE.match(line):
+                lines.append(line)
+        tasks.append({"id": task.id, "title": task.title, "body": "\n".join(lines).strip()})
+    return _digest({
+        "goal": plan.meta.get("Goal", ""), "decisions": plan.decisions,
+        "constraints": plan.sections.get("全局约束", []),
+        "tasks": tasks,
+        "command": plan.verify_command,
+        "coverage": [{k: v for k, v in c.items() if k != "evidence"}
+                     for c in plan.coverage],
+    })
+
+
+def _legacy_lifecycle(root, slug):
+    """只承认可完整识别且无后续执行的旧 close，不给旧 PASS 补造绑定。"""
+    path = ledger_path(root, slug)
+    plan = load_plan(root, slug)
+    result = {"closed": False, "cycle": 1, "legacy": True, "close": None}
+    if not os.path.isfile(path):
+        return result
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read().split(VIEW_MARKER)[0]
+    section, closes, activities = "", [], []
+    time_re = re.compile(r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?")
+    for line in text.splitlines():
+        heading = SECTION_HEADER.match(line)
+        if heading:
+            section = heading.group(1)
+            continue
+        times = time_re.findall(line)
+        if not times:
+            continue
+        stamp = max(t.replace("T", " ") for t in times)
+        if section == "收尾" and line.startswith("|"):
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if len(cells) == 4 and re.fullmatch(r"\d+/\d+", cells[1]):
+                done, total = map(int, cells[1].split("/"))
+                if done == total:
+                    closes.append({"closed_at": stamp, "tasks": total,
+                                   "fingerprint": cells[2], "next_step": cells[3]})
+        elif section in ("完成记录", "验证记录", "裁决", "阻塞", "审批", "审批记录"):
+            activities.append(stamp)
+    if closes:
+        last = max(closes, key=lambda c: c["closed_at"])
+        if (last["tasks"] == len(plan.tasks) and plan.tasks
+                and all(t.status == "complete" for t in plan.tasks)
+                and not any(stamp > last["closed_at"] for stamp in activities)):
+            result.update(closed=True, close=last)
+    return result
+
+
+def read_events(root, slug):
+    path = events_path(root, slug)
+    if not os.path.exists(path):
+        return []
+    events, seen, cycle, closed = [], set(), 1, False
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line_no, line in enumerate(fh, 1):
+                if not line.endswith("\n"):
+                    raise ValueError("事件尾行不完整")
+                event = json.loads(line)
+                if not isinstance(event, dict):
+                    raise ValueError("事件必须是对象")
+                for key in ("id", "type", "time", "workflow"):
+                    if not isinstance(event.get(key), str) or not event[key]:
+                        raise ValueError(f"缺少 {key}")
+                datetime.fromisoformat(event["time"])
+                if (event.get("schema") != 1 or type(event.get("cycle")) is not int
+                        or event["type"] not in EVENT_TYPES or event["workflow"] != slug
+                        or event["id"] in seen or not isinstance(event.get("data"), dict)):
+                    raise ValueError("事件身份或结构无效")
+                kind, data = event["type"], event["data"]
+                if not events:
+                    if kind != "start" or event["cycle"] != 1 or type(data.get("legacy_closed")) is not bool:
+                        raise ValueError("缺少有效 start 事件")
+                    closed = data["legacy_closed"]
+                    if closed:
+                        snapshot = data.get("legacy_close")
+                        if (not isinstance(snapshot, dict) or not snapshot.get("closed_at")
+                                or type(snapshot.get("tasks")) is not int or snapshot["tasks"] <= 0):
+                            raise ValueError("旧 close 快照不完整")
+                elif kind == "start":
+                    raise ValueError("重复 start")
+                elif kind == "reopen":
+                    if not closed or event["cycle"] != cycle + 1:
+                        raise ValueError("重开周期不连续或原周期未关闭")
+                    cycle += 1
+                    closed = False
+                    for key in ("reason", "by", "work", "task"):
+                        if not isinstance(data.get(key), str) or not data[key].strip():
+                            raise ValueError(f"reopen 缺少 {key}")
+                else:
+                    if event["cycle"] != cycle or closed:
+                        raise ValueError("关闭周期仍写入证据或周期不符")
+                    if kind in ("verify", "manual", "waiver", "evidence"):
+                        for key in ("fingerprint", "acceptance"):
+                            if not isinstance(data.get(key), str) or not re.fullmatch(r"[a-f0-9]{64}", data[key]):
+                                raise ValueError(f"缺少有效 {key}")
+                    if kind == "verify":
+                        if (type(data.get("exit_code")) is not int or not isinstance(data.get("command"), str)
+                                or not data["command"].strip() or type(data.get("stable")) is not bool
+                                or not isinstance(data.get("receipt"), str)
+                                or not isinstance(data.get("receipt_hash"), str)):
+                            raise ValueError("验证事件不完整")
+                        after = data.get("after")
+                        if (not isinstance(after, dict) or set(after) != {"fingerprint", "acceptance"}
+                                or any(not isinstance(v, str) or not re.fullmatch(r"[a-f0-9]{64}", v) for v in after.values())
+                                or data["stable"] != all(after[k] == data[k] for k in after)
+                                or not re.fullmatch(r"[a-f0-9]{64}", data["receipt_hash"])):
+                            raise ValueError("验证前后绑定无效")
+                    if kind in ("manual", "waiver", "evidence"):
+                        for key in ("item", "source"):
+                            if not isinstance(data.get(key), str) or not data[key].strip():
+                                raise ValueError(f"逐项记录缺少 {key}")
+                    if kind == "manual" and (data.get("status") not in ("passed", "rejected") or not isinstance(data.get("by"), str) or not data["by"].strip()):
+                        raise ValueError("人工结论无效")
+                    if kind == "waiver" and any(not isinstance(data.get(k), str) or not data[k].strip() for k in ("reason", "by")):
+                        raise ValueError("豁免缺少依据")
+                    if kind == "evidence":
+                        if (data.get("verification") not in seen or not isinstance(data.get("references"), list)
+                                or not data["references"]):
+                            raise ValueError("补证缺少既有验证或引用")
+                        for ref in data["references"]:
+                            if (not isinstance(ref, dict) or not isinstance(ref.get("path"), str) or not ref["path"]
+                                    or not isinstance(ref.get("hash"), str) or not re.fullmatch(r"[a-f0-9]{64}", ref["hash"])):
+                                raise ValueError("补证引用无效")
+                        source = next(e for e in events if e["id"] == data["verification"])
+                        if (source["type"] != "verify" or source["cycle"] != cycle
+                                or source["data"]["exit_code"] != 0 or not source["data"]["stable"]
+                                or any(source["data"][key] != data[key] for key in ("fingerprint", "acceptance"))
+                                or any(e["type"] == "verify" for e in events[events.index(source) + 1:])):
+                            raise ValueError("补证越过失败/不同版本或绑定了非验证记录")
+                    if kind == "close":
+                        snapshot = data.get("snapshot")
+                        if (not isinstance(snapshot, dict) or not data.get("closed_at")
+                                or snapshot.get("passed") is not True or snapshot.get("command_passed") is not True
+                                or snapshot.get("cycle") != cycle or type(data.get("tasks")) is not int
+                                or data["tasks"] <= 0 or not isinstance(data.get("next_step"), str)
+                                or any(snapshot.get(k) != [] for k in ("blockers", "pending", "gaps", "unknown"))
+                                or not isinstance(snapshot.get("coverage"), list)
+                                or any(not isinstance(snapshot.get(k), str) or not re.fullmatch(r"[a-f0-9]{64}", snapshot[k]) for k in ("fingerprint", "acceptance"))):
+                            raise ValueError("close 缺少结论快照")
+                        closed = True
+                seen.add(event["id"])
+                events.append(event)
+        if not events:
+            raise ValueError("events.jsonl 为空")
+    except (OSError, UnicodeError, ValueError, TypeError) as exc:
+        raise WorkflowError(f"结构化证据损坏，无法确认，禁止回退旧 PASS：{path}（{exc}）") from exc
+    return events
+
+
+def lifecycle(root, slug, events=None):
+    events = read_events(root, slug) if events is None else events
+    if not events:
+        return _legacy_lifecycle(root, slug)
+    start = events[0]
+    state = {"closed": start["data"]["legacy_closed"], "cycle": 1,
+             "legacy": False, "close": start["data"].get("legacy_close")}
+    for event in events[1:]:
+        if event["type"] == "close":
+            state.update(closed=True, close=event["data"])
+        elif event["type"] == "reopen":
+            state.update(closed=False, cycle=event["cycle"], close=None)
+    return state
+
+
+def require_active(root, slug):
+    state = lifecycle(root, slug)
+    if state["closed"]:
+        raise WorkflowError("工作流已经 closed。原目标修补先显式 reopen；新目标请 init --from。")
+    ledger_check_owner(root, slug)
+    return state
+
+
+def _event(slug, cycle, kind, data):
+    return {"schema": 1, "id": uuid.uuid4().hex, "type": kind,
+            "time": datetime.now().astimezone().isoformat(timespec="microseconds"),
+            "workflow": slug, "cycle": cycle, "data": data}
+
+
+def _atomic_text(path, text):
+    directory = os.path.dirname(path)
+    fd, temporary = tempfile.mkstemp(dir=directory, prefix=".workflow-write-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def sync_event_view(root, slug, events=None):
+    events = read_events(root, slug) if events is None else events
+    path = ledger_path(root, slug)
+    if not os.path.isfile(path):
+        raise WorkflowError(f"账本不存在：{path}")
+    with open(path, encoding="utf-8") as fh:
+        original = fh.read().split(VIEW_MARKER)[0]
+    def cell(value):
+        return str(value).replace("&", "&amp;").replace("<", "&lt;").replace("|", "&#124;").replace("\n", "<br>").replace("\r", "")
+    rows = [VIEW_MARKER, "## 结构化事件（events.jsonl 的只读呈现）", "",
+            "| 时间 | 周期 | 类型 | ID | 详情 |", "|---|---|---|---|---|"]
+    for event in events:
+        data = event["data"]
+        if event["type"] == "verify":
+            detail = (f"命令：{data['command']}\n退出码：{data['exit_code']}；稳定：{data['stable']}"
+                      f"\n工作树：{data['fingerprint']}；验收：{data['acceptance']}\n输出：{data['receipt']}")
+        elif event["type"] in ("manual", "waiver"):
+            detail = (f"{data['item']}：{data.get('status', 'waived')}；{data.get('reason', '')}"
+                      f"\n用户答复：{data['by']}\n来源：{data['source']}")
+        elif event["type"] == "close":
+            detail = f"{data['tasks']} 项任务；验收通过；下一步：{data['next_step']}"
+        else:
+            detail = json.dumps(data, ensure_ascii=False, sort_keys=True)
+        rows.append("| " + " | ".join(cell(x) for x in [event["time"], event["cycle"], event["type"], event["id"], detail]) + " |")
+    _atomic_text(path, original + ("" if original.endswith("\n\n") else "\n") + "\n".join(rows) + "\n")
+
+
+def append_events(root, slug, new):
+    old = read_events(root, slug)
+    if not old:
+        legacy = _legacy_lifecycle(root, slug)
+        start = _event(slug, 1, "start", {"legacy_closed": legacy["closed"], "legacy_close": legacy["close"]})
+        new = [start] + new
+    # 单控制器写入；一批逐项确认在同一次 append 中保存，读者拒绝任何残缺尾行。
+    with open(events_path(root, slug), "a", encoding="utf-8") as fh:
+        fh.write("".join(json.dumps(e, ensure_ascii=False, sort_keys=True) + "\n" for e in new))
+        fh.flush()
+        os.fsync(fh.fileno())
+    sync_event_view(root, slug)
+
+
+def _coverage_items(plan):
+    items = {}
+    for entry in plan.coverage:
+        identity = entry["id"]
+        if not identity or identity in items:
+            raise WorkflowError("验证覆盖的 ID/对象名不唯一；请给每项稳定、唯一的 ID。")
+        if entry["type"] not in ("自动化", "人工"):
+            raise WorkflowError(f"验收项 {identity} 类型不明；必须为 自动化 或 人工。")
+        items[identity] = entry
+    return items
+
+
+def _binding(root, plan):
+    return {"fingerprint": fingerprint(root), "acceptance": acceptance_fingerprint(plan)}
+
+
+def _bound(event, state, binding):
+    return (event["cycle"] == state["cycle"]
+            and all(event["data"].get(k) == v for k, v in binding.items()))
+
+
+def _file_digest(path):
+    h = hashlib.sha256()
+    try:
+        if not os.path.isfile(path):
+            raise OSError("不是可读取的文件")
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                h.update(chunk)
+    except OSError as exc:
+        raise WorkflowError(f"无法读取证据文件 {path}：{exc}") from exc
+    return h.hexdigest()
+
+
+def _receipt(root, slug, event):
+    data = event["data"]
+    expected = os.path.join(".workflow", slug, "evidence", event["id"] + ".json")
+    if data["receipt"] != expected:
+        raise WorkflowError("验证输出引用不属于该次验证")
+    path = os.path.join(root, expected)
+    if _file_digest(path) != data["receipt_hash"]:
+        raise WorkflowError("验证输出缺失或损坏，不能补证或收尾")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            receipt = json.load(fh)
+        for key in ("command", "exit_code", "fingerprint", "acceptance", "stable"):
+            if receipt.get(key) != data[key]:
+                raise ValueError(f"{key} 不符")
+        if receipt.get("id") != event["id"] or receipt.get("cycle") != event["cycle"]:
+            raise ValueError("验证身份不符")
+        return receipt
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        raise WorkflowError(f"验证输出绑定无法确认：{exc}") from exc
+
+
+def acceptance_state(root, slug, plan, binding=None):
+    events = read_events(root, slug)
+    state = lifecycle(root, slug, events)
+    binding = binding or _binding(root, plan)
+    items = _coverage_items(plan)
+    current = [e for e in events if e["cycle"] == state["cycle"]]
+    valid = [e for e in current if _bound(e, state, binding)]
+    verifications = [e for e in current if e["type"] == "verify"]
+    latest = verifications[-1] if verifications else None
+    blockers, pending, unknown, gaps = [], [], [], []
+    if not items:
+        blockers.append("验收清单为空，不能静默通过")
+    verdicts, waivers, supplements = {}, {}, {}
+    for event in valid:
+        kind, data = event["type"], event["data"]
+        if kind == "manual":
+            verdicts[data["item"]] = event
+            waivers.pop(data["item"], None)
+        elif kind == "waiver":
+            waivers[data["item"]] = event
+        elif kind == "evidence" and latest and data["verification"] == latest["id"]:
+            supplements[data["item"]] = event
+    coverage = audit_coverage(root, plan)
+    for entry in coverage:
+        identity = entry["id"]
+        if identity in waivers:
+            entry.update(status="waived", note=waivers[identity]["data"]["reason"])
+        elif entry["type"] == "人工":
+            verdict = verdicts.get(identity)
+            entry["status"] = verdict["data"]["status"] if verdict else "pending"
+            if entry["required"] and entry["status"] != "passed":
+                pending.append(entry)
+        elif identity in supplements:
+            refs = supplements[identity]["data"]["references"]
+            try:
+                for ref in refs:
+                    if _file_digest(os.path.join(root, ref["path"])) != ref["hash"]:
+                        raise WorkflowError("补证引用内容已变化")
+                entry.update(status="ok", note="已关联既有验证：" + latest["id"])
+            except WorkflowError as exc:
+                entry.update(status="unknown", note=str(exc))
+        if entry["required"] and entry["status"] == "unknown":
+            unknown.append(entry)
+        if entry["required"] and entry["status"] == "missing":
+            gaps.append(entry)
+    required_auto = [c for c in coverage if c["required"] and c["type"] == "自动化" and c["status"] != "waived"]
+    command_needed = bool(plan.verify_command or required_auto or latest)
+    command_ok = not command_needed
+    if command_needed:
+        if not latest:
+            blockers.append("没有绑定当前验收要求的结构化验证；旧 PASS 不能事后补造验收绑定，先核实既有证据")
+        elif not _bound(latest, state, binding):
+            blockers.append("最近验证的工作树/验收要求已失效；保留原记录，需取得当前版本证据")
+        elif latest["data"]["exit_code"] != 0:
+            blockers.append("最近验证命令失败，人工确认或逐项豁免不能覆盖命令失败")
+        elif latest["data"]["command"].strip() != plan.verify_command.strip():
+            blockers.append("实际命令与计划验收命令不符；--command 诊断结果不能替代计划必验命令")
+        elif not latest["data"]["stable"]:
+            blockers.append("验证期间工作树或验收要求发生变化，结果不能用于收尾")
+        else:
+            try:
+                _receipt(root, slug, latest)
+                command_ok = True
+            except WorkflowError as exc:
+                blockers.append(str(exc))
+    elif not items or not (verdicts or waivers):
+        blockers.append("无验证命令时，必须有明确验收项和逐项人工结论/用户豁免依据；空验收不通过")
+    if pending:
+        blockers.append("实现完成，等待人工验收：" + "、".join(c["id"] for c in pending))
+    if unknown:
+        blockers.append("必验证据待核实：" + "、".join(c["id"] for c in unknown))
+    if gaps:
+        blockers.append("必验覆盖缺少产物：" + "、".join(c["id"] for c in gaps))
+    return {"passed": not blockers, "command_passed": command_ok,
+            "command_exit_code": latest["data"]["exit_code"] if latest else None,
+            "verification": latest["id"] if latest else None,
+            "pending": pending, "manual": [c for c in coverage if c["type"] == "人工"],
+            "unknown": unknown, "gaps": gaps, "coverage": coverage, "blockers": blockers,
+            **binding, "cycle": state["cycle"]}
+
+
+def cmd_acceptance(args):
+    root = find_project_root()
+    slug = resolve_slug(root, args.slug)
+    plan = load_plan(root, slug)
+    items = _coverage_items(plan)
+    binding = _binding(root, plan)
+    result = {"slug": slug, **binding, "checklist": _digest(binding), "items": list(items.values())}
+    lines = ["请依据以下逐项手段/步骤及预期核对；可一次答复明确清单中的多项。",
+             f"清单绑定：{result['checklist']}"]
+    lines += [f"{c['id']} [{c['type']}, {'必需' if c['required'] else '可选'}] {c['target']}：{c['means']}"
+              for c in items.values()]
+    return result, "\n".join(lines)
+
+
+def cmd_confirmation(args):
+    root = find_project_root()
+    slug = resolve_slug(root, args.slug)
+    state = require_active(root, slug)
+    plan = load_plan(root, slug)
+    items = _coverage_items(plan)
+    binding = _binding(root, plan)
+    if args.checklist != _digest(binding):
+        raise WorkflowError("清单已失效或未提供正确绑定；先用 acceptance 展示当前具体清单。")
+    if not args.by.strip() or not args.source.strip():
+        raise WorkflowError("必须提供用户原答复 --by 和可追溯来源 --source")
+    selected = list(dict.fromkeys(args.item))
+    events = []
+    for identity in selected:
+        if identity not in items:
+            raise WorkflowError(f"未知验收项 {identity}；用 acceptance 查看唯一 ID/对象名。")
+        if args.cmd == "confirm" and items[identity]["type"] != "人工":
+            raise WorkflowError(f"{identity} 是自动化项，不能用人工确认替代自动验证。")
+        data = {**binding, "item": identity, "by": args.by, "source": args.source,
+                "checklist": args.checklist}
+        if args.cmd == "confirm":
+            data["status"] = args.status
+            kind = "manual"
+        else:
+            if not args.reason.strip():
+                raise WorkflowError("豁免必须说明具体理由")
+            data["reason"] = args.reason
+            kind = "waiver"
+        events.append(_event(slug, state["cycle"], kind, data))
+    append_events(root, slug, events)
+    return {"slug": slug, "items": selected, "events": [e["id"] for e in events]}, "✓ 已逐项记录：" + "、".join(selected)
+
+
+def cmd_evidence(args):
+    root = find_project_root()
+    slug = resolve_slug(root, args.slug)
+    state = require_active(root, slug)
+    plan = load_plan(root, slug)
+    binding = _binding(root, plan)
+    item = _coverage_items(plan).get(args.item)
+    if not item or item["type"] != "自动化":
+        raise WorkflowError("补证必须指向唯一的自动化验收项")
+    events = read_events(root, slug)
+    verifications = [e for e in events if e["type"] == "verify" and e["cycle"] == state["cycle"]]
+    if not verifications or verifications[-1]["id"] != args.verify:
+        raise WorkflowError("补证只能关联当前周期最近一次结构化验证；旧 PASS 缺历史验收绑定，且不得越过后续验证失败")
+    latest = verifications[-1]
+    if not _bound(latest, state, binding) or latest["data"]["exit_code"] != 0 or not latest["data"]["stable"]:
+        raise WorkflowError("该验证失败、期间漂移或工作树/验收要求已改变，不能补证放行")
+    _receipt(root, slug, latest)
+    if not args.source.strip():
+        raise WorkflowError("补证必须给出与原验证的关联依据 --source")
+    refs = []
+    for reference in args.ref:
+        path = os.path.abspath(os.path.join(root, reference))
+        if os.path.commonpath([os.path.realpath(root), os.path.realpath(path)]) != os.path.realpath(root):
+            raise WorkflowError("补证引用须在项目内；不支持无历史绑定的外部结果导入")
+        refs.append({"path": os.path.relpath(path, root), "hash": _file_digest(path)})
+    event = _event(slug, state["cycle"], "evidence", {**binding, "item": args.item,
+                   "verification": latest["id"], "references": refs, "source": args.source})
+    append_events(root, slug, [event])
+    return {"slug": slug, "event": event["id"], "verification": latest["id"], "executed": False}, "✓ 已关联既有验证证据；未执行验证命令"
+
+
+def cmd_reopen(args):
+    root = find_project_root()
+    slug = resolve_slug(root, args.slug)
+    state = lifecycle(root, slug)
+    if not state["closed"]:
+        raise WorkflowError("工作流尚未 closed，无需 reopen")
+    if not all(v.strip() for v in (args.reason, args.by, args.work)):
+        raise WorkflowError("reopen 必须有原因、用户修补授权和新增工作说明")
+    plan = load_plan(root, slug)
+    cycle = state["cycle"] + 1
+    task_id = "T" + str(max([int(t.id[1:]) for t in plan.tasks] or [0]) + 1)
+    event = _event(slug, cycle, "reopen", {"reason": args.reason, "by": args.by,
+                   "work": args.work, "task": task_id, "previous_close": state["close"]})
+    # 先保存重开事实，即使写计划失败仍保持 open，绝不残留可误收尾的 closed。
+    append_events(root, slug, [event])
+    text = plan.text.rstrip() + f"\n\n## 阶段（重开周期 {cycle}）\n\n#### {task_id} {args.work.strip()}\n\n"
+    values = {"依赖": "无", "并行": "否", "做法": args.work.strip(), "决策": "无", "状态": "pending"}
+    for key in TASK_FIELD_KEYS:
+        text += f"- **{key}**：{values.get(key, 'TODO（按原目标修补范围补充）')}\n"
+    _atomic_text(plan.path, text)
+    return {"slug": slug, "cycle": cycle, "task": task_id, "event": event["id"], "closed": False}, f"✓ 已重开周期 {cycle}，保留历史 close；新增 {task_id}，补充计划后执行并重新验收"
+
+
+def cmd_sync(args):
+    root = find_project_root()
+    slug = resolve_slug(root, args.slug)
+    sync_event_view(root, slug)
+    return {"slug": slug, "synced": True}, "✓ 已从结构化事件同步账本呈现，旧账本保留"
 
 
 # ---------------------------------------------------------------- 子命令
@@ -1353,6 +1873,10 @@ def _hash_file(h, path):
 def cmd_init(args):
     root = find_project_root()
     slug = args.slug
+    if not re.fullmatch(r"[\w][\w.-]*", slug) or slug in (".", ".."):
+        raise WorkflowError("slug 必须是单个目录名，不能包含路径或空白")
+    if args.from_slug:
+        resolve_slug(root, args.from_slug)
     wf = workflow_root(root)
     target = os.path.join(wf, slug)
 
@@ -1418,6 +1942,7 @@ TODO（为什么做 + 做成什么样 + 承接关系。问题现状（现在是�
 **Created**: {datetime.now().strftime('%Y-%m-%d')}
 **格式**: {PLAN_FORMAT_CURRENT}
 **设计文档**: TODO
+{('**来源工作流**: ' + args.from_slug) if args.from_slug else ''}
 <!-- 项目仓库内的路径（如 docs/<模块>方案.md），十节骨架见 references/design-doc.md。
      不需要设计文档就写「无 — <理由>」。四类情形必须写一份：跨模块改动 /
      新外部依赖或数据模型变化 / 安全·性能·迁移 / 需要先定技术决策才能开工。
@@ -1509,6 +2034,7 @@ TODO（有设计文档：一行指针。无设计文档：这次范围外的事�
         "plan": plan_path(root, slug),
         "ledger": ledger_path(root, slug),
         "reports": reports_dir(root, slug),
+        "source_workflow": args.from_slug or None,
     }
     note = ""
     if args.bug:
@@ -1533,10 +2059,23 @@ def cmd_status(args):
         counts[state] = counts.get(state, 0) + 1
 
     phase = plan.current_phase()
-    if not plan.tasks:
+    life = lifecycle(root, slug)
+    acceptance = None
+    if life["closed"]:
+        stage = "closed（已收尾）"
+    elif not plan.tasks:
         stage = "P（计划未成形）"
     elif counts.get("DONE", 0) == len(plan.tasks):
         stage = "V（执行完毕，待验证）"
+        acceptance = acceptance_state(root, slug, plan)
+        if acceptance["passed"]:
+            stage = "V（验收通过，待收尾）"
+        elif acceptance["unknown"]:
+            stage = "V（证据待核实）"
+        elif acceptance["command_exit_code"] not in (None, 0):
+            stage = "V（自动验证失败）"
+        elif acceptance["pending"] and acceptance["command_passed"]:
+            stage = "V（实现完成，等待人工验收）"
     else:
         stage = "E（执行中）"
 
@@ -1544,6 +2083,10 @@ def cmd_status(args):
         "root": root,
         "slug": slug,
         "stage": stage,
+        "closed": life["closed"],
+        "cycle": life["cycle"],
+        "close": life["close"],
+        "acceptance": acceptance,
         "kind": plan.kind,
         "approval_mode": approval_mode,
         "approval_path": (
@@ -1601,6 +2144,7 @@ def cmd_gate(args):
     """把 execution 工作流升级为 gated，记录原因后恢复两道审批门。"""
     root = find_project_root()
     slug = resolve_slug(root, args.slug)
+    require_active(root, slug)
     plan = load_plan(root, slug)
     ledger_check_owner(root, slug)
     reason = (args.reason or "").strip()
@@ -1687,6 +2231,7 @@ def cmd_approve(args):
     """记录用户对某个阶段的审批。审批绑定内容指纹，改了就失效。"""
     root = find_project_root()
     slug = resolve_slug(root, args.slug)
+    require_active(root, slug)
     plan = load_plan(root, slug)
     ledger_check_owner(root, slug)
 
@@ -1825,6 +2370,7 @@ def _task_body(plan, task):
 def cmd_slice(args):
     root = find_project_root()
     slug = resolve_slug(root, args.slug)
+    require_active(root, slug)
     plan = load_plan(root, slug)
     require_plan_approval(root, slug, plan)   # 执行门：方案与计划都须已审批
 
@@ -2029,6 +2575,7 @@ def _check_commit_range(root, raw, plan, has_note):
 def cmd_record(args):
     root = find_project_root()
     slug = resolve_slug(root, args.slug)
+    require_active(root, slug)
     plan = load_plan(root, slug)
     require_plan_approval(root, slug, plan)   # 与 slice 同一道门，防绕过
     ledger_check_owner(root, slug)
@@ -2154,28 +2701,23 @@ ARTIFACT_TOKEN = re.compile(r"`([^`]+)`")
 
 
 def audit_coverage(root, plan):
-    """核对验证覆盖表：自动化条目声称的产物是否真的存在。
-
-    这一步在 V 轮做而不是 check 做——按 TDD，测试是在执行轮才写出来的，
-    P 轮检查时它们还不存在。
-
-    返回 [{target, means, type, status, note}]，status ∈ ok/missing/manual/unknown。
-    """
+    """检查自动化引用的存在性；语义覆盖仍由独立审查判断。"""
     out = []
     for entry in plan.coverage:
-        target, means, typ = entry["target"], entry["means"], entry["type"]
-        if typ != "自动化":
-            out.append({"target": target, "means": means, "type": typ,
-                        "status": "manual", "note": "需人工执行"})
+        current = dict(entry)
+        if entry["type"] == "人工":
+            current.update(status="manual", note="需人工执行")
+            out.append(current)
             continue
-
-        tokens = [t for t in ARTIFACT_TOKEN.findall(means)] or [means.strip()]
+        means = entry["means"]
+        reference = entry.get("evidence", "") or means
+        tokens = ARTIFACT_TOKEN.findall(reference) or [reference.strip()]
         checked, missing = [], []
-        for tok in tokens:
-            parts = tok.split("::")
+        for token in tokens:
+            parts = token.split("::")
             path = parts[0].strip()
             symbols = [s.strip() for s in parts[1:] if s.strip()]
-            if not path or " " in path:
+            if not path or " " in path or "\n" in path:
                 continue
             full = os.path.join(root, path)
             if not os.path.exists(full):
@@ -2183,208 +2725,90 @@ def audit_coverage(root, plan):
                 continue
             if symbols:
                 try:
-                    with open(full, encoding="utf-8", errors="ignore") as fh:
+                    with open(full, encoding="utf-8") as fh:
                         content = fh.read()
-                except OSError:
-                    missing.append(f"{tok}（读不到）")
+                    absent = [symbol for symbol in symbols if symbol not in content]
+                    if absent:
+                        missing.append(f"{token}（文件里没有 {'、'.join(absent)}）")
+                        continue
+                except (OSError, UnicodeError):
+                    missing.append(f"{token}（读不到）")
                     continue
-                # 支持 file::Class::method 与 file::test_name 两种写法：
-                # 逐段核对，任一段找不到才算缺口
-                absent = [s for s in symbols if s not in content]
-                if absent:
-                    missing.append(f"{tok}（文件里没有 {'、'.join(absent)}）")
-                    continue
-            checked.append(tok)
-
-        if not checked and not missing:
-            out.append({"target": target, "means": means, "type": typ,
-                        "status": "unknown", "note": "没能从手段里解析出可核对的产物路径"})
-        elif missing:
-            out.append({"target": target, "means": means, "type": typ,
-                        "status": "missing", "note": "；".join(missing)})
+            checked.append(token)
+        if missing:
+            current.update(status="missing", note="；".join(missing))
+        elif checked:
+            current.update(status="ok", note="、".join(checked))
         else:
-            out.append({"target": target, "means": means, "type": typ,
-                        "status": "ok", "note": "、".join(checked)})
+            current.update(status="unknown", note="没有可核对的产物引用，优先关联既有验证证据")
+        out.append(current)
     return out
 
 
 def cmd_verify(args):
     root = find_project_root()
     slug = resolve_slug(root, args.slug)
+    state = require_active(root, slug)
     plan = load_plan(root, slug)
-    command = args.command or plan.verify_command
-
-    if not command:
-        raise WorkflowError(
-            "未声明验证命令。请把命令写进 plan.md 的『验证命令』代码块，"
-            "或用 --command 指定。没有可执行的验证命令时不判通过。"
-        )
-
+    _coverage_items(plan)
+    command = args.command if args.command is not None else plan.verify_command
+    before = _binding(root, plan)
+    if not command.strip():
+        result = acceptance_state(root, slug, plan, before)
+        result.update(slug=slug, command="", exit_code=None, executed=False)
+        return result, "无验证命令；" + ("逐项验收通过" if result["passed"] else "；".join(result["blockers"]))
     print(f"$ {command}", file=sys.stderr)
-    proc = subprocess.run(
-        command, shell=True, cwd=root, capture_output=True, text=True
-    )
-    code = proc.returncode
-    tail = (proc.stdout + proc.stderr).strip().splitlines()[-20:]
-    fp = fingerprint(root)
-    head = _git(root, "rev-parse", "--short", "HEAD").strip() or "—"
-    stamp = _now()
-    label = args.label or "verify"
-
-    coverage = audit_coverage(root, plan)
-    gaps = [c for c in coverage if c["status"] in ("missing",)]
-    manual = [c for c in coverage if c["status"] == "manual"]
-
-    ledger_check_owner(root, slug)
-    ledger_append(
-        root,
-        slug,
-        "验证记录",
-        f"| {stamp} | {label} | {head} | `{command}` | {code} | {fp} | "
-        f"{'PASS' if code == 0 else 'FAIL'} |",
-    )
-
-    result = {
-        "slug": slug,
-        "command": command,
-        "exit_code": code,
-        "passed": code == 0 and not gaps,
-        "commit": head,
-        "fingerprint": fp,
-        "coverage": coverage,
-        "gaps": gaps,
-        "manual": manual,
-        "output_tail": tail,
-        "recorded_at": stamp,
-    }
-    lines = [
-        f"{'✓ PASS' if code == 0 else '✗ FAIL'} (exit {code})  提交 {head}  指纹 {fp}"
-    ]
-    if tail:
-        lines.append("")
-        lines += [f"  {l}" for l in tail]
-
-    if coverage:
-        auto = [c for c in coverage if c["type"] == "自动化"]
-        lines += [
-            "",
-            f"验证覆盖：{len(auto)} 项自动化 / {len(manual)} 项人工",
-        ]
-        mark = {"ok": "✓", "missing": "✗", "manual": "·", "unknown": "?"}
-        for c in coverage:
-            note = f"  （{c['note']}）" if c["note"] else ""
-            lines.append(f"  {mark[c['status']]} {c['target']}：{c['means']}{note}")
-        if gaps:
-            lines += [
-                "",
-                f"⚠ 有 {len(gaps)} 项自动化覆盖声称的产物不存在——这些决策实际上没有被验证。",
-            ]
-        if manual:
-            lines += [
-                "",
-                f"其中 {len(manual)} 项需人工执行，逐项确认后才算通过（不给一次性打包确认）。",
-            ]
-        if plan.exclusions_present:
-            excluded = [
-                l for l in plan.sections.get("验证覆盖", [])
-                if l.startswith("-")
-            ]
-            if excluded:
-                lines += ["", "不验证的部分（见 plan.md）："]
-                lines += [f"  {l}" for l in excluded[:6]]
-
-    if code != 0:
-        lines += ["", "验证红灯：不得声称完成。"]
-    elif gaps:
-        lines += ["", "存在覆盖缺口：不得收尾（close 会拒绝）。"]
-
+    proc = subprocess.run(command, shell=True, cwd=root, capture_output=True, text=True, errors="replace")
+    after = _binding(root, load_plan(root, slug))
+    event = _event(slug, state["cycle"], "verify", {**before,
+                   "command": command, "exit_code": proc.returncode,
+                   "stable": before == after, "after": after,
+                   "label": args.label or "verify",
+                   "commit": _git(root, "rev-parse", "HEAD").strip() or "—"})
+    directory = os.path.join(workflow_root(root), slug, "evidence")
+    os.makedirs(directory, exist_ok=True)
+    path = os.path.join(directory, event["id"] + ".json")
+    receipt = {**event["data"], "id": event["id"], "cycle": state["cycle"],
+               "workflow": slug, "stdout": proc.stdout, "stderr": proc.stderr}
+    _atomic_text(path, json.dumps(receipt, ensure_ascii=False, sort_keys=True) + "\n")
+    event["data"].update(receipt=os.path.relpath(path, root), receipt_hash=_file_digest(path))
+    append_events(root, slug, [event])
+    result = acceptance_state(root, slug, load_plan(root, slug), after)
+    result.update(slug=slug, event=event["id"], command=command, exit_code=proc.returncode,
+                  commit=event["data"]["commit"], executed=True,
+                  output_tail=(proc.stdout + proc.stderr).splitlines()[-20:], recorded_at=event["time"])
+    lines = [f"命令退出 {proc.returncode}；整体验收 {'PASS' if result['passed'] else '待处理'}；验证 {event['id']}"]
+    lines += result["blockers"]
+    lines += result["output_tail"]
     return result, "\n".join(lines)
 
 
-# ---------------------------------------------------------------- 入口
-
 def cmd_close(args):
-    """收尾记账。把「没有验证不得声称完成」机械化到收尾这个边界上。"""
     root = find_project_root()
     slug = resolve_slug(root, args.slug)
     plan = load_plan(root, slug)
     ledger_check_owner(root, slug)
-
-    st = plan.states()
-    incomplete = [t.id for t in plan.tasks if st[t.id] != "DONE"]
-    if incomplete:
-        raise WorkflowError(
-            f"还有未完成的任务（{', '.join(incomplete)}），不得收尾。"
-        )
-
-    # 设计文档是无条件的：它不随验证方式变化（--manual-confirmed 也不豁免）
-    doc_errors, _doc_warnings = design_doc_problems(root, plan, stage="close")
+    state = lifecycle(root, slug)
+    if state["closed"]:
+        return {"slug": slug, "closed": True, "already_closed": True,
+                "cycle": state["cycle"], "close": state["close"]}, "✓ 已收尾；保留原结论，未重复记账"
+    if args.manual_confirmed.strip():
+        raise WorkflowError("--manual-confirmed 不再作为泛确认旁路；先 acceptance 展示清单，再 confirm --item 逐项登记既有用户答复")
+    incomplete = [t.id for t in plan.tasks if t.status != "complete"]
+    if not plan.tasks or incomplete:
+        raise WorkflowError("没有完整任务或仍有未完成任务：" + "、".join(incomplete))
+    doc_errors, _warnings = design_doc_problems(root, plan, stage="close")
     if doc_errors:
-        detail = "\n".join(f"  - {e}" for e in doc_errors)
-        raise WorkflowError(
-            f"设计文档未就绪（{len(doc_errors)} 项）：\n{detail}\n"
-            "它是本次唯一会留在版本库里的设计记录，不能带着缺口收尾。"
-        )
-
-    fp = fingerprint(root)
-    manual = (args.manual_confirmed or "").strip()
-
-    if manual:
-        evidence = f"人工确认：{manual}"
-        verify_fp = "—"
-    else:
-        records = _read_verify_records(root, slug)
-        if not records:
-            raise WorkflowError(
-                "账本里没有验证记录。先跑 `verify`（或用 --manual-confirmed 记录人工确认），再收尾。"
-            )
-        last = records[-1]
-        if last["result"] != "PASS":
-            raise WorkflowError(
-                f"最近一次验证是 {last['result']}（{last['time']}），不得收尾。"
-                "修好之后重跑 `verify`。"
-            )
-        if last["fingerprint"] != fp:
-            raise WorkflowError(
-                f"工作树内容与最近一次验证时不一致"
-                f"（验证时 {last['fingerprint']}，当前 {fp}），该验证已失效。"
-                "先重跑 `verify` 绑定当前内容，再收尾。"
-                "常见原因：验证之后又回写了设计文档——回写要在 V 轮之前做完。"
-            )
-        coverage = audit_coverage(root, plan)
-        gaps = [c for c in coverage if c["status"] == "missing"]
-        if gaps:
-            detail = "\n".join(f"  - {c['target']}：{c['note']}" for c in gaps)
-            raise WorkflowError(
-                f"有 {len(gaps)} 项验证覆盖声称的产物不存在，这些决策实际上没有被验证：\n"
-                f"{detail}\n补上它们，或把它们移到『不验证的部分』并说明理由，再收尾。"
-            )
-        evidence = f"验证 {last['fingerprint']}"
-        verify_fp = last["fingerprint"]
-
-    stamp = _now()
-    ledger_append(
-        root,
-        slug,
-        "收尾",
-        f"| {stamp} | {len(plan.tasks)}/{len(plan.tasks)} | {verify_fp} | "
-        f"{args.next_step or '—'} |",
-    )
-
-    result = {
-        "slug": slug,
-        "tasks": len(plan.tasks),
-        "evidence": evidence,
-        "fingerprint": fp,
-        "next_step": args.next_step or "",
-        "closed_at": stamp,
-    }
-    lines = [
-        f"✓ 已收尾并记账本：{len(plan.tasks)}/{len(plan.tasks)} 任务完成，{evidence}",
-    ]
-    if args.next_step:
-        lines.append(f"  下一步：{args.next_step}")
-    return result, "\n".join(lines)
+        raise WorkflowError("设计文档未就绪：" + "；".join(doc_errors))
+    result = acceptance_state(root, slug, plan)
+    if not result["passed"]:
+        raise WorkflowError("不得收尾：" + "；".join(result["blockers"]))
+    stamp = datetime.now().astimezone().isoformat(timespec="microseconds")
+    data = {"snapshot": result, "closed_at": stamp, "tasks": len(plan.tasks),
+            "next_step": args.next_step, "goal": plan.meta.get("Goal", "")}
+    event = _event(slug, state["cycle"], "close", data)
+    append_events(root, slug, [event])
+    return {"slug": slug, "closed": True, "cycle": state["cycle"], "event": event["id"], **data}, "✓ 全部必验项已通过/明确豁免，已保存收尾快照"
 
 
 def _add_json(sp):
@@ -2404,6 +2828,7 @@ def build_parser():
     s = sub.add_parser("init", help="创建新工作流")
     s.add_argument("slug")
     s.add_argument("--goal", default="")
+    s.add_argument("--from", dest="from_slug", help="新目标关联来源工作流，不改变原工作流")
     s.add_argument("--bug", action="store_true",
                    help="bug 修复工作流：免两道审批门，强制复现/根因/回归测试")
     s.add_argument(
@@ -2424,6 +2849,8 @@ def build_parser():
         ("next", cmd_next, "列出当前可执行的任务（依赖图拓扑）"),
         ("check", cmd_check, "检查计划质量（依赖/覆盖/占位符/规模）"),
         ("verify", cmd_verify, "执行验证命令并留证"),
+        ("acceptance", cmd_acceptance, "展示验收清单及工作树/要求绑定"),
+        ("sync", cmd_sync, "从 events.jsonl 重建账本呈现"),
     ]:
         s = sub.add_parser(name, help=helptext)
         s.add_argument("slug", nargs="?")
@@ -2467,10 +2894,41 @@ def build_parser():
     s.add_argument(
         "--manual-confirmed",
         default="",
-        help="无法自动化验证时，记录谁确认了什么（例如「用户逐项确认了 T1/T2 的手工检查项」）",
+        help="兼容参数；活跃工作流须改用 acceptance + confirm 逐项登记，不能绕过自动失败",
     )
     _add_json(s)
     s.set_defaults(func=cmd_close)
+
+    for name in ("confirm", "waive"):
+        s = sub.add_parser(name, help="逐项记录人工结论" if name == "confirm" else "逐项记录用户明确豁免")
+        s.add_argument("slug", nargs="?")
+        s.add_argument("--item", action="append", required=True, help="唯一验收 ID/对象名；可重复指定")
+        s.add_argument("--checklist", required=True, help="acceptance 返回的当前清单绑定")
+        s.add_argument("--by", required=True, help="用户的具体答复")
+        s.add_argument("--source", required=True, help="可追溯的答复来源；允许引用已有授权")
+        if name == "confirm":
+            s.add_argument("--status", choices=["passed", "rejected"], default="passed")
+        else:
+            s.add_argument("--reason", required=True)
+        _add_json(s)
+        s.set_defaults(func=cmd_confirmation)
+
+    s = sub.add_parser("evidence", help="关联最近一次验证的证据引用，不执行命令")
+    s.add_argument("slug", nargs="?")
+    s.add_argument("--verify", required=True, help="当前周期最近一次结构化验证 ID")
+    s.add_argument("--item", required=True)
+    s.add_argument("--ref", action="append", required=True, help="项目内的既有证据路径，可多次指定")
+    s.add_argument("--source", required=True, help="该引用和原验证的关联依据")
+    _add_json(s)
+    s.set_defaults(func=cmd_evidence)
+
+    s = sub.add_parser("reopen", help="原目标修补重开新周期，保留历史 close")
+    s.add_argument("slug", nargs="?")
+    s.add_argument("--reason", required=True)
+    s.add_argument("--by", required=True, help="用户明确请求修补的原话/依据")
+    s.add_argument("--work", required=True, help="原目标内新增工作，生成待完善的任务条目")
+    _add_json(s)
+    s.set_defaults(func=cmd_reopen)
 
     return p
 
@@ -2479,7 +2937,7 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
         result, text = args.func(args)
-    except WorkflowError as exc:
+    except (WorkflowError, OSError, UnicodeError) as exc:
         if args.json:
             print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
         else:
@@ -2490,6 +2948,8 @@ def main(argv=None):
     else:
         print(text)
     if args.cmd == "check" and not result.get("ok", True):
+        return 2
+    if args.cmd == "verify" and not result.get("passed", False):
         return 2
     return 0
 
