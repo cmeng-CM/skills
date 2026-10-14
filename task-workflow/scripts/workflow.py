@@ -44,6 +44,27 @@ TABLE_ROW = re.compile(r"^\|(.+)\|\s*$")
 TASK_REF = re.compile(r"\bT\d+\b")
 DECISION_REF = re.compile(r"\bD-\d+\b")
 FENCE = re.compile(r"^```")
+COVERAGE_COLUMNS = {"对象", "验证手段", "类型", "ID", "必需性", "必需", "证据"}
+COVERAGE_REQUIRED_COLUMNS = {"对象", "验证手段", "类型"}
+
+
+def _table_separator(cells):
+    return bool(cells) and all(re.fullmatch(r":?-+:?", cell) for cell in cells)
+
+
+def _coverage_header_problems(cells):
+    problems = []
+    if len(set(cells)) != len(cells):
+        problems.append("列名重复")
+    missing = COVERAGE_REQUIRED_COLUMNS - set(cells)
+    if missing:
+        problems.append("缺少表头：" + "、".join(sorted(missing)))
+    unsupported = set(cells) - COVERAGE_COLUMNS
+    if unsupported:
+        problems.append("不支持/无法解释的列：" + "、".join(sorted(unsupported)))
+    if "必需" in cells and "必需性" in cells:
+        problems.append("必需与必需性是同一语义，不能同时声明")
+    return problems
 
 PLACEHOLDERS = [
     "TBD",
@@ -261,6 +282,7 @@ class Plan:
         self.phases = []      # [(num, name, checkpoint)]
         self.tasks = []
         self.coverage = []    # [{target, means, type}]
+        self.coverage_errors = []  # 结构诊断留在计划中，不阻断历史 closed 的只读解析。
         self.exclusions_present = False   # 是否有「不验证的部分」
         self.sections = {}    # 各段的正文行，供 bug 类型检查用
         self.verify_command = ""
@@ -335,6 +357,7 @@ class Plan:
             sec = SECTION_HEADER.match(line)
             if sec and not in_fence:
                 section = sec.group(1).strip()
+                coverage_headers = []
                 current_task = None
                 continue
 
@@ -395,24 +418,8 @@ class Plan:
                 elif section.startswith("验证覆盖"):
                     if line.strip().startswith("###") and "不验证" in line:
                         self.exclusions_present = True
-                    row = TABLE_ROW.match(line)
-                    if row and not line.strip().startswith("|--"):
-                        cells = [c.strip() for c in row.group(1).split("|")]
-                        if "对象" in cells and "类型" in cells:
-                            coverage_headers = cells
-                            continue
-                        if len(cells) >= 3 and cells[0] and not cells[0].startswith("--"):
-                            mapped = dict(zip(coverage_headers, cells))
-                            requirement = mapped.get("必需性", mapped.get("必需", cells[3] if not coverage_headers and len(cells) > 3 else "必需"))
-                            required = requirement.lower() not in ("可选", "optional", "否", "false", "no")
-                            self.coverage.append(
-                                {"id": mapped.get("ID", mapped.get("对象", cells[0])),
-                                 "target": mapped.get("对象", cells[0]),
-                                 "means": mapped.get("验证手段", cells[1]),
-                                 "type": mapped.get("类型", cells[2]),
-                                 "required": required,
-                                 "evidence": mapped.get("证据", "")}
-                            )
+                    if not self.exclusions_present:
+                        coverage_headers = self._coverage_row(line, idx, coverage_headers)
 
             if current_phase and current_task is None:
                 cp = META_FIELD.match(line)
@@ -422,6 +429,49 @@ class Plan:
         self.verify_command = "\n".join(verify_buf).strip()
         if self.verify_command in ("未声明", "-", "无"):
             self.verify_command = ""
+
+    def _coverage_row(self, line, idx, headers):
+        if "|" not in line:
+            return headers
+
+        def error(message):
+            self.coverage_errors.append({"line": idx + 1, "message": message, "text": line})
+
+        row = TABLE_ROW.fullmatch(line.strip())
+        if not row:
+            error("覆盖表行必须完整包围在 | ... | 中；不支持单元格内的管道字符")
+            return headers
+        cells = [cell.strip() for cell in row.group(1).split("|")]
+        if _table_separator(cells):
+            if (headers and len(cells) != len(headers)) or (not headers and len(cells) not in (3, 4)):
+                error("完整分隔行的列数与覆盖表不符")
+            return headers
+        next_row = TABLE_ROW.fullmatch(self.lines[idx + 1].strip()) if idx + 1 < len(self.lines) else None
+        followed_by_separator = next_row and _table_separator([c.strip() for c in next_row.group(1).split("|")])
+        is_header = (followed_by_separator or COVERAGE_REQUIRED_COLUMNS.issubset(cells)
+                     or (not {"自动化", "人工"}.intersection(cells) and COVERAGE_COLUMNS.intersection(cells)))
+        if is_header:
+            for problem in _coverage_header_problems(cells):
+                error(problem)
+            return cells
+        if headers:
+            if _coverage_header_problems(headers):
+                return headers  # 保留表头原文诊断；不猜各数据单元格的含义。
+            if len(cells) != len(headers):
+                error(f"数据行有 {len(cells)} 列，表头为 {len(headers)} 列；不得截断或补猜")
+                return headers
+        elif len(cells) not in (3, 4):
+            error("无表头旧覆盖表只支持三列或四列")
+            return headers
+        names = headers or ["对象", "验证手段", "类型", "必需性"][:len(cells)]
+        mapped = dict(zip(names, cells))  # 列数已完整校验。
+        requirement = mapped.get("必需性", mapped.get("必需", "必需"))
+        self.coverage.append({"id": mapped.get("ID", mapped["对象"]),
+                              "target": mapped["对象"], "means": mapped["验证手段"],
+                              "type": mapped["类型"], "line": idx + 1,
+                              "required": requirement.lower() not in ("可选", "optional", "否", "false", "no"),
+                              "evidence": mapped.get("证据", "")})
+        return headers
 
     # ---- 状态计算（依赖图）
 
@@ -835,6 +885,8 @@ def check_plan(plan, root=None):
         )
 
     # 7. 验证覆盖：每条决策都必须说明"用什么证明它对"
+    for problem in plan.coverage_errors:
+        add("ERROR", f"覆盖表 L{problem['line']}：{problem['message']}；原文：{problem['text']}")
     if not plan.coverage and plan.decisions:
         add(
             "ERROR",
@@ -863,6 +915,11 @@ def check_plan(plan, root=None):
                     f"验证覆盖里『{entry['target']}』标为人工验证，但没写清怎么做。"
                     "人工验证要写具体的命令或步骤，否则没法复核。",
                 )
+            if entry["type"] == "自动化":
+                declaration = reference_declaration(entry)
+                if declaration["state"] == "invalid":
+                    add("WARNING", f"覆盖项 {entry['id']} 的引用声明无法核实：{declaration['error']}；"
+                        "必验项未获明确豁免时会阻止收尾，可选项仅反馈。")
         for dec in sorted({d["id"] for d in plan.decisions} - covered):
             add(
                 "ERROR",
@@ -1675,6 +1732,9 @@ def append_events(root, slug, new):
 
 
 def _coverage_items(plan):
+    if plan.coverage_errors:
+        raise WorkflowError("覆盖表结构不明：" + "；".join(
+            f"L{e['line']} {e['message']}（{e['text']}）" for e in plan.coverage_errors))
     items = {}
     for entry in plan.coverage:
         identity = entry["id"]
@@ -1791,7 +1851,7 @@ def acceptance_state(root, slug, plan, binding=None):
         elif entry["status"] == "ok":
             if not entry["references"] or any(ref not in adopted for ref in entry["references"]):
                 entry.update(status="unknown", note="当前声明引用尚无原验证/补证内容摘要；先用 evidence 核对关联")
-        elif (entry["status"] == "unknown" and not entry.get("evidence", "").strip()
+        elif (entry["status"] == "unknown" and entry.get("declaration") == "none"
               and identity in supplements):
             # 无声明引用的说明文字可补证；明确路径/符号缺口不能被旧补证遮蔽。
             refs = supplements[identity]["data"]["references"]
@@ -1945,6 +2005,9 @@ def cmd_evidence(args):
     item = _coverage_items(plan).get(args.item)
     if not item or item["type"] != "自动化":
         raise WorkflowError("补证必须指向唯一的自动化验收项")
+    declaration = reference_declaration(item)
+    if declaration["state"] == "invalid":
+        raise WorkflowError("明确引用格式无效，不能用补证掩盖：" + declaration["error"])
     events = read_events(root, slug)
     verifications = [e for e in events if e["type"] == "verify" and e["cycle"] == state["cycle"]]
     if not verifications or verifications[-1]["id"] != args.verify:
@@ -2243,6 +2306,7 @@ def cmd_status(args):
             for t in plan.tasks
         ],
         "verify_command": plan.verify_command,
+        "coverage_errors": plan.coverage_errors,
     }
 
     lines = [
@@ -2828,11 +2892,38 @@ def cmd_check(args):
     return result, "\n".join(lines)
 
 
-ARTIFACT_TOKEN = re.compile(r"`([^`]+)`")
+def reference_declaration(entry):
+    """完整解析有限文件引用语法；none 与 invalid 不能在补证时混同。"""
+    explicit = bool(entry.get("evidence", "").strip())
+    text = (entry.get("evidence", "") if explicit else entry["means"]).strip()
+
+    def invalid(message):
+        return {"state": "invalid", "tokens": [], "error": message}
+
+    if any(char in text for char in ("\n", "\r", "\0", "|")):
+        return invalid("引用不能含换行、NUL 或表格管道字符")
+    if "`" in text:
+        if explicit and not re.fullmatch(r"`[^`]*`(?:[\s,，、;；+]+`[^`]*`)*", text):
+            return invalid("独立证据列须为完整反引号引用列表；存在未闭合标记、缺分隔符或残余文本")
+        if text.count("`") % 2:
+            return invalid("引用反引号未闭合")
+        raw_tokens = re.findall(r"`([^`]*)`", text)
+    elif explicit or (text and not re.search(r"\s", text)):
+        raw_tokens = [text]
+    else:
+        return {"state": "none", "tokens": [], "error": ""}
+    tokens = []
+    for token in raw_tokens:
+        parts = [part.strip() for part in token.split("::")]
+        if not parts[0] or any(not symbol for symbol in parts[1:]):
+            return invalid("空路径/空引用或空符号不能被丢弃")
+        tokens.append({"path": parts[0], "symbols": parts[1:]})
+    return {"state": "declared", "tokens": tokens, "error": ""}
 
 
 def audit_coverage(root, plan):
     """检查自动化引用的存在性；语义覆盖仍由独立审查判断。"""
+    _coverage_items(plan)
     out = []
     for entry in plan.coverage:
         current = dict(entry)
@@ -2840,16 +2931,17 @@ def audit_coverage(root, plan):
             current.update(status="manual", note="需人工执行")
             out.append(current)
             continue
-        means = entry["means"]
-        reference = entry.get("evidence", "") or means
-        tokens = ARTIFACT_TOKEN.findall(reference) or [reference.strip()]
+        declaration = reference_declaration(entry)
+        current.update(declaration=declaration["state"], references=[])
+        if declaration["state"] != "declared":
+            note = declaration["error"] or "没有明确产物引用，优先关联既有验证证据"
+            current.update(status="unknown", note=note)
+            out.append(current)
+            continue
         checked, missing, references = [], [], []
-        for token in tokens:
-            parts = token.split("::")
-            path = parts[0].strip()
-            symbols = [s.strip() for s in parts[1:] if s.strip()]
-            if not path or " " in path or "\n" in path:
-                continue
+        for token in declaration["tokens"]:
+            path, symbols = token["path"], token["symbols"]
+            label = "::".join([path] + symbols)
             full = os.path.join(root, path)
             if not os.path.exists(full):
                 missing.append(f"{path}（文件不存在）")
@@ -2860,10 +2952,10 @@ def audit_coverage(root, plan):
                         content = fh.read()
                     absent = [symbol for symbol in symbols if symbol not in content]
                     if absent:
-                        missing.append(f"{token}（文件里没有 {'、'.join(absent)}）")
+                        missing.append(f"{label}（文件里没有 {'、'.join(absent)}）")
                         continue
                 except (OSError, UnicodeError):
-                    missing.append(f"{token}（读不到）")
+                    missing.append(f"{label}（读不到）")
                     continue
             try:
                 references.append({"path": os.path.relpath(os.path.abspath(full), root),
@@ -2871,7 +2963,7 @@ def audit_coverage(root, plan):
             except WorkflowError as exc:
                 missing.append(str(exc))
                 continue
-            checked.append(token)
+            checked.append(label)
         current["references"] = references
         if missing:
             current.update(status="missing", note="；".join(missing))

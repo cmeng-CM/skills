@@ -1,4 +1,4 @@
-"""真实 CLI 回归；所有仓库、命令及旧账本均为隔离 fixture。"""
+"""真实 CLI 回归与解析输入矩阵；所有仓库、命令及旧账本均为隔离 fixture。"""
 import importlib.util
 import json
 from pathlib import Path
@@ -425,6 +425,7 @@ class WorkflowCLI(unittest.TestCase):
     def test_explicit_ids_can_disambiguate_repeated_target_names(self):
         self.make_plan(command="", rows=["| A1 | 点击操作，预期打开窗口 | 人工 | 必需 | |"])
         text = self.plan().read_text().replace("| 对象 | 验证手段 | 类型 | 必需性 | 证据 |", "| ID | 对象 | 验证手段 | 类型 | 必需性 | 证据 |")
+        text = text.replace("|---|---|---|---|---|", "|---|---|---|---|---|---|")
         text = text.replace("| A1 | 点击操作，预期打开窗口 | 人工 | 必需 | |",
                             "| M1 | 同一对象 | 点击操作，预期打开窗口 | 人工 | 必需 | |\n| M2 | 同一对象 | 关闭操作，预期窗口消失 | 人工 | 必需 | |")
         self.plan().write_text(text)
@@ -767,6 +768,217 @@ class WorkflowCLI(unittest.TestCase):
             "".join(json.dumps(e, ensure_ascii=False) + "\n" for e in events))
         self.assertTrue(self.cli("status", "probe")["closed"])
         self.assertTrue(self.cli("close", "probe")["already_closed"])
+
+    def test_replanned_i1_space_path_cannot_disappear_from_declaration(self):
+        extra = ".workflow/probe/new evidence.txt"
+        (self.root / extra).write_text("original extra output")
+        self.make_plan(rows=["| A1 | inspect output | 自动化 | 必需 | `source.py` |"])
+        old = self.cli("verify", "probe")
+        self.cli("evidence", "probe", "--verify", old["event"], "--item", "A1",
+                 "--ref", "source.py", "--source", "fixture original")
+        self.plan().write_text(self.plan().read_text().replace("`source.py`", f"`source.py` `{extra}`"))
+        self.assertFalse(self.cli("status", "probe")["acceptance"]["passed"])
+        self.cli("close", "probe", expected=1)
+
+    def test_replanned_i1_residual_text_cannot_disappear_from_declaration(self):
+        extra = ".workflow/probe/extra.txt"
+        (self.root / extra).write_text("original extra output")
+        self.make_plan(rows=["| A1 | inspect output | 自动化 | 必需 | `source.py` |"])
+        old = self.cli("verify", "probe")
+        self.cli("evidence", "probe", "--verify", old["event"], "--item", "A1",
+                 "--ref", "source.py", "--source", "fixture original")
+        self.plan().write_text(self.plan().read_text().replace("`source.py`", f"`source.py` {extra}"))
+        self.assertFalse(self.cli("status", "probe")["acceptance"]["passed"])
+        self.cli("close", "probe", expected=1)
+
+    def test_replanned_i1_extra_table_cell_is_not_truncated(self):
+        self.make_plan(command="printf run >> .workflow/probe/counter",
+                       rows=["| A1 | inspect output | 自动化 | 必需 | `source.py` | `.workflow/probe/extra.txt` |"])
+        self.cli("verify", "probe", expected=1)
+        self.assertFalse((self.root / ".workflow/probe/counter").exists())
+        self.cli("close", "probe", expected=1)
+
+    def coverage_table(self, text, slug="probe"):
+        path = self.plan(slug)
+        prefix, rest = path.read_text().split("## 验证覆盖\n", 1)
+        _, suffix = rest.split("## 阶段\n", 1)
+        path.write_text(prefix + "## 验证覆盖\n" + text + "\n## 阶段\n" + suffix)
+        return workflow.load_plan(str(self.root), slug)
+
+    def test_declaration_syntax_consumes_all_paths_matrix(self):
+        cases = [
+            ("source.py", "", ["source.py"]),
+            ("中文文件", "", ["中文文件"]),
+            ("inspect output", "", None),
+            ("检查 页面", "  ", None),
+            ("source.py", " ", ["source.py"]),
+            ("说明 `source.py` 与 `结果 文件.txt` 都必须核对", "", ["source.py", "结果 文件.txt"]),
+            ("ignored", "结果 文件.txt", ["结果 文件.txt"]),
+            ("ignored", "`结果 文件.txt`", ["结果 文件.txt"]),
+        ]
+        for separator in (" ", "\t", ",", "，", "、", ";", "；", "+", " , + "):
+            cases.append(("ignored", f"`source.py::test_example`{separator}`结果 文件.txt`",
+                          ["source.py", "结果 文件.txt"]))
+        for means, evidence, expected in cases:
+            with self.subTest(means=means, evidence=evidence):
+                parsed = workflow.reference_declaration({"means": means, "evidence": evidence})
+                self.assertEqual(parsed["state"], "none" if expected is None else "declared")
+                self.assertEqual([token["path"] for token in parsed["tokens"]], expected or [])
+        for evidence in ("``", "` `", "`source.py", "source.py`", "`source.py::`",
+                         "`::test_example`", "`source.py::::test_example`", "source.py::",
+                         "`source.py``extra.txt`", "`source.py` extra.txt", "bad `source.py`",
+                         "`source.py` | `extra.txt`", "source.py\nextra.txt"):
+            with self.subTest(invalid=evidence):
+                parsed = workflow.reference_declaration({"means": "ignored", "evidence": evidence})
+                self.assertEqual(parsed["state"], "invalid")
+                self.assertEqual(parsed["tokens"], [])
+
+    def test_inserted_declaration_fragment_never_preserves_pass_cli_matrix(self):
+        extra = ".workflow/probe/额外 输出.txt"
+        (self.root / extra).write_text("not yet adopted")
+        self.make_plan(command="printf run >> .workflow/probe/counter",
+                       rows=["| A1 | inspect output | 自动化 | 必需 | `source.py` `source.py::test_example` |"])
+        original = self.plan().read_text()
+        declaration = "`source.py` `source.py::test_example`"
+        verified = self.cli("verify", "probe")
+        fragments = [f"`{extra}`", "`missing.txt`", "`source.py::missing_symbol`",
+                     "``", "` `", "`source.py::`", "`unterminated", "residual.txt"]
+        for fragment in fragments:
+            variants = [f"{fragment} {declaration}",
+                        f"`source.py` {fragment} `source.py::test_example`",
+                        f"{declaration} {fragment}"]
+            for position, changed in enumerate(variants):
+                with self.subTest(fragment=fragment, position=position):
+                    self.plan().write_text(original.replace(declaration, changed))
+                    self.assertFalse(self.cli("status", "probe")["acceptance"]["passed"])
+                    self.cli("close", "probe", expected=1)
+        self.plan().write_text(original.replace(declaration, f"{declaration} `{extra}`"))
+        self.cli("evidence", "probe", "--verify", verified["event"], "--item", "A1",
+                 "--ref", extra, "--source", "fixture 两份输出均属于原验证")
+        self.cli("close", "probe")
+        self.assertEqual((self.root / ".workflow/probe/counter").read_text(), "run")
+
+    def test_malformed_means_cannot_use_supplement_but_prose_can(self):
+        for index, means in enumerate(("inspect output", "检查 页面", "说明 `source.py` 和 `missing.txt`",
+                                       "说明 `source.py` 和 ``", "说明 `source.py` 后有 `未闭合")):
+            slug = f"means-{index}"
+            with self.subTest(means=means):
+                self.make_plan(slug, rows=[f"| A1 | {means} | 自动化 | 必需 | |"])
+                result = self.cli("verify", slug, expected=2)
+                invalid = index >= 3
+                self.cli("evidence", slug, "--verify", result["event"], "--item", "A1",
+                         "--ref", "source.py", "--source", "fixture 原验证关联",
+                         expected=1 if invalid else 0)
+                self.cli("close", slug, expected=0 if index < 2 else 1)
+
+    def test_valid_space_chinese_bare_and_manual_paths_cli(self):
+        for filename in ("中文文件", "结果 文件.txt"):
+            (self.root / filename).write_text("marker")
+        self.make_plan(rows=[
+            "| A1 | 中文文件 | 自动化 | 必需 | |",
+            "| A2 | inspect result | 自动化 | 必需 | 结果 文件.txt |",
+            "| A3 | 说明 `source.py::test_example` 和 `结果 文件.txt::marker` | 自动化 | 必需 | |",
+            "| M1 | 执行 `tool --missing arg` 并观察结果 | 人工 | 必需 | `not-a-file` |"])
+        result = self.cli("verify", "probe", expected=2)
+        self.assertFalse(result["unknown"])
+        self.assertFalse(result["gaps"])
+        self.assertEqual([item["id"] for item in result["pending"]], ["M1"])
+        self.confirm("M1")
+        self.cli("close", "probe")
+
+    def test_unknown_declaration_respects_required_optional_and_waiver(self):
+        for index, evidence in enumerate(("`source.py` ``", "`source.py` `missing.txt`")):
+            slug = f"optional-{index}"
+            with self.subTest(evidence=evidence):
+                self.make_plan(slug, rows=[f"| A1 | inspect output | 自动化 | 必需 | {evidence} |",
+                                           f"| A2 | inspect output | 自动化 | 可选 | {evidence} |"])
+                failed = self.cli("verify", slug, expected=2)
+                self.assertFalse(failed["passed"])
+                self.confirm("A1", slug=slug, command="waive", reason="用户明确取消 A1 要求")
+                accepted = self.cli("status", slug)["acceptance"]
+                self.assertTrue(accepted["passed"])
+                self.assertIn(accepted["coverage"][1]["status"], ("unknown", "missing"))
+                self.cli("close", slug)
+
+    def test_coverage_table_valid_layout_matrix(self):
+        cases = [
+            ("| A1 | source.py | 自动化 |", "A1", True),
+            ("| A1 | source.py | 自动化 | 可选 |", "A1", False),
+            ("| 对象 | 验证手段 | 类型 |\n|---|---|---|\n| --合法对象 | source.py | 自动化 |", "--合法对象", True),
+            ("| ID | 证据 | 类型 | 对象 | 必需 | 验证手段 |\n|:---|---:|:---:|---|---|---|\n"
+             "| A1 | `source.py` | 自动化 | D-01 | optional | inspect output |", "A1", False),
+        ]
+        for table, identity, required in cases:
+            with self.subTest(table=table):
+                plan = self.coverage_table(table)
+                self.assertFalse(plan.coverage_errors)
+                self.assertEqual(len(plan.coverage), 1)
+                self.assertEqual(plan.coverage[0]["id"], identity)
+                self.assertEqual(plan.coverage[0]["required"], required)
+                self.assertEqual(workflow.audit_coverage(str(self.root), plan)[0]["status"], "ok")
+        for index, (table, _, _) in enumerate(cases):
+            slug = f"layout-{index}"
+            self.make_plan(slug)
+            self.coverage_table(table, slug)
+            self.cli("verify", slug)
+            self.cli("close", slug)
+
+    def test_coverage_structure_errors_reject_active_before_execution_matrix(self):
+        cases = [
+            "| 对象 | 验证手段 | 类型 |\n| A1 | source.py | 自动化 | extra |",
+            "| 对象 | 验证手段 | 类型 |\n| A1 | source.py |",
+            "| 对象 | 验证手段 | 类型 | 类型 |\n| A1 | source.py | 自动化 | 自动化 |",
+            "| 对象 | 类型 |\n| A1 | 自动化 |",
+            "| 对象 | 验证手段 | 类型 | 必需 | 必需性 |\n| A1 | source.py | 自动化 | 必需 | 可选 |",
+            "| 对象 | 验证手段 | 类型 | 备注 |\n| A1 | source.py | 自动化 | ignore |",
+            "| 对象 | 验证手段 | 类型 | 自动化 |\n| A1 | source.py | 自动化 | ignore |",
+            "| Unknown | Columns | Here |\n|---|---|---|\n| A1 | source.py | 自动化 |",
+            "| A1 | source.py | 自动化 | 可选 | extra |",
+            "| A1 | source.py |",
+            "| 对象 | 验证手段 | 类型 |\n|---|---|---|---|\n| A1 | source.py | 自动化 |",
+            "| 对象 | 验证手段 | 类型 |\n|---|---|---|\n| A1 | source.py | 自动化",
+            "| 对象 | 验证手段 | 类型 | 证据 |\n| A1 | inspect result | 自动化 | `source.py|extra` |",
+        ]
+        for index, table in enumerate(cases):
+            with self.subTest(table=table):
+                slug = f"bad-{index}"
+                self.make_plan(slug, command=f"printf run > .workflow/{slug}/counter")
+                plan = self.coverage_table(table, slug)
+                self.assertTrue(plan.coverage_errors)
+                self.assertTrue(all(error["text"] in table for error in plan.coverage_errors))
+                checked = self.cli("check", slug, expected=2)
+                self.assertTrue(any("覆盖表 L" in error["message"] for error in checked["errors"]))
+                self.cli("verify", slug, expected=1)
+                self.assertFalse((self.root / f".workflow/{slug}/counter").exists())
+                self.cli("close", slug, expected=1)
+                self.assertFalse(self.events(slug))
+
+    def test_partial_separator_is_data_and_cannot_hide_required_row(self):
+        plan = self.coverage_table("| 对象 | 验证手段 | 类型 |\n|---|---|---|\n| -- | source.py | 自动化 |")
+        self.assertEqual([entry["id"] for entry in plan.coverage], ["--"])
+        self.cli("verify", "probe")
+        self.cli("close", "probe")
+        self.make_plan("invalid-separator")
+        self.coverage_table("| 对象 | 验证手段 | 类型 |\n|---|---|oops|\n| A1 | source.py | 自动化 |", "invalid-separator")
+        self.cli("verify", "invalid-separator", expected=1)
+
+    def test_structural_error_cannot_be_waived_and_legacy_closed_stays_readable(self):
+        self.cli("verify", "probe")
+        self.confirm("A1", command="waive", reason="fixture 取消 A1")
+        bad_table = "| 对象 | 验证手段 | 类型 | 证据 |\n| A1 | inspect | 自动化 | `source.py` | lost |"
+        self.coverage_table(bad_table)
+        self.cli("acceptance", "probe", expected=1)
+        self.cli("close", "probe", expected=1)
+        self.make_plan("old")
+        self.coverage_table(bad_table, "old")
+        self.legacy_close("old")
+        original = (self.root / ".workflow/old/ledger.md").read_bytes()
+        state = self.cli("status", "old")
+        self.assertTrue(state["closed"])
+        self.assertTrue(state["coverage_errors"])
+        self.assertTrue(self.cli("close", "old")["already_closed"])
+        self.assertEqual((self.root / ".workflow/old/ledger.md").read_bytes(), original)
+        self.assertFalse(self.events("old"))
 
 
 if __name__ == "__main__":
