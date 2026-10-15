@@ -2078,12 +2078,22 @@ def replay_result(event, operation_id):
     return {**result, "warnings": list(result.get("warnings", [])) + [hint]}, text + "\n↺ " + hint
 
 
+def ledger_lines(text):
+    """账本文本 → 行列表：**只按 `\\n` 切**——与账本写入侧（`"\\n".join(lines)`）同源。
+
+    `str.splitlines()` 还会在 U+2028/U+2029 等 Unicode 行边界断开：行内一旦含这些字符
+    （例如 `--note` 原文），行身份判定就会失配（把已存在的行判成不存在，重放重复追加）。
+    """
+    return text.split("\n")
+
+
 def restore_ledger_rows(root, slug, event):
     """幂等重放的账本补齐：事件里持久化了本操作将写入的账本行，缺则补、有则跳过。
 
     真实中断（事件已落盘、计划状态与账本行未回写）后携原 ID 重试时，账本行必须补回，
     否则账本与权威记录（事件）不一致。行文本（含时间戳）取自事件，重建不依赖当前
     时间与参数，因此重复重放不会重复追加。计划状态的恢复由入口的投影检查负责。
+    行切分与账本写入同源（`ledger_lines`）：行内出现 U+2028/U+2029 也不会误判成「缺」。
     """
     rows = event["data"].get("ledger") or []
     if not rows:
@@ -2092,7 +2102,7 @@ def restore_ledger_rows(root, slug, event):
     if not os.path.isfile(path):
         raise WorkflowError(f"账本不存在：{path}")
     with open(path, encoding="utf-8") as fh:
-        present = set(fh.read().splitlines())
+        present = set(ledger_lines(fh.read()))
     for item in rows:
         if item["row"] in present:
             continue

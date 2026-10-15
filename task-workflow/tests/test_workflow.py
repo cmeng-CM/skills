@@ -1742,6 +1742,26 @@ class WorkflowCLI(unittest.TestCase):
         # 同请求重放仍幂等（evidence 逐字参与请求身份）
         self.assert_replay_matches(self.record_v4("T1", slug="t2u", evidence=evidence), result)
 
+    def test_two_state_ledger_row_split_matches_append(self):
+        """修复轮 3：账本行切分按 \\n——`--note` 含 U+2028/U+2029 时重放不重复追加裁决行。"""
+        self.make_v4_plan(slug="t2n", nodes=self.node_block("N1", "T1, T2", final="是"))
+        self.approve_v4("t2n")
+        note = "fixture 空范围豁免\u2028第二段\u2029第三段"
+        ledger_path = self.root / ".workflow/t2n/ledger.md"
+        result = self.record_v4("T1", slug="t2n", note=note)
+        self.assertIn(note, ledger_path.read_text())
+
+        def note_rows():
+            # 只数「裁决」区里的行——事件视图区会带出 receipt 里的同一段文本。
+            section = ledger_path.read_text().split("## 裁决", 1)[1].split("\n## ", 1)[0]
+            return [line for line in section.split("\n") if "fixture 空范围豁免" in line]
+
+        self.assertEqual(len(note_rows()), 1)
+        for _ in range(2):   # 重放两次：账本行数不变（行身份按 \n 判定）
+            self.assert_replay_matches(self.record_v4("T1", slug="t2n", note=note), result)
+        self.assertEqual(len(note_rows()), 1)
+        self.assertEqual(len(self.implemented_events("t2n")), 1)
+
     def test_two_state_legacy_plan_rejects_v4_only_parameters(self):
         """M2：格式 ≤3 上给 --evidence/--operation-id 必须明确拒绝，不得静默忽略。"""
         self.make_v4_plan(slug="v3rec", version=3)
