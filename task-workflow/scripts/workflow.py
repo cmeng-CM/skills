@@ -80,6 +80,12 @@ PLACEHOLDERS = [
 
 TASK_FIELD_KEYS = ["文件", "依赖", "并行", "做法", "接口", "预期", "验收", "失败信号", "决策", "状态"]
 VALID_STATUS = ["pending", "in_progress", "complete", "blocked"]
+# 格式 ≥4：两态记账（D-03/D-04）。`record` 记「已实现」，节点 `review` 通过后成员
+# 任务才映射 `complete`；`in_progress`/`blocked` 在格式 ≥4 下没有写入口——留着只会
+# 掩盖投影不一致，一律判非法。格式 ≤3 沿用原集合与原行为（逐字不变）。
+VALID_STATUS_V4 = ["pending", "implemented", "complete"]
+STATUS_PENDING = "pending"
+STATUS_IMPLEMENTED = "implemented"
 
 # 计划格式版本。逐档只加不删，老档按老规则跑完：
 #   2 起：任务新增『做法』『预期』两个字段；方案新增『背景与目标』节。
@@ -436,6 +442,11 @@ class Plan:
     def is_v4(self):
         """格式 ≥4：审查节点制（节点为验收单位）。新解析与新校验一律挂在这里。"""
         return self.format_version >= PLAN_FORMAT_V4
+
+    @property
+    def valid_statuses(self):
+        """合法任务状态按格式分流：格式 ≥4 只认两态记账 + 已验收。"""
+        return VALID_STATUS_V4 if self.is_v4 else VALID_STATUS
 
     @property
     def design_doc_sections(self):
@@ -1272,10 +1283,10 @@ def check_plan(plan, root=None):
                     "做完也无法判断结果是否符合预期（只能判断命令跑没跑过）。",
                     t.id,
                 )
-        if t.status not in VALID_STATUS:
+        if t.status not in plan.valid_statuses:
             add(
                 "ERROR",
-                f"状态 '{t.status}' 非法，只能是 {'/'.join(VALID_STATUS)}。",
+                f"状态 '{t.status}' 非法，只能是 {'/'.join(plan.valid_statuses)}。",
                 t.id,
             )
         if not t.get("文件"):
@@ -1930,12 +1941,86 @@ def _hash_file(h, path):
 
 # ---------------------------------------------------------------- 结构化证据（旧账本只读兼容）
 
-EVENT_TYPES = {"start", "verify", "manual", "waiver", "evidence", "command_retired", "close", "reopen"}
+EVENT_TYPES = {"start", "verify", "manual", "waiver", "evidence", "command_retired", "close", "reopen",
+               "implemented", "projection_repair"}
 VIEW_MARKER = "<!-- workflow-events-view -->"
 
 
 def events_path(root, slug):
     return os.path.join(workflow_root(root), slug, "events.jsonl")
+
+
+# --------------------------------------------- 记账操作的身份协议（格式 ≥4；D-08）
+
+def operation_id_problem(operation_id):
+    """操作 ID 校验：非空、不含空白即通过；返回可读原因或 None。
+
+    `rv-<谱系>-<seq>` 形状是调用方约定，引擎首版不强制前缀——只保证身份可用：
+    空值承担不了重试身份，内含空白会在命令行与日志里被拆分。
+    """
+    if not isinstance(operation_id, str) or not operation_id.strip():
+        return ("缺少 `--operation-id <id>`：格式 ≥4 的记账操作在首次执行前生成并保存"
+                "稳定操作 ID，重试必须复用（首版不提供自动生成）")
+    if any(char.isspace() for char in operation_id):
+        return (f"操作 ID '{operation_id}' 含空白字符——它会被命令行与日志拆分，"
+                "无法用作重试身份")
+    return None
+
+
+def operation_request_digest(payload):
+    """请求摘要：相同请求判据（tasks 集合 + commits + evidence）的规范化摘要。"""
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True,
+                   separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def find_operation(events, operation_id):
+    """按稳定操作 ID 找已记账事件；同一 ID 出现在多条事件里即身份不唯一，抛错。"""
+    found = [event for event in events
+             if isinstance(event.get("data"), dict)
+             and event["data"].get("operation_id") == operation_id]
+    if len(found) > 1:
+        raise WorkflowError(
+            f"操作 ID {operation_id} 出现在 {len(found)} 条事件里——"
+            "记账身份必须唯一对应一次操作，拒绝继续（先修复事件文件里的重复条目）。"
+        )
+    return found[0] if found else None
+
+
+def resolve_operation(root, slug, operation_id, request, entry):
+    """记账操作的统一入口协议：查重 → 幂等重放 / 冲突拒绝 / 新操作放行。
+
+    返回 (action, event)：action == "replay" 时 event 是原记账事件，调用方直接返回
+    其 receipt（不写事件、不改计划、不重新计数）；action == "new" 时 event 为 None。
+    - 相同 ID + 相同请求 → 幂等重放（返回原结果、恢复投影、不新增事件）
+    - 相同 ID + 不同请求 → 拒绝（同一 ID 不得承担两次不同操作）
+    - 未提供或形状非法 → 拒绝（首版无自动生成分支）
+    """
+    problem = operation_id_problem(operation_id)
+    if problem:
+        raise WorkflowError(f"{entry} 未携带可用的操作 ID：{problem}。")
+    existing = find_operation(read_events(root, slug), operation_id)
+    if existing is None:
+        return "new", None
+    if existing["data"].get("request") != request:
+        raise WorkflowError(
+            f"操作 ID {operation_id} 已用于另一次操作（请求摘要不符）——"
+            "同 ID＋不同请求必须拒绝：确认要重试原操作就用原请求（tasks/commits/evidence "
+            "一致）；确是新操作请另取新 ID。"
+        )
+    return "replay", existing
+
+
+def operation_receipt(event):
+    """幂等重放返回的原结果：随事件持久化的 receipt（中断后重建仍据此返回）。"""
+    receipt = event["data"].get("receipt")
+    if (not isinstance(receipt, dict) or not isinstance(receipt.get("result"), dict)
+            or not isinstance(receipt.get("text"), str)):
+        raise WorkflowError(
+            f"记账事件 {event['id']} 的 receipt 不完整，无法幂等重放原结果。"
+        )
+    return receipt["result"], receipt["text"]
 
 
 def _digest(value):
@@ -2110,6 +2195,34 @@ def read_events(root, slug):
                                 or any(not isinstance(data.get(k), str) or not data[k].strip()
                                        for k in ("by", "source", "reason"))):
                             raise ValueError("撤销旧命令要求缺少最新验证、新旧绑定或具体授权")
+                    if kind == "implemented":
+                        tasks = data.get("tasks")
+                        if (not isinstance(tasks, list) or not tasks
+                                or any(not isinstance(tid, str) or not tid.strip() for tid in tasks)
+                                or len(set(tasks)) != len(tasks)):
+                            raise ValueError("已实现事件缺少任务清单")
+                        if (not isinstance(data.get("evidence"), str) or not data["evidence"].strip()
+                                or not isinstance(data.get("entry"), str) or not data["entry"].strip()
+                                or not isinstance(data.get("commits"), str)
+                                or not isinstance(data.get("request"), str)
+                                or not re.fullmatch(r"[a-f0-9]{64}", data["request"])):
+                            raise ValueError("已实现事件缺少证据或请求摘要")
+                        if operation_id_problem(data.get("operation_id")) is not None:
+                            raise ValueError("已实现事件的操作 ID 无效")
+                        receipt = data.get("receipt")
+                        if (not isinstance(receipt, dict) or not isinstance(receipt.get("result"), dict)
+                                or not isinstance(receipt.get("text"), str)):
+                            raise ValueError("已实现事件缺少结果 receipt")
+                    if kind == "projection_repair":
+                        repairs = data.get("repairs")
+                        if (not isinstance(data.get("entry"), str) or not data["entry"].strip()
+                                or not isinstance(repairs, list) or not repairs):
+                            raise ValueError("投影修复事件缺少触发入口或修复清单")
+                        for item in repairs:
+                            if (not isinstance(item, dict)
+                                    or any(not isinstance(item.get(key), str) or not item[key].strip()
+                                           for key in ("task", "from", "to"))):
+                                raise ValueError("投影修复事件缺少逐任务 from→to")
                     if kind == "close":
                         snapshot = data.get("snapshot")
                         if (not isinstance(snapshot, dict) or not data.get("closed_at")
@@ -2227,6 +2340,92 @@ def append_events(root, slug, new):
         fh.flush()
         os.fsync(fh.fileno())
     sync_event_view(root, slug)
+
+
+# --------------------------------------------- 状态投影（格式 ≥4；D-04）
+
+# 任务状态的推导序：pending < implemented < complete。投影落后于推导 → 自动修复；
+# 投影领先（计划写了实现态却没有对应事件）→ 拒绝，不按计划状态静默回退。
+_STATUS_ORDER = {STATUS_PENDING: 0, STATUS_IMPLEMENTED: 1, "complete": 2}
+PROJECTION_REPAIR = "projection_repair"
+
+
+def derived_states(plan, events):
+    """由事件重放推导各任务的期望状态（格式 ≥4）。
+
+    本任务（T2）两档：某任务存在 `implemented` 事件 → 期望 `implemented`；
+    否则期望 `pending`。节点审查通过后的 `complete` 映射属 T3，届时在此扩展。
+    事件引用了计划里不存在的任务 → 无法推导，抛错拒绝（不静默忽略）。
+    """
+    known = {task.id for task in plan.tasks}
+    implemented = set()
+    for event in events:
+        if event["type"] != "implemented":
+            continue
+        for tid in event["data"]["tasks"]:
+            if tid not in known:
+                raise WorkflowError(
+                    f"事件 {event['id']}（implemented）引用了计划里没有的任务 {tid}——"
+                    "事件与计划无法对应，无法推导状态，拒绝继续（不得按计划状态静默放行）。"
+                )
+            implemented.add(tid)
+    return {task.id: (STATUS_IMPLEMENTED if task.id in implemented else STATUS_PENDING)
+            for task in plan.tasks}
+
+
+def _write_plan(plan):
+    """回写计划文本（行数组 → 文件）；与既有 record / _set_approval_mode 同一写法。"""
+    with open(plan.path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(plan.lines) + "\n")
+
+
+def repair_projection(root, slug, entry="（未标注）"):
+    """格式 ≥4：核对计划状态投影与事件重放推导，落后即修复；领先或不可推导即拒绝。
+
+    写入顺序与记账一致（先事件、后状态）：不一致时先写 `projection_repair` 事件
+    （含触发入口与逐任务 from→to），再回写计划状态；随后原操作照常继续。
+    事件缺失（计划写了实现态却没有对应事件）或状态无法推导 → 抛错拒绝：
+    events.jsonl 是权威记录，计划状态只是可重放投影，不一致不得静默放过。
+    格式 ≤3 不参与（调用方按格式分流；这里再兜一道，保持函数可独立复用）。
+    """
+    plan = load_plan(root, slug)
+    if not plan.is_v4:
+        return
+    derived = derived_states(plan, read_events(root, slug))
+    repairs, ahead = [], []
+    for task in plan.tasks:
+        want, have = derived[task.id], task.status
+        if have == want:
+            continue
+        if have not in plan.valid_statuses:
+            raise WorkflowError(
+                f"任务 {task.id} 的状态 '{have}' 在格式 4 下非法"
+                f"（只能是 {'/'.join(plan.valid_statuses)}），且无法由事件重放推导——"
+                "拒绝继续；先修正为合法状态或补齐对应事件。"
+            )
+        if _STATUS_ORDER[want] > _STATUS_ORDER[have]:
+            repairs.append({"task": task.id, "from": have, "to": want})
+        else:
+            ahead.append(f"{task.id}：计划 {have} → 事件推导 {want}")
+    if ahead:
+        raise WorkflowError(
+            "计划状态领先于事件重放推导，事件缺失或相互冲突，拒绝继续：\n  - "
+            + "\n  - ".join(ahead)
+            + "\n（格式 4 下 events.jsonl 是权威记录，计划状态只是可重放投影；"
+            "不得按计划状态静默回退，也不得只改计划不写事件。）"
+        )
+    if not repairs:
+        return
+    for item in repairs:
+        task = next(task for task in plan.tasks if task.id == item["task"])
+        if task.field_lines.get("状态") is None:
+            raise WorkflowError(f"{task.id} 缺少『状态』字段行，无法回写投影。")
+    append_events(root, slug, [_event(slug, lifecycle(root, slug)["cycle"], PROJECTION_REPAIR,
+                                      {"entry": entry, "repairs": repairs})])
+    for item in repairs:
+        task = next(task for task in plan.tasks if task.id == item["task"])
+        plan.lines[task.field_lines["状态"]] = f"- **状态**：{item['to']}"
+    _write_plan(plan)
 
 
 def _coverage_items(plan):
@@ -3065,6 +3264,10 @@ def cmd_slice(args):
     slug = resolve_slug(root, args.slug)
     require_active(root, slug)
     plan = load_plan(root, slug)
+    if plan.is_v4:
+        # 入口统一在动作前做投影检查：落后先修复（留 projection_repair）、领先即拒绝。
+        repair_projection(root, slug, "slice")
+        plan = load_plan(root, slug)   # 修复可能已回写状态行，重新取计划
     require_plan_approval(root, slug, plan)   # 执行门：方案与计划都须已审批
 
     ids = list(args.task_id)
@@ -3265,11 +3468,123 @@ def _check_commit_range(root, raw, plan, has_note):
     return out
 
 
+def record_implemented(args, root, slug, plan):
+    """格式 ≥4 的 `record`：记「已实现」——证据必填、操作 ID 必带、先事件后状态。
+
+    一次操作（可含多任务）只写一条 `implemented` 事件：tasks、evidence、commits、
+    operation_id、请求摘要与结果 receipt；随后回写计划状态「已实现」，最后记账本行。
+    同 ID＋同请求重试 → 幂等重放原结果（不写事件、不改计划、不重复账本行）；
+    同 ID＋不同请求 → 拒绝。任务完成（＝已验收）由节点 `review` 通过后映射，
+    不由记录者宣告——格式 ≥4 不再接受 `--verdict`。
+    """
+    if args.verdict is not None:
+        raise WorkflowError(
+            "格式 ≥4 的 record 不再使用 `--verdict`：改用 "
+            "`--evidence \"<验收怎么跑、结果、失败信号自查>\"` 记「已实现」；"
+            "任务完成（＝已验收）由节点审查通过后映射，不由记录者宣告。"
+        )
+    evidence = (args.evidence or "").strip()
+    if not evidence:
+        raise WorkflowError(
+            "格式 ≥4 的 record 必须给 `--evidence \"<验收怎么跑、结果、失败信号自查>\"`——"
+            "实现证据随任务记账：实际修改、提交范围、验收方法与结果、相关失败信号、"
+            "尚存疑问。缺它账本里就没有「这个任务凭什么算做完」的依据。"
+        )
+
+    requested = sorted(set(args.task_id))
+    request = operation_request_digest(
+        {"tasks": requested, "commits": args.commits, "evidence": evidence})
+    action, existing = resolve_operation(root, slug, args.operation_id, request, "record")
+    if action == "replay":
+        # 幂等重放：返回随事件持久化的原结果；不写事件、不改计划、不重复账本行。
+        return operation_receipt(existing)
+
+    require_plan_approval(root, slug, plan)   # 与 slice 同一道门，防绕过
+    ledger_check_owner(root, slug)
+
+    tasks = []
+    for tid in args.task_id:
+        t = next((x for x in plan.tasks if x.id == tid), None)
+        if t is None:
+            raise WorkflowError(f"计划里没有 {tid}。")
+        tasks.append(t)
+
+    commit_problems = _check_commit_range(root, args.commits, plan, bool(args.note))
+    blockers = [m for lvl, m in commit_problems if lvl == "ERROR"]
+    if blockers:
+        detail = "\n".join(f"  - {m}" for m in blockers)
+        raise WorkflowError(
+            f"提交范围不合法，先修正再记账：\n{detail}\n"
+            "（提交范围是账本里「这个任务改了什么」的唯一记录，"
+            "终审也按它取 diff——空范围或写错的 sha 会让这两件事同时失效。）"
+        )
+
+    warnings = validate_batch(plan, tasks) if len(tasks) > 1 else []
+    warnings += [m for lvl, m in commit_problems if lvl == "WARNING"]
+    batch = len(tasks) > 1
+    stamp = _now()
+    commits = args.commits or "—"
+    label = " + ".join(t.id for t in tasks)
+
+    event = _event(slug, lifecycle(root, slug)["cycle"], "implemented", {
+        "tasks": [t.id for t in tasks],
+        "evidence": evidence,
+        "commits": args.commits,
+        "operation_id": args.operation_id,
+        "request": request,
+        "entry": "record",
+    })
+    result = {
+        "slug": slug,
+        "tasks": [t.id for t in tasks],
+        "batch": batch,
+        "operation_id": args.operation_id,
+        "event": event["id"],
+        "warnings": warnings,
+        "status": STATUS_IMPLEMENTED,
+        "evidence": evidence,
+        "commits": args.commits,
+        "ledger": ledger_path(root, slug),
+        # 阶段末提醒沿用 ≤3 语义（任务 complete 才算该阶段完成）；格式 4 的
+        # 阶段检查点随节点验收推进，重定义属 T4，本任务不引入第二套语义。
+        "phase_completed": None,
+    }
+    text = f"✓ {label} → 已实现（evidence 已记，操作 {args.operation_id}），已记账本"
+    if warnings:
+        text = "⚠ " + "\n⚠ ".join(warnings) + "\n" + text
+    event["data"]["receipt"] = {"result": result, "text": text}
+    for t in tasks:
+        if t.field_lines.get("状态") is None:
+            raise WorkflowError(f"{t.id} 缺少『状态』字段行，无法回写。")
+
+    # 写入顺序固定：先 append 事件、再回写计划状态、最后记账本行（D-04）。
+    append_events(root, slug, [event])
+    for t in tasks:
+        plan.lines[t.field_lines["状态"]] = f"- **状态**：{STATUS_IMPLEMENTED}"
+    _write_plan(plan)
+    for t in tasks:
+        ledger_append(
+            root, slug, "完成记录",
+            f"| {t.id} | {commits} | 已实现（操作 {args.operation_id}） | {stamp} |",
+        )
+    if args.note:
+        ledger_append(root, slug, "裁决", f"| {stamp} | {label} | {args.note} | — |")
+    return result, text
+
+
 def cmd_record(args):
     root = find_project_root()
     slug = resolve_slug(root, args.slug)
     require_active(root, slug)
     plan = load_plan(root, slug)
+    if plan.is_v4:
+        # 入口统一在动作前做投影检查：落后先修复（留 projection_repair）、领先即拒绝。
+        # `review`（T3 新增）按同一入口协议接入——不得各入口各自判断状态。
+        repair_projection(root, slug, "record")
+        plan = load_plan(root, slug)   # 修复可能已回写状态行，重新取计划
+        return record_implemented(args, root, slug, plan)
+    if args.verdict is None:
+        args.verdict = "clean"
     require_plan_approval(root, slug, plan)   # 与 slice 同一道门，防绕过
     ledger_check_owner(root, slug)
 
@@ -3517,6 +3832,10 @@ def cmd_close(args):
     root = find_project_root()
     slug = resolve_slug(root, args.slug)
     plan = load_plan(root, slug)
+    if plan.is_v4:
+        # 入口统一在动作前做投影检查：落后先修复（留 projection_repair）、领先即拒绝。
+        repair_projection(root, slug, "close")
+        plan = load_plan(root, slug)   # 修复可能已回写状态行，重新取计划
     ledger_check_owner(root, slug)
     state = lifecycle(root, slug)
     if state["closed"]:
@@ -3613,7 +3932,22 @@ def build_parser():
     s.add_argument("slug", nargs="?")
     s.add_argument("task_id", nargs="+", help="一个或多个任务 ID")
     s.add_argument("--commits", default="")
-    s.add_argument("--verdict", default="clean", choices=["clean", "issues"])
+    s.add_argument(
+        "--verdict",
+        default=None,
+        choices=["clean", "issues"],
+        help="格式 ≤3 的判词（默认 clean）；格式 ≥4 不再使用——改用 --evidence",
+    )
+    s.add_argument(
+        "--evidence",
+        default="",
+        help="格式 ≥4 必填：验收怎么跑、结果、失败信号自查（实现证据随任务记账）",
+    )
+    s.add_argument(
+        "--operation-id",
+        default="",
+        help="格式 ≥4 必填：本次记账操作的稳定 ID；首次执行前生成并保存，重试复用",
+    )
     s.add_argument("--note", default="")
     _add_json(s)
     s.set_defaults(func=cmd_record)

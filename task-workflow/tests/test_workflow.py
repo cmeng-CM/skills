@@ -1622,6 +1622,221 @@ class WorkflowCLI(unittest.TestCase):
              "解析歧义，须人工裁定后重写。"],
         )
 
+    # ------------------------------------------------ 格式 4 两态记账（T2）
+
+    def approve_v4(self, slug="v4"):
+        self.cli("approve", slug, "方案", "--by", "fixture 方案确认")
+        self.cli("approve", slug, "计划", "--by", "fixture 计划确认")
+
+    def record_v4(self, *task_ids, slug="v4", operation_id="rv-N1-1",
+                  evidence="跑 `true`：退出码 0；失败信号自查无", commits="HEAD..HEAD",
+                  note="fixture 本任务无新提交（空范围豁免）", expected=0, **extra):
+        args = ["record", slug, *task_ids, "--commits", commits,
+                "--evidence", evidence, "--operation-id", operation_id]
+        if note is not None:
+            args.extend(["--note", note])
+        for key, value in extra.items():
+            args.extend(["--" + key.replace("_", "-"), value])
+        return self.cli(*args, expected=expected)
+
+    def implemented_events(self, slug="v4"):
+        return [event for event in self.events(slug) if event["type"] == "implemented"]
+
+    def repair_events(self, slug="v4"):
+        return [event for event in self.events(slug) if event["type"] == "projection_repair"]
+
+    def rollback_status(self, slug="v4", status="pending"):
+        """把已实现任务的计划状态手工回退：等价于「事件已落盘、状态未及回写」的中断窗口。"""
+        self.plan(slug).write_text(
+            self.plan(slug).read_text().replace("- **状态**：implemented", f"- **状态**：{status}"))
+
+    def test_two_state_record_requires_evidence_and_operation_id(self):
+        self.make_v4_plan(slug="t2", nodes=self.node_block("N1", "T1, T2", final="是"))
+        self.approve_v4("t2")
+        message = self.record_v4("T1", slug="t2", verdict="clean", expected=1)["error"]
+        self.assertIn("--verdict", message)
+        self.assertIn("--evidence", message)
+        args = ["record", "t2", "T1", "--commits", "HEAD..HEAD", "--note", "fixture 空范围豁免",
+                "--operation-id", "rv-N1-9"]
+        self.assertIn("--evidence", self.cli(*args, expected=1)["error"])
+        self.assertIn("--evidence", self.record_v4("T1", slug="t2", evidence="  ", expected=1)["error"])
+        args = ["record", "t2", "T1", "--commits", "HEAD..HEAD", "--note", "fixture 空范围豁免",
+                "--evidence", "证据"]
+        self.assertIn("--operation-id", self.cli(*args, expected=1)["error"])
+        self.assertIn("空白", self.record_v4("T1", slug="t2", operation_id="rv N1 1", expected=1)["error"])
+        self.assertIn("--operation-id", self.record_v4("T1", slug="t2", operation_id="", expected=1)["error"])
+        self.assertEqual(self.events("t2"), [])
+        self.assertEqual(workflow.load_plan(str(self.root), "t2").tasks[0].status, "pending")
+
+    def test_two_state_record_writes_event_then_status_and_ledger(self):
+        self.make_v4_plan(slug="t2", nodes=self.node_block("N1", "T1, T2", final="是"))
+        self.approve_v4("t2")
+        result = self.record_v4("T1", slug="t2")
+        self.assertEqual(result["status"], "implemented")
+        self.assertEqual(result["tasks"], ["T1"])
+        self.assertEqual(result["operation_id"], "rv-N1-1")
+        self.assertEqual(workflow.load_plan(str(self.root), "t2").tasks[0].status, "implemented")
+        self.assertEqual(workflow.load_plan(str(self.root), "t2").tasks[1].status, "pending")
+        records = self.implemented_events("t2")
+        self.assertEqual(len(records), 1)
+        data = records[0]["data"]
+        self.assertEqual(data["tasks"], ["T1"])
+        self.assertEqual(data["operation_id"], "rv-N1-1")
+        self.assertEqual(data["commits"], "HEAD..HEAD")
+        self.assertIn("失败信号自查", data["evidence"])
+        self.assertEqual(data["entry"], "record")
+        self.assertEqual(data["receipt"]["result"]["event"], records[0]["id"])
+        self.assertIn("| T1 | HEAD..HEAD |", (self.root / ".workflow/t2/ledger.md").read_text())
+        # 空提交范围的 --note 豁免在格式 ≥4 同样适用；不写 --note 仍按 ≤3 规则拦下。
+        self.assertTrue(any("没有产生提交" in message for message in result["warnings"]))
+        self.record_v4("T2", slug="t2", operation_id="rv-N1-2", note=None, expected=1)
+
+    def test_two_state_record_idempotent_replay_and_conflict_rejected(self):
+        self.make_v4_plan(slug="t2", nodes=self.node_block("N1", "T1, T2", final="是"))
+        self.approve_v4("t2")
+        first = self.record_v4("T1", slug="t2")
+        events, plan_text = self.events("t2"), self.plan("t2").read_text()
+        ledger = (self.root / ".workflow/t2/ledger.md").read_text()
+        # 同 ID＋相同请求 → 幂等重放：返回原结果，计划、事件与账本均不重复
+        self.assertEqual(self.record_v4("T1", slug="t2"), first)
+        self.assertEqual(self.events("t2"), events)
+        self.assertEqual(self.plan("t2").read_text(), plan_text)
+        self.assertEqual((self.root / ".workflow/t2/ledger.md").read_text(), ledger)
+        # 同 ID＋不同请求 → 拒绝（证据、任务集合、提交范围任一不同）
+        self.assertIn("请求摘要不符", self.record_v4(
+            "T1", slug="t2", evidence="另一份证据", expected=1)["error"])
+        self.assertIn("请求摘要不符", self.record_v4("T2", slug="t2", expected=1)["error"])
+        self.assertIn("请求摘要不符", self.record_v4(
+            "T1", slug="t2", commits="deadbee..HEAD", expected=1)["error"])
+        self.assertEqual(len(self.implemented_events("t2")), 1)
+        self.assertEqual(workflow.load_plan(str(self.root), "t2").tasks[1].status, "pending")
+
+    def test_two_state_record_interrupt_after_event_recovers_projection(self):
+        """事件落盘、返回前中断的等价窗口：事件在、计划状态落后（手工回退构造）。"""
+        self.make_v4_plan(slug="t2", nodes=self.node_block("N1", "T1, T2", final="是"))
+        self.approve_v4("t2")
+        first = self.record_v4("T1", slug="t2")
+        self.rollback_status("t2")
+        self.assertEqual(workflow.load_plan(str(self.root), "t2").tasks[0].status, "pending")
+        # 携原 ID 重试：入口投影检查先修复，再幂等重放原结果
+        self.assertEqual(self.record_v4("T1", slug="t2"), first)
+        self.assertEqual(workflow.load_plan(str(self.root), "t2").tasks[0].status, "implemented")
+        self.assertEqual([event["type"] for event in self.events("t2")].count("implemented"), 1)
+        repairs = self.repair_events("t2")
+        self.assertEqual(len(repairs), 1)
+        self.assertEqual(repairs[0]["data"]["entry"], "record")
+        self.assertEqual(repairs[0]["data"]["repairs"],
+                         [{"task": "T1", "from": "pending", "to": "implemented"}])
+
+    def test_two_state_projection_repair_on_entries_and_missing_event_refused(self):
+        self.make_v4_plan(slug="t2", nodes=self.node_block("N1", "T1, T2", final="是"))
+        self.approve_v4("t2")
+        self.record_v4("T1", slug="t2")
+        # slice 入口：投影落后 → 自动修复并留 projection_repair（含触发入口与 from→to）
+        self.rollback_status("t2")
+        self.cli("slice", "t2", "T2")
+        self.assertEqual(workflow.load_plan(str(self.root), "t2").tasks[0].status, "implemented")
+        self.assertEqual([event["data"]["entry"] for event in self.repair_events("t2")], ["slice"])
+        # close 入口：同样先修复；随后因未完成验收而拒绝收尾
+        self.rollback_status("t2")
+        self.cli("close", "t2", expected=1)
+        self.assertEqual([event["data"]["entry"] for event in self.repair_events("t2")], ["slice", "close"])
+        self.assertEqual(workflow.load_plan(str(self.root), "t2").tasks[0].status, "implemented")
+        # 事件缺失（计划写了已实现、没有对应事件）→ 拒绝继续，不静默按计划回退
+        kept = [event for event in self.events("t2") if event["type"] != "implemented"]
+        path = self.root / ".workflow/t2/events.jsonl"
+        path.write_text("".join(json.dumps(event, ensure_ascii=False) + "\n" for event in kept))
+        message = self.cli("slice", "t2", "T2", expected=1)["error"]
+        self.assertIn("领先于事件重放推导", message)
+        self.assertIn("T1", message)
+        self.assertIn("领先于事件重放推导", self.record_v4("T1", slug="t2", expected=1)["error"])
+        self.assertIn("领先于事件重放推导", self.cli("close", "t2", expected=1)["error"])
+        self.assertEqual(len(self.implemented_events("t2")), 0)
+
+    def test_two_state_repair_function_is_noop_when_consistent_or_legacy(self):
+        self.make_v4_plan(slug="t2", nodes=self.node_block("N1", "T1, T2", final="是"))
+        self.assertIsNone(workflow.repair_projection(str(self.root), "t2"))
+        self.assertEqual(self.events("t2"), [])
+        self.assertIsNone(workflow.repair_projection(str(self.root), "t2", "test"))
+        # 格式 ≤3 不参与投影核对（本任务不接管旧格式）
+        self.make_v4_plan(slug="v3noop", version=3)
+        self.assertIsNone(workflow.repair_projection(str(self.root), "v3noop", "test"))
+        self.assertEqual(self.events("v3noop"), [])
+
+    def test_two_state_status_split_by_format_and_v3_record_unchanged(self):
+        self.make_v4_plan(slug="v4-status", nodes=self.node_block("N1", "T1, T2", final="是"))
+        self.plan("v4-status").write_text(
+            self.plan("v4-status").read_text().replace("- **状态**：pending", "- **状态**：in_progress", 1))
+        self.assertIn("状态 'in_progress' 非法，只能是 pending/implemented/complete。",
+                      self.check_messages("v4-status"))
+        self.plan("v4-status").write_text(
+            self.plan("v4-status").read_text().replace("- **状态**：in_progress", "- **状态**：blocked", 1))
+        self.assertIn("状态 'blocked' 非法，只能是 pending/implemented/complete。",
+                      self.check_messages("v4-status"))
+        # 格式 ≤3：原集合与原消息逐字不变
+        self.make_v4_plan(slug="v3-status", version=3)
+        self.plan("v3-status").write_text(
+            self.plan("v3-status").read_text().replace("- **状态**：pending", "- **状态**：in_progress", 1))
+        self.cli("check", "v3-status")
+        self.plan("v3-status").write_text(
+            self.plan("v3-status").read_text().replace("- **状态**：in_progress", "- **状态**：weird", 1))
+        self.assertIn("状态 'weird' 非法，只能是 pending/in_progress/complete/blocked。",
+                      self.check_messages("v3-status"))
+        # 格式 ≤3 的 record：不要求 evidence/operation-id，状态与判词沿用旧语义
+        self.make_v4_plan(slug="v3-rec", version=3)
+        self.approve_v4("v3-rec")
+        result = self.cli("record", "v3-rec", "T1", "--commits", "HEAD..HEAD", "--note", "fixture 空范围豁免")
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["verdict"], "clean")
+        self.assertEqual(self.events("v3-rec"), [])
+        self.assertEqual(workflow.load_plan(str(self.root), "v3-rec").tasks[0].status, "complete")
+
+    def test_two_state_record_batch_is_one_event_and_replays_identically(self):
+        tasks = self.v4_tasks((("T1", "无"), ("T2", "无")))
+        self.make_v4_plan(slug="t2b", nodes=self.node_block("N1", "T1, T2", final="是"), tasks=tasks)
+        self.approve_v4("t2b")
+        first = self.record_v4("T1", "T2", slug="t2b")
+        self.assertEqual(first["tasks"], ["T1", "T2"])
+        self.assertTrue(first["batch"])
+        records = self.implemented_events("t2b")
+        self.assertEqual(len(records), 1)   # 一次操作只写一条事件
+        self.assertEqual(records[0]["data"]["tasks"], ["T1", "T2"])
+        statuses = [task.status for task in workflow.load_plan(str(self.root), "t2b").tasks]
+        self.assertEqual(statuses, ["implemented", "implemented"])
+        ledger = (self.root / ".workflow/t2b/ledger.md").read_text()
+        self.assertIn("| T1 | HEAD..HEAD |", ledger)
+        self.assertIn("| T2 | HEAD..HEAD |", ledger)
+        counts = len(self.events("t2b"))
+        self.assertEqual(self.record_v4("T2", "T1", slug="t2b"), first)   # 集合一致即同请求
+        self.assertEqual(len(self.events("t2b")), counts)
+
+    def test_two_state_record_refuses_cleanly_without_status_line(self):
+        self.make_v4_plan(slug="nostatus", nodes=self.node_block("N1", "T1, T2", final="是"))
+        self.plan("nostatus").write_text(
+            self.plan("nostatus").read_text().replace("- **状态**：pending\n", "", 1))
+        self.approve_v4("nostatus")
+        message = self.record_v4("T1", slug="nostatus", expected=1)["error"]
+        self.assertIn("缺少『状态』字段行", message)
+        self.assertFalse((self.root / ".workflow/nostatus/events.jsonl").exists())
+        self.assertIn("- **状态**：pending", self.plan("nostatus").read_text())
+
+    def test_two_state_corrupt_implemented_event_is_never_ignored(self):
+        self.make_v4_plan(slug="t2c", nodes=self.node_block("N1", "T1, T2", final="是"))
+        self.approve_v4("t2c")
+        self.record_v4("T1", slug="t2c")
+        path = self.root / ".workflow/t2c/events.jsonl"
+        broken = []
+        for event in self.events("t2c"):
+            if event["type"] == "implemented":
+                event["data"].pop("receipt")
+            broken.append(event)
+        path.write_text("".join(json.dumps(event, ensure_ascii=False) + "\n" for event in broken))
+        for args in (("slice", "t2c", "T2"), ("record", "t2c", "T2", "--commits", "HEAD..HEAD",
+                                             "--evidence", "证据", "--operation-id", "rv-N1-3")):
+            message = self.cli(*args, expected=1)["error"]
+            self.assertIn("结构化证据损坏", message)
+            self.assertIn("receipt", message)
+
     def test_review_nodes_format3_ignores_section_and_init_stays_v3(self):
         self.cli("init", "fresh", "--goal", "fixture")
         self.assertIn("**格式**: 3", self.plan("fresh").read_text())
