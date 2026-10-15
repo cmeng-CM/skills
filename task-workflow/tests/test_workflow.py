@@ -2291,7 +2291,11 @@ class WorkflowCLI(unittest.TestCase):
             self.plan(slug).read_text().replace("- **状态**：complete", f"- **状态**：{status}"))
 
     def test_three_projection_repairs_down_after_fail_crash_window(self):
-        """`fail` 事件已写、状态仍是 `complete`（中断残留）→ 入口修复下。"""
+        """`fail` 事件已写、状态仍是 `complete`（中断残留）→ 入口修复下。
+
+        T4 起 `slice` 还叠了跨节点就绪门：N1 最近结论是 `fail`（未验收），N2 的 T3
+        必须被拒——修复照旧先在入口完成，随后才因未验收被拦（两条断言都要成立）。
+        """
         self.node_review_plan(slug="t3d")
         self.record_v4("T1", slug="t3d", operation_id="rec-t1")
         self.record_v4("T2", slug="t3d", operation_id="rec-t2")
@@ -2302,7 +2306,8 @@ class WorkflowCLI(unittest.TestCase):
                          ["implemented", "implemented", "pending"])
         self.plan("t3d").write_text(
             self.plan("t3d").read_text().replace("- **状态**：implemented", "- **状态**：complete"))
-        self.cli("slice", "t3d", "T3")
+        message = self.cli("slice", "t3d", "T3", expected=1)["error"]
+        self.assertIn("N1 未验收", message)   # T4：上游节点未验收 → 跨节点下游拒绝派发
         self.assertEqual([task.status for task in workflow.load_plan(str(self.root), "t3d").tasks],
                          ["implemented", "implemented", "pending"])
         repairs = self.repair_events("t3d")
@@ -2327,6 +2332,206 @@ class WorkflowCLI(unittest.TestCase):
                     self.plan("t3p").read_text().replace(f"- **状态**：{claimed}",
                                                          "- **状态**：pending", 1))
         self.assertFalse((self.root / ".workflow/t3p/events.jsonl").exists())
+
+    # ------------------------------------------------ 三态调度与格式 4 入口门（T4）
+
+    def test_four_cross_node_gate_rejects_until_upstream_reviewed(self):
+        """上游节点未验收（有 implemented 未 review）→ 跨节点下游 slice 拒绝并给节点与状态。"""
+        self.node_review_plan(slug="t4a")
+        self.record_v4("T1", slug="t4a", operation_id="rec-t1")
+        plan = workflow.load_plan(str(self.root), "t4a")
+        facts = workflow.task_states(plan)
+        self.assertEqual(facts["T1"], {"implemented": True, "node_valid": False, "blocked": False})
+        self.assertEqual(facts["T3"], {"implemented": False, "node_valid": False, "blocked": True})
+        self.assertEqual(plan.states(), {"T1": "IMPLEMENTED", "T2": "READY", "T3": "BLOCKED"})
+        self.assertEqual(workflow.node_state(plan, plan.events, plan.nodes[0]),
+                         workflow.NODE_STATE_INVALID)
+
+        message = self.cli("slice", "t4a", "T3", expected=1)["error"]
+        self.assertIn("N1 未验收", message)          # 节点 ID ＋ 状态
+        self.assertIn("跨节点依赖", message)
+
+        shown = self.cli("next", "t4a")
+        self.assertNotIn("T3", [item["id"] for item in shown["ready"]])
+        self.assertEqual(shown["unaccepted_nodes"], ["N1"])
+        self.assertEqual(shown["review_debt"], {"tasks": ["T1"], "unopened": ["N1"]})
+        next_text = self.cli_text("next", "t4a")
+        self.assertIn("未验收节点", next_text)
+        self.assertIn("审查债务", next_text)
+
+        status = self.cli("status", "t4a")
+        self.assertEqual(status["unaccepted_nodes"], ["N1"])
+        self.assertEqual(status["review_debt"], {"tasks": ["T1"], "unopened": ["N1"]})
+        status_text = self.cli_text("status", "t4a")
+        self.assertIn("未验收节点", status_text)
+        self.assertIn("审查债务", status_text)
+        self.assertIn("已实现待审查：T1", status_text)
+
+        # 派发片段也带节点状态（控制器核对用）
+        self.assertIn("审查节点状态", self.cli("slice", "t4a", "T2")["brief"])
+
+        self.record_v4("T2", slug="t4a", operation_id="rec-t2")
+        span = self.commit_range()
+        self.review_v4("N1", slug="t4a", commits=span, operation_id="rv-N1-1")
+        self.cli("slice", "t4a", "T3")               # 上游验收后跨节点放行
+        self.assertIn("T3", [item["id"] for item in self.cli("next", "t4a")["ready"]])
+        self.assertEqual(self.cli("status", "t4a")["unaccepted_nodes"], [])
+        self.assertEqual(self.cli("status", "t4a")["review_debt"], {"tasks": [], "unopened": []})
+
+    def test_four_declared_only_edge_blocks_without_task_dependency(self):
+        """仅声明节点依赖（无任务级依赖）同样拦：等待图一张，声明即约束（D-21）。"""
+        nodes = (self.node_block("N1", "T1")
+                 + self.node_block("N2", "T2", deps="N1", final="是"))
+        self.make_v4_plan(slug="t4b", nodes=nodes,
+                          tasks=self.v4_tasks((("T1", "无"), ("T2", "无"))))
+        self.approve_v4("t4b")
+        plan = workflow.load_plan(str(self.root), "t4b")
+        self.assertEqual(workflow.wait_graph(plan), {"N1": set(), "N2": {"N1"}})
+        self.record_v4("T1", slug="t4b", operation_id="rec-t1")
+        plan = workflow.load_plan(str(self.root), "t4b")
+        self.assertTrue(workflow.task_states(plan)["T2"]["blocked"])
+        message = self.cli("slice", "t4b", "T2", expected=1)["error"]
+        self.assertIn("N1 未验收", message)
+        span = self.commit_range()
+        self.review_v4("N1", slug="t4b", commits=span, operation_id="rv-N1-1",
+                       lines=self.review_lines(("T1", "依据 record 证据，符合规格")))
+        self.cli("slice", "t4b", "T2")
+        self.assertFalse(workflow.task_states(
+            workflow.load_plan(str(self.root), "t4b"))["T2"]["blocked"])
+
+    def test_four_inner_dependency_chain_dispatches_before_review(self):
+        """组内依赖按「已实现」放行：节点能凑齐送审条件（不被跨节点规则自锁）。"""
+        nodes = (self.node_block("N1", "T1, T2")
+                 + self.node_block("N2", "T3", deps="N1", final="是"))
+        self.make_v4_plan(slug="t4c", nodes=nodes,
+                          tasks=self.v4_tasks((("T1", "无"), ("T2", "T1"), ("T3", "无"))))
+        self.approve_v4("t4c")
+        message = self.cli("slice", "t4c", "T2", expected=1)["error"]
+        self.assertIn("组内上游 T1 尚未实现", message)
+        self.record_v4("T1", slug="t4c", operation_id="rec-t1")
+        self.cli("slice", "t4c", "T2")               # 不等 N1 审查通过
+        self.record_v4("T2", slug="t4c", operation_id="rec-t2")
+        plan = workflow.load_plan(str(self.root), "t4c")
+        self.assertFalse(workflow.node_valid_state(plan, plan.events, plan.nodes[0]))
+        span = self.commit_range()
+        result = self.review_v4("N1", slug="t4c", commits=span, operation_id="rv-N1-1")
+        self.assertEqual(result["mapped_status"], workflow.STATUS_COMPLETE)
+        self.assertEqual([task.status for task in workflow.load_plan(str(self.root), "t4c").tasks],
+                         ["complete", "complete", "pending"])
+        self.cli("slice", "t4c", "T3")               # 上游节点验收后放行
+        self.assertIn("T3", [item["id"] for item in self.cli("next", "t4c")["ready"]])
+
+    def test_four_batch_requires_same_node_and_same_node_batch_passes(self):
+        """合并派发是「一次审查」的粒度：跨节点批次拒绝，同节点批次放行。"""
+        nodes = (self.node_block("N1", "T1, T2")
+                 + self.node_block("N2", "T3, T4", deps="N1", final="是"))
+        self.make_v4_plan(slug="t4d", nodes=nodes,
+                          tasks=self.v4_tasks((("T1", "无"), ("T2", "无"),
+                                               ("T3", "无"), ("T4", "无"))))
+        self.approve_v4("t4d")
+        message = self.cli("slice", "t4d", "T1", "T3", expected=1)["error"]
+        self.assertIn("同属一个节点", message)
+        self.assertIn("N2", message)
+        result = self.cli("slice", "t4d", "T1", "T2")
+        self.assertTrue(result["batch"])
+        self.assertEqual(result["tasks"], ["T1", "T2"])
+        # 三态语义的旧守卫仍在：已验收（complete）不得再次入批
+        self.record_v4("T1", "T2", slug="t4d", operation_id="rec-batch")
+        span = self.commit_range()
+        self.review_v4("N1", slug="t4d", commits=span, operation_id="rv-N1-1")
+        message = self.cli("record", "t4d", "T1", "T2", "--commits", span,
+                           "--evidence", "证据", "--operation-id", "rec-batch-2",
+                           expected=1)["error"]
+        self.assertIn("已完成，不能再次纳入批次", message)
+
+    def test_four_review_debt_lists_follow_pass_and_fail(self):
+        """审查债务：已实现待审查任务 ＋ 尚未开启审查的节点；fail 后仍无 pass 记录即仍在债上。"""
+        self.node_review_plan(slug="t4e")
+        self.record_v4("T1", slug="t4e", operation_id="rec-t1")
+        self.record_v4("T2", slug="t4e", operation_id="rec-t2")
+        self.assertEqual(self.cli("next", "t4e")["review_debt"],
+                         {"tasks": ["T1", "T2"], "unopened": ["N1"]})
+        self.assertEqual(self.cli("status", "t4e")["review_debt"],
+                         {"tasks": ["T1", "T2"], "unopened": ["N1"]})
+        self.review_v4("N1", slug="t4e", verdict="fail", commits="HEAD..HEAD",
+                       operation_id="rv-N1-1")
+        debt = self.cli("next", "t4e")["review_debt"]
+        self.assertEqual(debt, {"tasks": ["T1", "T2"], "unopened": []})   # 已开启审查、仍无 pass
+        self.assertEqual(self.cli("status", "t4e")["unaccepted_nodes"], ["N1"])
+        self.assertIn("已实现待审查：T1、T2", self.cli_text("status", "t4e"))
+
+    def test_four_close_and_verify_gate_on_unaccepted_nodes(self):
+        """close/verify 就绪门：未验收节点拒绝（列出节点与状态），节点通过后放行。"""
+        tasks = self.v4_tasks((("T1", "无"), ("T2", "无")))
+        self.make_v4_plan(slug="t4f", nodes=self.node_block("N1", "T1, T2", final="是"),
+                          tasks=tasks)
+        self.approve_v4("t4f")
+        self.record_v4("T1", slug="t4f", operation_id="rec-t1")
+        self.record_v4("T2", slug="t4f", operation_id="rec-t2")
+        for command in ("close", "verify"):
+            with self.subTest(entry=command):
+                message = self.cli(command, "t4f", expected=1)["error"]
+                self.assertIn("未验收", message)
+                self.assertIn("N1", message)
+                self.assertIn("已实现成员：T1、T2", message)
+        span = self.commit_range()
+        self.review_v4("N1", slug="t4f", commits=span, operation_id="rv-N1-1")
+        result = self.cli("verify", "t4f")
+        self.assertTrue(result["passed"], result["blockers"])
+        self.assertTrue(self.cli("close", "t4f")["closed"])
+
+    def test_four_three_states_never_roll_back_implemented(self):
+        """三态分别计算：节点结论无效/依赖阻塞都不回退已实现的任务状态行（D-09）。"""
+        self.node_review_plan(slug="t4g")
+        self.record_v4("T1", slug="t4g", operation_id="rec-t1")
+        self.record_v4("T2", slug="t4g", operation_id="rec-t2")
+        self.review_v4("N1", slug="t4g", verdict="fail", commits="HEAD..HEAD",
+                       operation_id="rv-N1-1")
+        plan = workflow.load_plan(str(self.root), "t4g")
+        facts = workflow.task_states(plan)
+        self.assertTrue(facts["T1"]["implemented"] and facts["T2"]["implemented"])
+        self.assertFalse(facts["T1"]["node_valid"])
+        self.assertTrue(facts["T3"]["blocked"])
+        self.assertEqual(plan.states(),
+                         {"T1": "IMPLEMENTED", "T2": "IMPLEMENTED", "T3": "BLOCKED"})
+        self.assertEqual(workflow.derived_states(plan, plan.events),
+                         {"T1": "implemented", "T2": "implemented", "T3": "pending"})
+        before = self.plan("t4g").read_text()
+        self.cli("slice", "t4g", "T3", expected=1)
+        self.cli("next", "t4g")
+        self.cli("status", "t4g")
+        self.assertEqual(self.plan("t4g").read_text(), before)   # 展示/拒绝路径零改写
+
+    def test_four_legacy_format3_entrypoints_unchanged(self):
+        """格式 ≤3：三态门、批量同节点守卫与债务清单都不生效，旧行为逐字保留。"""
+        fields = ("- **文件**：source.py\n- **并行**：否\n- **做法**：fixture 做法\n"
+                  "- **接口**：无\n- **预期**：fixture 预期\n- **验收**：结果正确\n"
+                  "- **失败信号**：结果错误\n- **决策**：D-01\n")
+        self.plan("probe").write_text(
+            "**Goal**: fixture\n**格式**: 3\n"
+            "**设计文档**: 无 — 独立临时回归测试不需要单独设计文档\n"
+            "## 方案\n### 背景与目标\nfixture scheme\n## 验证命令\n```sh\ntrue\n```\n"
+            "## 决策\n| ID | 决策 | 来源 | 理由 |\n|---|---|---|---|\n"
+            "| D-01 | fixture decision | 用户 | fixture rationale |\n"
+            "## 验证覆盖\n| 对象 | 验证手段 | 类型 | 必需性 | 证据 |\n|---|---|---|---|---|\n"
+            "| A1 | `source.py::test_example` | 自动化 | 必需 | |\n"
+            "| D-01 | `source.py::test_example` | 自动化 | 必需 | |\n"
+            "### 不验证的部分\n- 无\n"
+            "## 阶段\n### Phase 1: fixture\n"
+            "#### T1 fixture\n- **依赖**：无\n" + fields + "- **状态**：complete\n"
+            "#### T2 fixture\n- **依赖**：无\n" + fields + "- **状态**：complete\n")
+        self.cli("approve", "probe", "方案", "--by", "fixture 方案确认")
+        self.cli("approve", "probe", "计划", "--by", "fixture 计划确认")
+        # 单个已完成任务仍可再派发（旧路径没有就绪门）
+        result = self.cli("slice", "probe", "T2")
+        self.assertNotIn("node_states", result)
+        self.assertNotIn("审查节点状态", result["brief"])
+        message = self.cli("slice", "probe", "T1", "T2", expected=1)["error"]
+        self.assertEqual(message, "T1 已完成，不能再次纳入批次。")
+        self.assertNotIn("unaccepted_nodes", self.cli("status", "probe"))
+        self.assertNotIn("awaiting_review", self.cli("next", "probe"))
+        self.assertNotIn("审查债务", self.cli_text("status", "probe"))
+        self.assertEqual(workflow.task_states(workflow.load_plan(str(self.root), "probe")), {})
 
     def test_review_nodes_format3_ignores_section_and_init_stays_v3(self):
         self.cli("init", "fresh", "--goal", "fixture")

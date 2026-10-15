@@ -143,6 +143,14 @@ HISTORY_PREDECESSOR_KEYS = ("前身", "predecessor")
 NODE_PHASE_FIRST = 1
 NODE_RUN_FIELDS = ("状态",)
 NODE_REVIEW_VERDICTS = ("pass", "fail")
+# 节点结论状态（T4 接线口径）：`valid`＝已验收（结论有效）、`invalid`＝未验收；
+# `recheck`（待重新确认）由 T5 的失效与恢复规则产生——T4 只预留状态与措辞、
+# 不发明触发。判据只在 `node_state()` 一处实现（T5 只换该函数）。
+NODE_STATE_VALID = "valid"
+NODE_STATE_INVALID = "invalid"
+NODE_STATE_RECHECK = "recheck"
+NODE_STATE_TEXT = {NODE_STATE_VALID: "已验收", NODE_STATE_INVALID: "未验收",
+                   NODE_STATE_RECHECK: "待重新确认"}
 
 # 设计文档：与状态控制分开的独立产物，必须落在项目仓库里（.workflow/ 自忽略）
 DESIGN_DOC_KEY = "设计文档"
@@ -409,6 +417,8 @@ class Plan:
         self.exclusions_present = False   # 是否有「不验证的部分」
         self.sections = {}    # 各段的正文行，供 bug 类型检查用
         self.verify_command = ""
+        self._events = None         # 格式 ≥4：事件流的惰性缓存（见 `events`）
+        self._event_loader = None   # 由 load_plan 注入；check 只做容错的历史读取
         self._parse()
 
     @property
@@ -681,22 +691,55 @@ class Plan:
                               "evidence": mapped.get("证据", "")})
         return headers
 
+    @property
+    def events(self):
+        """本工作流的事件流（格式 ≥4 三态调度的输入；格式 ≤3 恒为空列表）。
+
+        惰性加载：`load_plan` 注入加载器，首次访问才读 `events.jsonl`——读法用严格
+        解析的 `read_events`（事件是权威记录，坏事件不得静默降级为「没有事件」）。
+        惰性是为了 `check`：计划校验只读计划文本与**容错**的历史记录（前身解析用
+        `_events_for_plan`），不因事件文件损坏而打断计划诊断；执行入口
+        （slice/record/review/close/verify）本来就会先读事件，拦在那里。
+        """
+        if self._events is None:
+            self._events = [] if self._event_loader is None else self._event_loader()
+        return self._events
+
     # ---- 状态计算（依赖图）
 
     def states(self):
-        """返回 {task_id: STATE}，STATE ∈ DONE/BLOCKED/READY/RUNNING。"""
-        by_id = {t.id: t for t in self.tasks}
-        done = {t.id for t in self.tasks if t.status == "complete"}
+        """返回 {task_id: STATE}，STATE ∈ DONE/BLOCKED/READY/RUNNING/IMPLEMENTED。
+
+        格式 ≥4 改走 `task_states()` 三态派生（D-09/T4）——`complete`→DONE；
+        所属节点的直接跨节点上游未验收→BLOCKED；有实现证据（待节点审查）→
+        IMPLEMENTED；其余（含 `pending`）→READY。组内依赖按「已实现」放行、
+        不等待审查。格式 ≤3 逐字走旧路径（四态、旧判据，行为不变）。
+        """
+        if not self.is_v4:
+            by_id = {t.id: t for t in self.tasks}
+            done = {t.id for t in self.tasks if t.status == "complete"}
+            out = {}
+            for t in self.tasks:
+                if t.id in done:
+                    out[t.id] = "DONE"
+                elif t.status == "blocked":
+                    out[t.id] = "BLOCKED"
+                elif any(d not in done for d in t.deps if d in by_id):
+                    out[t.id] = "BLOCKED"
+                elif t.status == "in_progress":
+                    out[t.id] = "RUNNING"
+                else:
+                    out[t.id] = "READY"
+            return out
+        facts = task_states(self)
         out = {}
         for t in self.tasks:
-            if t.id in done:
-                out[t.id] = "DONE"
-            elif t.status == "blocked":
+            if t.status == STATUS_COMPLETE:
+                out[t.id] = "DONE"          # 已验收（节点通过后映射，T3）
+            elif facts[t.id]["blocked"]:
                 out[t.id] = "BLOCKED"
-            elif any(d not in done for d in t.deps if d in by_id):
-                out[t.id] = "BLOCKED"
-            elif t.status == "in_progress":
-                out[t.id] = "RUNNING"
+            elif facts[t.id]["implemented"]:
+                out[t.id] = "IMPLEMENTED"   # 已实现、等待节点审查（不派发）
             else:
                 out[t.id] = "READY"
         return out
@@ -729,10 +772,28 @@ def load_plan(root, slug):
         raise WorkflowError(f"计划文件不存在：{path}")
     with open(path, encoding="utf-8") as fh:
         text = fh.read()
-    return Plan(path, text)
+    plan = Plan(path, text)
+    if plan.is_v4:
+        # 格式 ≥4：三态调度的输入是事件流（D-04 事件是权威记录）——加载器随计划
+        # 注入，首次访问才读（见 `Plan.events`），各入口共用同一份读法。
+        plan._event_loader = lambda: read_events(root, slug)
+    return plan
 
 
 # ------------------------------------------------------- 审查节点（格式 ≥4）
+
+def node_owner_map(plan):
+    """任务 → 归属审查节点 ID（格式 ≥4）。
+
+    「每个任务恰属一个节点」由 `check` 保证；同一任务被两个节点声明的坏计划在
+    解析阶段就被拒（`_node_findings`），这里只取第一个出现者（不放大坏计划的影响）。
+    """
+    owner = {}
+    for node in plan.nodes:
+        for tid in node.tasks:
+            owner.setdefault(tid, node.id)
+    return owner
+
 
 def wait_graph(plan):
     """节点等待图：{等待者: {被等待者, …}}（格式 ≥4；旧格式返回空图）。
@@ -745,10 +806,7 @@ def wait_graph(plan):
     判环、派发与就绪检查共用这一张图；格式 ≤3 的节点集为空，返回空图。
     """
     graph = {node.id: set() for node in plan.nodes}
-    owner = {}
-    for node in plan.nodes:
-        for tid in node.tasks:
-            owner.setdefault(tid, node.id)
+    owner = node_owner_map(plan)
     task_ids = {task.id for task in plan.tasks}
     for task in plan.tasks:
         waiter = owner.get(task.id)
@@ -2178,18 +2236,81 @@ def new_node_lineage(slug, node):
     return f"{node.id}-{_digest({'workflow': slug, 'node': node.id})[:8]}"
 
 
+def node_review_count(events, lineage, phase=NODE_PHASE_FIRST):
+    """同【谱系 × 审查阶段】的 `node_review` 记录条数——轮次谓词的**单一实现**。
+
+    「送审前的条数」＝本次送审是第几轮（首审 0）；`round_count` 只是它的「减一」
+    视图。T3 审查 Low ②：`review` 里的轮次读数与本函数曾是同谓词两处实现，
+    现在两处都走这里。
+    """
+    return sum(1 for event in events
+               if event["type"] == EVENT_NODE_REVIEW
+               and event["data"].get("谱系") == lineage
+               and event["data"].get("审查阶段") == phase)
+
+
 def round_count(events, lineage, phase=NODE_PHASE_FIRST):
-    """修复轮次计数：同【谱系 × 审查阶段】内 `node_review` 事件数 − 1，下限 0。
+    """已用修复轮次：同【谱系 × 审查阶段】记录条数 − 1，下限 0。
 
     首审不计轮；「修复＋复核（含主控核对）」每多一条审查记录记一轮；同一操作 ID
     的重试是幂等重放（只有一条事件），因此不重复计数。上限 2 的拒绝与提示属 T6，
     本函数只提供读数；`phase` 默认首版恒 1 的阶段。
     """
-    total = sum(1 for event in events
-                if event["type"] == EVENT_NODE_REVIEW
-                and event["data"].get("谱系") == lineage
-                and event["data"].get("审查阶段") == phase)
-    return max(0, total - 1)
+    return max(0, node_review_count(events, lineage, phase) - 1)
+
+
+def node_review_index(events):
+    """`node_review` 事件的规范化索引——节点结论谓词的**单一取用点**。
+
+    返回：
+    - `lineage`：{节点 ID: 谱系}，同一节点按事件顺序取最后一次定义（读路径容错；
+      写路径的 `node_lineage` 对同一节点出现多个谱系直接拒绝——两条路径的分工
+      见 T3 报告候选 4，这里不改写路径的严格性）；
+    - `nodes_with_records`：有任一 `node_review` 记录的节点 ID 集合（审查债务用）；
+    - `latest`：{(谱系, 审查阶段): 结论}，同【谱系 × 阶段】取最近一条（后写覆盖
+      先写）——「不得各自取最近一次 pass」的统一口径（D-18）。比较谓词只此一处
+      实现（T3 审查 Low ②：`review` 的轮次计数与本派生不再各写一份）。
+    """
+    lineage, latest, recorded = {}, {}, set()
+    for event in events:
+        if event["type"] != EVENT_NODE_REVIEW:
+            continue
+        data = event["data"]
+        lineage[data["节点"]] = data["谱系"]
+        latest[(data["谱系"], data["审查阶段"])] = data["verdict"]
+        recorded.add(data["节点"])
+    return {"lineage": lineage, "latest": latest, "nodes_with_records": recorded}
+
+
+def node_state(plan, events, node, index=None):
+    """节点结论状态（T4 接线口径；T5 收口失效来源与恢复，只换本函数实现）。
+
+    当前【谱系 × 当前审查阶段】下最近一条 `node_review` 结论为 `pass` →
+    `NODE_STATE_VALID`；尚无谱系（从未送审）或最近一条不是 `pass` → `invalid`。
+    节点版本坐标（声明变化即旧结论失放行资格）、前提与失效三条、范围外变化的
+    兜底判断，以及「待重新确认」（`NODE_STATE_RECHECK`）的触发与恢复都属 T5——
+    T4 只接线与调用、不自定义口径（`plan` 参数留给 T5 计算节点版本，签名不再变）。
+    """
+    index = node_review_index(events) if index is None else index
+    lineage = index["lineage"].get(node.id)
+    if lineage is None:
+        return NODE_STATE_INVALID
+    if index["latest"].get((lineage, NODE_PHASE_FIRST)) == "pass":
+        return NODE_STATE_VALID
+    return NODE_STATE_INVALID
+
+
+def node_valid_state(plan, events, node, index=None):
+    """节点结论是否有效（`node_state` 的布尔视图）——各入口只经这一个判据。"""
+    return node_state(plan, events, node, index) == NODE_STATE_VALID
+
+
+def node_state_line(plan, node, state, facts):
+    """节点状态的展示行：节点 ID ＋ 状态 ＋ 已实现成员（派发/收尾消息带它）。"""
+    members = [task.id for task in plan.tasks
+               if task.id in node.tasks and facts.get(task.id, {}).get("implemented")]
+    detail = f"（已实现成员：{'、'.join(members)}）" if members else ""
+    return f"{node.id} {NODE_STATE_TEXT[state]}{detail}"
 
 
 REVIEW_LINE_START = re.compile(r"(?:^|[\n；;])\s*(T\d+)\s*[:：]")
@@ -2617,15 +2738,9 @@ def append_events(root, slug, new):
 # 拒绝，不按计划状态静默回退。
 
 
-def derived_states(plan, events):
-    """由事件重放推导各任务的期望状态（格式 ≥4）——三档派生的单一真源（D-09/D-18）。
+def implemented_tasks(plan, events):
+    """有 `implemented` 事件的任务集合——「实现是否完成」的单一判据（三态之一）。
 
-    ① 无 `implemented` 事件 → 期望 `pending`；
-    ② 有实现证据、所属节点在【该谱系 × 当前阶段（首版恒 1）】下的**最近一条**
-       `node_review` 为 `pass` → 期望 `complete`（＝已验收，D-03）；
-    ③ 有实现证据、最近一条不是 `pass`（含审后 `fail`）→ 期望 `implemented`
-       （已实现不因节点未通过而退回「待实现」）。
-    `repair_projection` 与各入口共用这一条规则，不得各自取「最近一次 pass」。
     事件引用了计划里不存在的任务 → 无法推导，抛错拒绝（不静默忽略）。
     """
     known = {task.id for task in plan.tasks}
@@ -2642,18 +2757,27 @@ def derived_states(plan, events):
                     "事件与计划无法对应，无法推导状态，拒绝继续（不得按计划状态静默放行）。"
                 )
             implemented.add(tid)
-    # 节点当前谱系（事件里解析；T3 一个节点只有一个谱系根）与最近一条有效结论。
-    lineage_of, latest_verdict = {}, {}
-    for event in events:
-        if event["type"] != EVENT_NODE_REVIEW:
-            continue
-        data = event["data"]
-        lineage_of[data["节点"]] = data["谱系"]     # 事件顺序：后来的定义覆盖先前的
-        latest_verdict[(data["谱系"], data["审查阶段"])] = data["verdict"]
+    return implemented
+
+
+def derived_states(plan, events):
+    """由事件重放推导各任务的期望状态（格式 ≥4）——三档派生的单一真源（D-09/D-18）。
+
+    ① 无 `implemented` 事件 → 期望 `pending`；
+    ② 有实现证据、所属节点在【该谱系 × 当前阶段（首版恒 1）】下的**最近一条**
+       `node_review` 为 `pass` → 期望 `complete`（＝已验收，D-03）；
+    ③ 有实现证据、最近一条不是 `pass`（含审后 `fail`）→ 期望 `implemented`
+       （已实现不因节点未通过而退回「待实现」）。
+    实现判据（`implemented_tasks`）与节点结论判据（`node_valid_state`）都取自
+    同一处实现；`repair_projection` 与各入口共用这一条规则，不得各自取
+    「最近一次 pass」。
+    """
+    known = {task.id for task in plan.tasks}
+    implemented = implemented_tasks(plan, events)
+    index = node_review_index(events)
     passed = set()
     for node in plan.nodes:
-        lineage = lineage_of.get(node.id)
-        if lineage is not None and latest_verdict.get((lineage, NODE_PHASE_FIRST)) == "pass":
+        if node_valid_state(plan, events, node, index):
             passed.update(tid for tid in node.tasks if tid in known)
     out = {}
     for task in plan.tasks:
@@ -2724,6 +2848,159 @@ def repair_projection(root, slug, entry="（未标注）"):
         task = next(task for task in plan.tasks if task.id == item["task"])
         plan.lines[task.field_lines["状态"]] = f"- **状态**：{item['to']}"
     _write_plan(plan)
+
+
+# --------------------------------------------- 三态调度（格式 ≥4；T4：D-03/D-09/D-21）
+
+def task_states(plan, events=None):
+    """三态单一真源（格式 ≥4；D-09/T4）：{task_id: {implemented, node_valid, blocked}}。
+
+    三种判断分别计算、不得混同：
+    - `implemented`：该任务有 `implemented` 事件（实现是否完成，证据在 `record`）；
+    - `node_valid`：所属审查节点的结论是否有效（口径见 `node_state`；失效判定源、
+      版本坐标与恢复由 T5 收口——本函数只接线与调用，不自定义）；
+    - `blocked`：所属节点的**直接**跨节点上游（`wait_graph` 边上的被等待者，含
+      任务依赖导出边与显式声明边，D-21）中存在 `node_valid` 为假的节点。
+      **组内依赖不看 node_valid**——同节点内按「已实现」放行（D-03）。
+    上游未验收/失效只影响后两者与可派发性，**不改写任务状态行**：已实现的任务
+    不因上游失效退回「待实现」（三态不得互相回退）。格式 ≤3 返回空字典。
+    `events` 缺省取 `plan.events`（`load_plan` 为格式 ≥4 计划注入的事件流）。
+    """
+    if not plan.is_v4:
+        return {}
+    events = plan.events if events is None else events
+    index = node_review_index(events)
+    implemented = implemented_tasks(plan, events)
+    owner = node_owner_map(plan)
+    graph = wait_graph(plan)
+    valid = {node.id: node_valid_state(plan, events, node, index) for node in plan.nodes}
+    blocked = {node.id: any(not valid.get(up, False) for up in graph.get(node.id, ()))
+               for node in plan.nodes}
+    return {task.id: {"implemented": task.id in implemented,
+                      "node_valid": valid.get(owner.get(task.id), False),
+                      "blocked": blocked.get(owner.get(task.id), False)}
+            for task in plan.tasks}
+
+
+def node_progress(plan, events=None, facts=None):
+    """节点级就绪视图（格式 ≥4；next/slice/status/close/verify 共用一份计算）。
+
+    返回：
+    - `states`：{节点 ID: 节点结论状态}（口径见 `node_state`）；
+    - `members`：{节点 ID: [已实现的成员任务 ID]}；
+    - `unaccepted`：有已实现成员、结论不是「已验收」的节点（close/verify 的就绪门
+      看它；「待重新确认」由 T5 经 `node_state` 进入同一集合与同一校验点）；
+    - `debt_tasks`：审查债务之「已实现但未完成节点审查的任务」（T4 裁决 4）——
+      T4 口径下等价于「所在节点没有 pass 记录」；
+    - `unopened`：审查债务之「尚未开启审查的节点」——有已实现成员但尚无任何
+      `node_review` 记录。
+    """
+    empty = {"states": {}, "members": {}, "unaccepted": [], "debt_tasks": [], "unopened": []}
+    if not plan.is_v4:
+        return empty
+    events = plan.events if events is None else events
+    facts = task_states(plan, events) if facts is None else facts
+    index = node_review_index(events)
+    owner = node_owner_map(plan)
+    states = {node.id: node_state(plan, events, node, index) for node in plan.nodes}
+    members = {node.id: [task.id for task in plan.tasks
+                         if task.id in node.tasks and facts[task.id]["implemented"]]
+               for node in plan.nodes}
+    return {
+        "states": states,
+        "members": members,
+        "unaccepted": [node.id for node in plan.nodes
+                       if members[node.id] and states[node.id] != NODE_STATE_VALID],
+        "debt_tasks": [task.id for task in plan.tasks
+                       if facts[task.id]["implemented"]
+                       and states.get(owner.get(task.id), NODE_STATE_INVALID) != NODE_STATE_VALID],
+        "unopened": [node.id for node in plan.nodes
+                     if members[node.id] and node.id not in index["nodes_with_records"]],
+    }
+
+
+def node_progress_lines(progress):
+    """未验收节点与「审查债务」的展示行（无内容返回空列表；next/status/slice 共用）。"""
+    lines = []
+    if progress["unaccepted"]:
+        lines.append("未验收节点（跨节点依赖等待它们）：")
+        for nid in progress["unaccepted"]:
+            members = "、".join(progress["members"][nid])
+            lines.append(f"  {nid} {NODE_STATE_TEXT[progress['states'][nid]]}（已实现成员：{members}）")
+    debt = []
+    if progress["debt_tasks"]:
+        debt.append("已实现待审查：" + "、".join(progress["debt_tasks"]))
+    if progress["unopened"]:
+        debt.append("尚未开启审查：" + "、".join(progress["unopened"]))
+    if debt:
+        lines.append("审查债务：")
+        lines.extend("  " + item for item in debt)
+    return lines
+
+
+def readiness_problems(plan, events, task, facts=None):
+    """格式 ≥4 的派发就绪判据（T4 裁决 2）逐条原因；空列表＝可派发。
+
+    就绪＝任务 `pending` ＋ 组内上游（同节点的任务依赖）全部已实现 ＋ 所属节点的
+    **直接**跨节点上游（`wait_graph` 边：任务依赖导出边 ∪ 显式声明的节点依赖边，
+    D-21）全部「已验收」。组内依赖按「已实现」放行、不等待审查（D-03）——组内依赖
+    链不被跨节点规则阻塞，含组内依赖的节点能凑齐送审条件、不死锁；跨节点依赖等待
+    上游节点整体已验收。格式 ≤3 不调用本函数（旧路径逐字不变）。
+    """
+    facts = task_states(plan, events) if facts is None else facts
+    by_id = {item.id: item for item in plan.tasks}
+    node_by_id = {node.id: node for node in plan.nodes}
+    owner = node_owner_map(plan)
+    problems = []
+    if task.status != STATUS_PENDING:
+        detail = {STATUS_IMPLEMENTED: "已实现、等待节点审查",
+                  STATUS_COMPLETE: "已验收"}.get(task.status, "非派发状态")
+        problems.append(
+            f"{task.id} 当前状态为「{task.status}」（{detail}）——只有 pending 的任务可派发"
+        )
+    node_id = owner.get(task.id)
+    for dep in task.deps:
+        if dep not in by_id or owner.get(dep) != node_id:
+            continue   # 跨节点依赖走下面的节点级判据；不存在的依赖由 check 报
+        if not facts[dep]["implemented"]:
+            problems.append(
+                f"{task.id} 的组内上游 {dep} 尚未实现（同节点内按「已实现」放行，不等待审查）"
+            )
+    if node_id is not None:
+        for up_id in sorted(wait_graph(plan).get(node_id, ())):
+            up = node_by_id.get(up_id)
+            if up is None:
+                continue
+            state = node_state(plan, events, up)
+            if state != NODE_STATE_VALID:
+                problems.append(
+                    f"{task.id} 所属节点 {node_id} 跨节点等待 {node_state_line(plan, up, state, facts)}"
+                    "——跨节点依赖（含仅显式声明的节点依赖）须等待上游节点已验收"
+                )
+    return problems
+
+
+def require_node_acceptance(plan, events=None, entry="收尾"):
+    """格式 ≥4 的最终验证/收尾就绪门（T4 裁决 5）：存在未验收节点即不放行。
+
+    只加校验：不改验收指纹、计划指纹与既有收尾要求。「待重新确认」（T5）经
+    `node_state` 进入同一集合与同一校验点，不另开旁路。格式 ≤3 直接返回——旧路径
+    逐字不变（调用方无需按格式分流，本函数自己判）。
+    """
+    if not plan.is_v4:
+        return
+    progress = node_progress(plan, events)
+    if not progress["unaccepted"]:
+        return
+    detail = "\n".join(
+        f"  - {nid} {NODE_STATE_TEXT[progress['states'][nid]]}"
+        f"（已实现成员：{'、'.join(progress['members'][nid])}）"
+        for nid in progress["unaccepted"])
+    raise WorkflowError(
+        f"{entry} 拒绝：存在未验收的审查节点——节点是格式 4 的验收单位，"
+        "上游节点通过 `review` 之前不得进入最终验证与收尾：\n" + detail
+        + "\n（成员任务在节点通过后才映射 complete；先送审、通过后重试本命令。）"
+    )
 
 
 def _coverage_items(plan):
@@ -3310,7 +3587,8 @@ def cmd_status(args):
         f"目标：{result['goal']}",
         f"进度：{counts.get('DONE', 0)}/{len(plan.tasks)} 完成"
         + (f"，{counts.get('READY', 0)} 可执行" if counts.get("READY") else "")
-        + (f"，{counts.get('BLOCKED', 0)} 被阻塞" if counts.get("BLOCKED") else ""),
+        + (f"，{counts.get('BLOCKED', 0)} 被阻塞" if counts.get("BLOCKED") else "")
+        + (f"，{counts.get('IMPLEMENTED', 0)} 已实现待审查" if counts.get("IMPLEMENTED") else ""),
     ]
     if phase:
         lines.append(f"当前阶段：Phase {phase} — {result['phase_name']}")
@@ -3320,10 +3598,21 @@ def cmd_status(args):
             "DONE": "[x]",
             "READY": "[ ]",
             "RUNNING": "[~]",
+            "IMPLEMENTED": "[~]",
             "BLOCKED": "[-]",
         }[t["state"]]
         dep = f"  ← {', '.join(t['deps'])}" if t["deps"] else ""
         lines.append(f"  {mark} {t['id']} {t['title']}  ({t['state']}){dep}")
+    if plan.is_v4:
+        # 格式 ≥4：未验收节点 / 待重新确认 / 审查债务清单（T4 裁决 4）。
+        progress = node_progress(plan, plan.events)
+        result["node_states"] = progress["states"]
+        result["unaccepted_nodes"] = progress["unaccepted"]
+        result["review_debt"] = {"tasks": progress["debt_tasks"], "unopened": progress["unopened"]}
+        debt_lines = node_progress_lines(progress)
+        if debt_lines:
+            lines.append("")
+            lines.extend(debt_lines)
     if not plan.verify_command:
         lines.append("")
         lines.append("⚠ 未声明验证命令")
@@ -3355,10 +3644,110 @@ def cmd_gate(args):
     )
 
 
+def next_v4(plan, slug):
+    """格式 ≥4 的 `next`（T4 裁决 2/4）：就绪与展示都走三态，不另算一套。
+
+    就绪＝`pending` ＋ 组内上游已实现 ＋ 所属节点的直接跨节点上游已验收（D-03/D-21）；
+    已实现待审查的任务单独列出（不派发）；未验收节点与「审查债务」清单随展示给出。
+    """
+    events = plan.events
+    facts = task_states(plan, events)
+    progress = node_progress(plan, events, facts)
+    owner = node_owner_map(plan)
+    ready, awaiting, blocked = [], [], []
+    for task in plan.tasks:
+        if task.status == STATUS_COMPLETE:
+            continue
+        problems = readiness_problems(plan, events, task, facts)
+        if not problems:
+            ready.append(task)
+        elif task.status == STATUS_IMPLEMENTED:
+            awaiting.append({"id": task.id, "title": task.title})
+        else:
+            blocked.append({"id": task.id, "title": task.title, "deps": task.deps,
+                            "reasons": problems})
+
+    # 可合并提示（格式 ≥4 追加同节点约束）：同节点 + 互不依赖 + 文件不重叠才是合法批次。
+    batchable = []
+    if len(ready) > 1:
+        groups = {}
+        for task in ready:
+            groups.setdefault(owner.get(task.id), []).append(task)
+        for members in groups.values():
+            group = []
+            for task in members:
+                if len(group) >= MAX_BATCH_TASKS:
+                    break
+                ids = {x.id for x in group}
+                if ids & set(task.deps):
+                    continue
+                paths = {_norm_path(f) for f in task.files} - {""}
+                taken = {_norm_path(f) for x in group for f in x.files} - {""}
+                if paths and paths & taken:
+                    continue
+                group.append(task)
+            if len(group) > 1:
+                batchable = [t.id for t in group]
+                break
+
+    result = {
+        "slug": slug,
+        "ready": [{"id": t.id, "title": t.title, "parallel": t.is_parallel} for t in ready],
+        "awaiting_review": awaiting,
+        "blocked": blocked,
+        "batchable": batchable,
+        "node_states": progress["states"],
+        "unaccepted_nodes": progress["unaccepted"],
+        "review_debt": {"tasks": progress["debt_tasks"], "unopened": progress["unopened"]},
+    }
+    lines = []
+    if not ready:
+        if awaiting or blocked:
+            msg = "没有可派发的任务。"
+            if awaiting:
+                msg += f" {len(awaiting)} 个任务已实现、等待节点审查。"
+            if blocked:
+                msg += f" 剩余 {len(blocked)} 个任务被阻塞。"
+        elif plan.tasks:
+            msg = "没有可派发的任务。 全部任务已验收，进入 V 轮验证。"
+        else:
+            msg = "没有可派发的任务。 计划里没有任务。"
+        lines.append(msg)
+    else:
+        lines.append("可执行任务：")
+        for item in result["ready"]:
+            tag = "  [可并行]" if item["parallel"] else ""
+            lines.append(f"  {item['id']} {item['title']}{tag}")
+        if len(batchable) > 1:
+            lines += [
+                "",
+                f"可合并为一批：{', '.join(batchable)}"
+                "（同属一个审查节点、互不依赖、文件不重叠）",
+                f"  ——若它们是同型机械改动，用 `slice {slug} {' '.join(batchable)}`"
+                " 一次派发、一次审查；否则逐个派。",
+            ]
+    if awaiting:
+        lines += ["", "已实现待节点审查（不派发）："]
+        for item in awaiting:
+            lines.append(f"  {item['id']} {item['title']}")
+    if blocked:
+        lines.append("")
+        lines.append("被阻塞：")
+        for item in blocked:
+            lines.append(f"  {item['id']} {item['title']}")
+            lines.extend("      - " + reason for reason in item["reasons"])
+    debt_lines = node_progress_lines(progress)
+    if debt_lines:
+        lines += [""] + debt_lines
+    return result, "\n".join(lines)
+
+
 def cmd_next(args):
     root = find_project_root()
     slug = resolve_slug(root, args.slug)
     plan = load_plan(root, slug)
+    if plan.is_v4:
+        return next_v4(plan, slug)
     st = plan.states()
     ready = [t for t in plan.tasks if st[t.id] in ("READY", "RUNNING")]
     blocked = [t for t in plan.tasks if st[t.id] == "BLOCKED"]
@@ -3509,7 +3898,6 @@ def validate_batch(plan, tasks):
             "或者干脆逐个派发。"
         )
 
-    st = plan.states()
     ids = {t.id for t in tasks}
 
     # 依赖检查放在状态检查之前：有内部依赖时该任务必然处于 BLOCKED，
@@ -3523,6 +3911,30 @@ def validate_batch(plan, tasks):
                 "该逐个派发（后一个的审查要看前一个的结果）。"
             )
 
+    if plan.is_v4:
+        # 格式 ≥4（T4 裁决 3）：批次成员须同属一个审查节点（一次审查只覆盖一个
+        # 节点的归属任务）；「已完成或被阻塞」按三态（complete / 跨节点上游未验收）。
+        owner = node_owner_map(plan)
+        node_ids = {owner.get(t.id) for t in tasks}
+        if len(node_ids) > 1:
+            detail = "、".join(
+                f"{t.id}→{owner.get(t.id) or '未归属节点'}" for t in tasks)
+            raise WorkflowError(
+                f"批次跨越多个审查节点（{detail}）——合并派发是「一次审查」的粒度，"
+                "成员须同属一个节点；跨节点请拆成两次派发（节点通过后下游才解除等待）。"
+            )
+        facts = task_states(plan)
+        for t in tasks:
+            if t.status == STATUS_COMPLETE:
+                raise WorkflowError(f"{t.id} 已完成，不能再次纳入批次。")
+            if facts[t.id]["blocked"]:
+                raise WorkflowError(
+                    f"{t.id} 当前被阻塞（所属节点的跨节点上游有未验收节点），不能纳入批次。"
+                )
+        warnings = _batch_file_warnings(tasks)
+        return warnings
+
+    st = plan.states()
     for t in tasks:
         state = st[t.id]
         if state == "DONE":
@@ -3530,6 +3942,11 @@ def validate_batch(plan, tasks):
         if state == "BLOCKED":
             raise WorkflowError(f"{t.id} 当前被阻塞（依赖未完成），不能纳入批次。")
 
+    return _batch_file_warnings(tasks)
+
+
+def _batch_file_warnings(tasks):
+    """文件重叠/析不出路径的警告（≤3 与格式 ≥4 两条路径共用同一份判据）。"""
     warnings = []
     seen = {}
     for t in tasks:
@@ -3579,6 +3996,19 @@ def cmd_slice(args):
         tasks.append(t)
 
     warnings = validate_batch(plan, tasks) if len(tasks) > 1 else []
+    if plan.is_v4:
+        # 就绪校验（T4 裁决 2）：待办/块级守卫都过了仍可能未就绪——逐任务给出原因，
+        # 消息含上游节点 ID 与状态（「待重新确认」按 T5 的措辞走同一处状态文本）。
+        facts = task_states(plan)
+        problems = []
+        for t in tasks:
+            problems += readiness_problems(plan, plan.events, t, facts)
+        if problems:
+            raise WorkflowError(
+                "本次派发不满足格式 4 的就绪条件：\n  - " + "\n  - ".join(problems)
+                + "\n（组内依赖按「已实现」放行、不等待审查；跨节点依赖等待上游节点"
+                "整体已验收——先送审上游节点、通过后再重试本命令。）"
+            )
     batch = len(tasks) > 1
     label = " + ".join(t.id for t in tasks)
 
@@ -3669,6 +4099,16 @@ def cmd_slice(args):
         "warnings": warnings,
         "brief": "\n".join(header),
     }
+    if plan.is_v4:
+        # 未验收节点 / 待重新确认 / 审查债务随展示给出（T4 裁决 4）。
+        progress = node_progress(plan, plan.events)
+        result["node_states"] = progress["states"]
+        result["unaccepted_nodes"] = progress["unaccepted"]
+        result["review_debt"] = {"tasks": progress["debt_tasks"], "unopened": progress["unopened"]}
+        debt_lines = node_progress_lines(progress)
+        if debt_lines:
+            result["brief"] += ("\n\n## 审查节点状态（控制器核对用；不影响本任务范围）\n\n"
+                                + "\n".join(debt_lines))
     text = result["brief"]
     if warnings:
         text = "⚠ " + "\n⚠ ".join(warnings) + "\n\n" + text
@@ -3976,10 +4416,9 @@ def review_node(args, root, slug, plan):
     version = node_version(plan, node)
     lineage = node_lineage(events, node.id) or new_node_lineage(slug, node)
     phase = NODE_PHASE_FIRST
-    prior = sum(1 for event in events
-                if event["type"] == EVENT_NODE_REVIEW
-                and event["data"].get("谱系") == lineage
-                and event["data"].get("审查阶段") == phase)
+    # 轮次与派生同源（T3 审查 Low ②）：同谓词不再两处实现。
+    # `rounds` ＝ 本条记入后该谱系的轮次（＝记入前的记录条数，T3 候选 5）。
+    prior = node_review_count(events, lineage, phase)
     mapped = STATUS_COMPLETE if verdict == "pass" else STATUS_IMPLEMENTED
     items = owners
     event = _event(slug, lifecycle(root, slug)["cycle"], EVENT_NODE_REVIEW, {
@@ -4286,6 +4725,9 @@ def cmd_verify(args):
     slug = resolve_slug(root, args.slug)
     state = require_active(root, slug)
     plan = load_plan(root, slug)
+    # 就绪校验（T4 裁决 5）：存在未验收节点/未处理待重新确认 → 拒绝——验证与收尾
+    # 都不能绕过节点验收（格式 ≤3 时本函数直接返回，旧路径逐字不变）。
+    require_node_acceptance(plan, plan.events, "验证（verify）")
     _coverage_items(plan)
     command = args.command if args.command is not None else plan.verify_command
     before = _binding(root, plan)
@@ -4338,6 +4780,8 @@ def cmd_close(args):
         # 会拒绝向关闭周期写事件，先写会污染权威文件）。
         repair_projection(root, slug, "close")
         plan = load_plan(root, slug)   # 修复可能已回写状态行，重新取计划
+        # 就绪校验（T4 裁决 5）：未验收节点不放行——节点级理由比「未完成任务」更能指路。
+        require_node_acceptance(plan, plan.events, "收尾（close）")
     incomplete = [t.id for t in plan.tasks if t.status != "complete"]
     if not plan.tasks or incomplete:
         raise WorkflowError("没有完整任务或仍有未完成任务：" + "、".join(incomplete))
