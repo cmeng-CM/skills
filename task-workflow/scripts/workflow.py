@@ -86,6 +86,9 @@ VALID_STATUS = ["pending", "in_progress", "complete", "blocked"]
 #   3 起：方案只写一遍——声明了设计文档时，`## 方案` 退化为承接 + 增量 + 指针，
 #          方案审批的指纹绑设计文档的「一句话方案 / 背景与目标 / 做法 /
 #          备选与取舍 / 明确不做」五节（同一份内容写两遍，改一处忘一处）。
+#   4 起：计划新增 `## 审查节点` 段——审查单位从任务改为节点（节点是验收单位、
+#          任务是执行单位）。该段只在格式 ≥4 解析与校验；`init` 默认仍写 3
+#          （首版 opt-in，见 D-13），旧计划不解析此段、不新增校验。
 # 不写 `**格式**` 的计划按 1 处理——升级前建的、正在进行中的工作流不该被新校验打断。
 PLAN_FORMAT_KEY = "格式"
 APPROVAL_MODE_KEY = "审批模式"
@@ -93,7 +96,23 @@ APPROVAL_MODE_GATED = "gated"
 APPROVAL_MODE_EXECUTION = "execution"
 PLAN_FORMAT_V2 = 2
 PLAN_FORMAT_V3 = 3
+PLAN_FORMAT_V4 = 4
 PLAN_FORMAT_CURRENT = PLAN_FORMAT_V3
+
+# 审查节点（格式 ≥4）：节点块＝`### N<n> <名称>`（块标题即节点 ID）
+# ＋ 六项必填字段（归属任务 / 分组理由 / 审查职责 / 依赖节点 / 送审条件 / 兼任终审）
+# ＋ 一个可选字段（前身）。块内未知字段忽略（前向兼容）。
+NODE_SECTION = "审查节点"
+NODE_HEADER = re.compile(r"^###\s+(N\d+)\s*(.*)$")
+NODE_FIELD = re.compile(r"^(?:-\s+)?\*\*(?P<key>[^*]+?)\*\*\s*[:：]\s*(?P<value>.*)$")
+NODE_REF = re.compile(r"\bN\d+\b")
+NODE_REQUIRED_FIELDS = ("归属任务", "分组理由", "审查职责", "依赖节点", "送审条件", "兼任终审")
+NODE_FINAL_VALUES = ("是", "否")
+NODE_NONE_VALUES = ("", "无", "-", "—", "none", "n/a", "na", "null", "nil")
+REF_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9_-]*")
+HISTORY_NODE_KEYS = ("节点", "node")
+HISTORY_LINEAGE_KEYS = ("谱系", "lineage")
+HISTORY_PREDECESSOR_KEYS = ("前身", "predecessor")
 
 # 设计文档：与状态控制分开的独立产物，必须落在项目仓库里（.workflow/ 自忽略）
 DESIGN_DOC_KEY = "设计文档"
@@ -272,6 +291,54 @@ class Task:
         return re.findall(r"[`'\"]?([\w./\-]+\.[A-Za-z0-9]+)", raw)
 
 
+class Node:
+    """审查节点块（格式 ≥4）：`### N<n> <名称>` ＋ 六项必填字段 ＋ 可选「前身」。
+
+    节点是验收单位、任务是执行单位；节点 ID 就是块标题里的 `N<n>`。
+    """
+
+    def __init__(self, nid, title, line_start):
+        self.id = nid
+        self.title = title.strip()
+        self.line_start = line_start
+        self.fields = {}
+        self.field_lines = {}
+
+    def get(self, key):
+        return self.fields.get(key, "").strip()
+
+    @property
+    def tasks(self):
+        """『归属任务』里列出的任务 ID。"""
+        return sorted(set(TASK_REF.findall(self.get("归属任务"))))
+
+    @property
+    def deps(self):
+        """『依赖节点』声明的节点 ID（`无` 表示不声明）。声明即约束（D-21）。"""
+        raw = self.get("依赖节点")
+        if _none_marker(raw):
+            return []
+        return sorted(set(NODE_REF.findall(raw)))
+
+    @property
+    def is_final(self):
+        """兼任终审：恰一个节点为『是』。"""
+        return self.get("兼任终审") == "是"
+
+    @property
+    def predecessors(self):
+        """『前身』声明的引用（合法时最多一个；`无` 表示没有）。"""
+        raw = self.get("前身")
+        if _none_marker(raw):
+            return []
+        return REF_TOKEN.findall(raw)
+
+
+def _none_marker(raw):
+    """字段值是否表示「无」（避免把 none/n/a 这类词当成引用）。"""
+    return raw.strip().rstrip(".。").lower() in NODE_NONE_VALUES
+
+
 class Plan:
     def __init__(self, path, text):
         self.path = path
@@ -281,6 +348,9 @@ class Plan:
         self.decisions = []   # [{id, decision, source, rationale}]
         self.phases = []      # [(num, name, checkpoint)]
         self.tasks = []
+        self.nodes = []       # 格式 ≥4 的审查节点块；格式 ≤3 恒为空（不解析）
+        self.has_node_section = False   # 计划文本里是否有 `## 审查节点` 段（仅格式 ≥4 判定）
+        self.node_headings = []         # 段内的三级标题 (行号, 原文)，含写错的标题
         self.coverage = []    # [{target, means, type}]
         self.coverage_errors = []  # 结构诊断留在计划中，不阻断历史 closed 的只读解析。
         self.coverage_rows = {}  # 实际覆盖行及独立证据列身份；指纹复用，不再推断范围。
@@ -325,6 +395,11 @@ class Plan:
     @property
     def is_v3(self):
         return self.format_version >= PLAN_FORMAT_V3
+
+    @property
+    def is_v4(self):
+        """格式 ≥4：审查节点制（节点为验收单位）。新解析与新校验一律挂在这里。"""
+        return self.format_version >= PLAN_FORMAT_V4
 
     @property
     def design_doc_sections(self):
@@ -444,6 +519,56 @@ class Plan:
         self.verify_command = "\n".join(verify_buf).strip()
         if self.verify_command in ("未声明", "-", "无"):
             self.verify_command = ""
+        if self.is_v4:
+            self._parse_nodes()
+
+    def _parse_nodes(self):
+        """解析 `## 审查节点` 段（只在格式 ≥4 调用）。
+
+        段内每个三级标题都是节点块，块标题里的 `N<n>` 即节点 ID；块内
+        `- **字段**：值` 逐条收进 fields，未知字段忽略（前向兼容）。
+        格式 ≤3 的计划完全不走这条路径（含写坏的节点块——旧计划不该被新校验打断）。
+        """
+        inside, in_fence, current = False, False, None
+        for idx, line in enumerate(self.lines):
+            if FENCE.match(line):
+                in_fence = not in_fence
+                continue
+            if in_fence:
+                continue
+            sec = SECTION_HEADER.match(line)
+            if sec:
+                inside = sec.group(1).strip().startswith(NODE_SECTION)
+                if inside:
+                    self.has_node_section = True
+                current = None
+                continue
+            if not inside:
+                continue
+            stripped = line.strip()
+            if not stripped or stripped.startswith("<!--"):
+                continue
+            head = NODE_HEADER.match(stripped)
+            if head:
+                current = Node(head.group(1), head.group(2), idx)
+                self.nodes.append(current)
+                self.node_headings.append((idx, stripped))
+                continue
+            if re.match(r"^###\s", stripped):
+                # 段内三级标题都必须能读出节点 ID，否则节点会被静默漏掉。
+                self.node_headings.append((idx, stripped))
+                current = None
+                continue
+            if re.match(r"^#{1,6}\s", stripped):
+                current = None
+                continue
+            if current is not None:
+                fld = NODE_FIELD.match(stripped)
+                if fld:
+                    key = fld.group("key").strip()
+                    if key not in current.fields:
+                        current.fields[key] = fld.group("value").strip()
+                        current.field_lines[key] = idx
 
     def _coverage_row(self, line, idx, headers):
         if "|" not in line:
@@ -547,6 +672,156 @@ def load_plan(root, slug):
     with open(path, encoding="utf-8") as fh:
         text = fh.read()
     return Plan(path, text)
+
+
+# ------------------------------------------------------- 审查节点（格式 ≥4）
+
+def wait_graph(plan):
+    """节点等待图：{等待者: {被等待者, …}}（格式 ≥4；旧格式返回空图）。
+
+    方向统一为「等待者 → 被等待者」（D-10）：B 依赖 A → B 等待 A → 边 B → A。
+    三条来源合并为同一张图，**声明即约束**（D-21）：
+      ① 任务依赖导出的跨节点边（任务 A 依赖任务 B、两者分属不同节点）；
+      ② 显式声明的节点依赖边（`依赖节点` 字段）；
+      ③ 终审边——恰有一个终审节点时：终审 → 每个其它节点（终审等待全部验收）。
+    判环、派发与就绪检查共用这一张图；格式 ≤3 的节点集为空，返回空图。
+    """
+    graph = {node.id: set() for node in plan.nodes}
+    owner = {}
+    for node in plan.nodes:
+        for tid in node.tasks:
+            owner.setdefault(tid, node.id)
+    task_ids = {task.id for task in plan.tasks}
+    for task in plan.tasks:
+        waiter = owner.get(task.id)
+        if waiter is None:
+            continue
+        for dep in task.deps:
+            if dep not in task_ids:
+                continue
+            waited = owner.get(dep)
+            if waited and waited != waiter:
+                graph[waiter].add(waited)
+    for node in plan.nodes:
+        for dep in node.deps:
+            if dep in graph:
+                graph[node.id].add(dep)
+    finals = [node.id for node in plan.nodes if node.is_final]
+    if len(finals) == 1:
+        for nid in graph:
+            if nid != finals[0]:
+                graph[finals[0]].add(nid)
+    return graph
+
+
+def wait_cycles(graph):
+    """等待图里的环，逐个返回（形如 ['N1', 'N2', 'N1']，方向即等待者 → 被等待者）。"""
+    state, cycles = {}, []
+
+    def visit(node, stack):
+        if state.get(node) == "done":
+            return
+        if state.get(node) == "visiting":
+            if node in stack:
+                cycles.append(stack[stack.index(node):] + [node])
+            return
+        state[node] = "visiting"
+        for nxt in sorted(graph.get(node, ())):
+            visit(nxt, stack + [node])
+        state[node] = "done"
+
+    for node in sorted(graph):
+        visit(node, [])
+    return cycles
+
+
+def _id_tokens(value):
+    """从字段值里回收 ID 字符串（中文字符不参与匹配，说明文字不会混进引用）。"""
+    if isinstance(value, list):
+        return [token for item in value for token in _id_tokens(item)]
+    if not isinstance(value, str):
+        return []
+    return REF_TOKEN.findall(value)
+
+
+def _events_for_plan(plan):
+    """计划同目录下 events.jsonl 的原始事件行（坏行跳过；只服务前身解析）。"""
+    path = os.path.join(os.path.dirname(plan.path), "events.jsonl")
+    events = []
+    if not os.path.isfile(path):
+        return events
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    events.append(json.loads(line))
+                except ValueError:
+                    continue
+    except OSError:
+        return []
+    return events
+
+
+def _event_scope(event, known, roots_of):
+    """把单个事件里的节点/谱系/前身 ID 并入前身解析范围（递归进 data 等嵌套结构）。"""
+    if isinstance(event, dict):
+        node_refs, lineage_refs = [], []
+        for key, value in event.items():
+            if key in HISTORY_NODE_KEYS or key in HISTORY_PREDECESSOR_KEYS:
+                node_refs.extend(_id_tokens(value))
+            if key in HISTORY_LINEAGE_KEYS:
+                lineage_refs.extend(_id_tokens(value))
+        known.update(node_refs)
+        known.update(lineage_refs)
+        for ref in set(node_refs):
+            for root in set(lineage_refs):
+                roots_of.setdefault(ref, set()).add(root)
+        for value in event.values():
+            _event_scope(value, known, roots_of)
+    elif isinstance(event, list):
+        for item in event:
+            _event_scope(item, known, roots_of)
+
+
+def lineage_history(plan):
+    """本工作流历史记录里的 ID 集合与谱系映射：(ids, roots_of)。
+
+    ids ＝ events.jsonl 中各事件的节点/谱系/前身字段回收到的 ID 字符串；
+    roots_of ＝ 引用 → 映射到的谱系根集合（>1 即解析歧义）。
+    """
+    ids, roots_of = set(), {}
+    for event in _events_for_plan(plan):
+        _event_scope(event, ids, roots_of)
+    return ids, roots_of
+
+
+def predecessor_scope(plan, exclude=None, history=None):
+    """审查节点 {exclude 之外的} 解析『前身』的已知 ID 集合（格式 ≥4）。
+
+    known ＝ 当前计划节点 ID ∪ **其它节点**声明的前身值 ∪ 本工作流历史记录
+    （审查记录与事件中的谱系/节点 ID），并对已解析引用做链式展开。
+    `exclude` 传声明节点自己的 ID：自己的声明不为自己背书——自声明若能自证，
+    「引用不存在」永远报不出来、检查形同虚设。合法拆分不受影响：被替换节点
+    存在于历史记录，或同一前身由多个子节点分别承接时，另有一处来源。
+    history 可复用 `lineage_history(plan)` 的结果，避免逐节点重扫事件。
+    """
+    history_ids, roots_of = lineage_history(plan) if history is None else history
+    known = {node.id for node in plan.nodes}
+    for node in plan.nodes:
+        if node.id != exclude:
+            known.update(node.predecessors)
+    known.update(history_ids)
+    frontier = list(known)
+    while frontier:
+        ref = frontier.pop()
+        for root in roots_of.get(ref, ()):
+            if root not in known:
+                known.add(root)
+                frontier.append(root)
+    return known
 
 
 # ---------------------------------------------------------------- 设计文档
@@ -720,6 +995,141 @@ def _plan_subsection(plan, section, sub):
     return found, body
 
 
+def _node_findings(plan, by_id):
+    """格式 ≥4 的审查节点校验（D-01/D-05/D-10/D-21/D-09/D-11）。
+
+    判据：每个任务恰属一个节点；节点块六项必填字段齐全、值合法；依赖节点与
+    前身引用可解析（前身最多一个、不得引用在用节点、不得歧义——合并即拒绝）；
+    恰有一个终审节点且它不被任何节点等待；等待图（任务依赖导出 ∪ 显式声明 ∪
+    终审边）合并为同一张图后无环。校验只在格式 ≥4 生效（调用方负责分流）。
+    """
+    out = []
+
+    def add(level, message, task=None):
+        out.append({"level": level, "task": task, "message": message})
+
+    for idx, heading in plan.node_headings:
+        if not NODE_HEADER.match(heading):
+            add(
+                "ERROR",
+                f"L{idx + 1} 『{NODE_SECTION}』段内的三级标题必须是节点块"
+                f"（形如 `### N1 <名称>`，块标题即节点 ID）：{heading[:60]}",
+            )
+
+    if not plan.has_node_section:
+        add(
+            "ERROR",
+            f"格式 4 计划缺少 `## {NODE_SECTION}` 段——节点是格式 4 的验收单位，"
+            "每个任务必须恰属一个节点。",
+        )
+        return out
+    if not plan.nodes:
+        add("ERROR", f"『{NODE_SECTION}』段里没有任何节点块（形如 `### N1 <名称>`）。")
+        return out
+
+    node_ids = {node.id for node in plan.nodes}
+    history = lineage_history(plan)
+    finals = []
+    for node in plan.nodes:
+        for key in NODE_REQUIRED_FIELDS:
+            if not node.get(key):
+                add("ERROR", f"审查节点 {node.id} 缺少『{key}』字段（六项必填，缺一不可）。")
+        verdict = node.get("兼任终审")
+        if verdict and verdict not in NODE_FINAL_VALUES:
+            add(
+                "ERROR",
+                f"审查节点 {node.id} 的『兼任终审』只能是『是』或『否』，"
+                f"当前是『{verdict}』。",
+            )
+        if verdict == "是":
+            finals.append(node.id)
+        listed = node.tasks
+        if not node.get("归属任务"):
+            pass   # 空值/缺字段已按「缺项」报过，不再重复
+        elif not listed:
+            add("ERROR", f"审查节点 {node.id} 的『归属任务』没有列出真实任务 ID。")
+        for tid in listed:
+            if tid not in by_id:
+                add("ERROR", f"审查节点 {node.id} 的归属任务 {tid} 不存在。")
+        for dep in node.deps:
+            if dep not in node_ids:
+                add("ERROR", f"审查节点 {node.id} 依赖的节点 {dep} 不存在。")
+        refs = node.predecessors
+        if len(refs) > 1:
+            add(
+                "ERROR",
+                f"审查节点 {node.id} 声明了多个前身（{'、'.join(refs)}）——"
+                "首版不支持已送审节点合并，每个新节点最多承接一个前身。",
+            )
+        elif refs:
+            ref = refs[0]
+            roots_of = history[1]
+            if ref in node_ids:
+                add(
+                    "ERROR",
+                    f"审查节点 {node.id} 的前身 {ref} 仍是本计划中在用的节点——"
+                    "调整应替换或移除原节点，而不是并列引用。",
+                )
+            elif ref not in predecessor_scope(plan, node.id, history):
+                add(
+                    "ERROR",
+                    f"审查节点 {node.id} 的前身 {ref} 解析不到——"
+                    "前身须存在于当前计划文本或本工作流的历史记录（审查记录与事件）中。",
+                )
+            elif len(roots_of.get(ref, ())) > 1:
+                add(
+                    "ERROR",
+                    f"审查节点 {node.id} 的前身 {ref} 在历史记录里映射到多个谱系根"
+                    f"（{'、'.join(sorted(roots_of[ref]))}）——解析歧义，须人工裁定后重写。",
+                )
+
+    owners = {}
+    for node in plan.nodes:
+        for tid in node.tasks:
+            if tid in by_id:
+                owners.setdefault(tid, []).append(node.id)
+    for task in plan.tasks:
+        held = owners.get(task.id, [])
+        if not held:
+            add(
+                "ERROR",
+                f"任务 {task.id} 不属于任何审查节点——格式 4 下每个任务恰属一个节点。",
+                task.id,
+            )
+        elif len(held) > 1:
+            add(
+                "ERROR",
+                f"任务 {task.id} 同时归属审查节点 {'、'.join(held)}——每个任务恰属一个节点。",
+                task.id,
+            )
+
+    if len(finals) != 1:
+        detail = f"{len(finals)} 个" + (f"（{'、'.join(finals)}）" if finals else "")
+        add(
+            "ERROR",
+            f"格式 4 计划必须恰有一个『兼任终审：是』的审查节点，当前是 {detail}。",
+        )
+
+    graph = wait_graph(plan)
+    for cycle in wait_cycles(graph):
+        add(
+            "ERROR",
+            "节点等待图存在环（等待者 → 被等待者）：" + " → ".join(cycle)
+            + "——两条来源（任务依赖导出的跨节点边 ∪ 显式声明的节点依赖边）合并后判环。",
+        )
+    if len(finals) == 1:
+        waited_by = sorted(
+            src for src, targets in graph.items() if finals[0] in targets and src != finals[0]
+        )
+        if waited_by:
+            add(
+                "ERROR",
+                f"终审节点 {finals[0]} 不得为其它节点的上游，但 {'、'.join(waited_by)} 在等它——"
+                "终审等待全部验收，不能反过来被别人等待。",
+            )
+    return out
+
+
 def check_plan(plan, root=None):
     """返回 [{level, task, message}]，level ∈ ERROR/WARNING/INFO。"""
     out = []
@@ -776,6 +1186,10 @@ def check_plan(plan, root=None):
 
     for t in plan.tasks:
         visit(t.id, [])
+
+    # 1b. 审查节点（仅格式 ≥4）：归属、终审约束与等待图；旧格式不解析、不校验
+    if plan.is_v4:
+        out.extend(_node_findings(plan, by_id))
 
     # 2. 必填字段
     for t in plan.tasks:

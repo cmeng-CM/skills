@@ -1250,6 +1250,301 @@ class WorkflowCLI(unittest.TestCase):
         self.plan().write_text(self.plan().read_text().replace("fixture scheme", "changed scheme"))
         self.assertIn("方案", self.cli("slice", "probe", "T1", expected=1)["error"])
 
+    def node_block(self, nid, tasks, name="fixture", deps="无", final="否", pred=None,
+                   omit=None):
+        """一个审查节点块（格式 4）；omit 用来制造「缺必填字段」反例。"""
+        fields = {
+            "归属任务": tasks,
+            "分组理由": "fixture 分组理由：功能完整性与下游依赖",
+            "审查职责": "逐任务一行结论 + 节点整体结论",
+            "依赖节点": deps,
+            "送审条件": "归属任务全部已实现，必要验证完成，未解决事项列明",
+            "兼任终审": final,
+        }
+        if pred is not None:
+            fields["前身"] = pred
+        lines = [f"### {nid} {name}", ""]
+        for key, value in fields.items():
+            if key == omit:
+                continue
+            lines.append(f"- **{key}**：{value}")
+        return "\n".join(lines) + "\n"
+
+    def v4_tasks(self, pairs=(("T1", "无"), ("T2", "T1"))):
+        return "\n".join(
+            f"#### {tid} fixture\n"
+            "- **文件**：source.py\n"
+            f"- **依赖**：{deps}\n"
+            "- **并行**：否\n"
+            "- **做法**：fixture 做法：只改夹具文本\n"
+            "- **接口**：consumes 无 / produces 无\n"
+            "- **预期**：fixture 预期结果\n"
+            "- **验收**：结果正确\n"
+            "- **失败信号**：结果错误\n"
+            "- **决策**：D-01\n"
+            "- **状态**：pending\n"
+            for tid, deps in pairs)
+
+    def make_v4_plan(self, slug="v4", nodes=None, tasks=None, version=4, events=None,
+                     section=True):
+        """格式 4 fixture；nodes=None 时用合法的「单节点兼任终审」段。"""
+        if not (self.root / ".workflow" / slug).exists():
+            self.cli("init", slug, "--goal", "fixture v4")
+        if tasks is None:
+            tasks = self.v4_tasks()
+        if nodes is None:
+            nodes = self.node_block("N1", "T1, T2", final="是")
+        head = (
+            "**Goal**: fixture\n"
+            f"**格式**: {version}\n"
+            "**设计文档**: 无 — 独立临时回归测试不需要单独设计文档\n"
+            "## 方案\n### 背景与目标\nfixture 为什么做、做完是什么样\n"
+            "## 验证命令\n```sh\ntrue\n```\n"
+            "## 决策\n| ID | 决策 | 来源 | 理由 |\n|---|---|---|---|\n"
+            "| D-01 | fixture decision | 用户 | fixture rationale |\n"
+            "## 验证覆盖\n| 对象 | 验证手段 | 类型 | 必需性 | 证据 |\n|---|---|---|---|---|\n"
+            "| D-01 | `source.py::test_example` | 自动化 | 必需 | |\n"
+            "### 不验证的部分\n- 无\n")
+        middle = ("## 审查节点\n\n" + nodes + "\n") if section else ""
+        self.plan(slug).write_text(head + middle + "## 阶段\n### Phase 1: fixture\n\n" + tasks)
+        if events is not None:
+            (self.root / ".workflow" / slug / "events.jsonl").write_text(
+                "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events))
+
+    def node_event(self, node, lineage, event_id="evt-1"):
+        return {"schema": 1, "id": event_id, "type": "node_review",
+                "time": "2026-10-15T10:00:00+08:00", "workflow": "fixture", "cycle": 1,
+                "data": {"节点": node, "谱系": lineage}}
+
+    def check_messages(self, slug="v4", expected=2):
+        return [error["message"] for error in self.cli("check", slug, expected=expected)["errors"]]
+
+    def test_review_nodes_legal_v4_parses_fields_and_zero_errors(self):
+        nodes = (self.node_block("N1", "T1")
+                 + self.node_block("N2", "T2", deps="N1", final="是"))
+        self.make_v4_plan(slug="legal", nodes=nodes,
+                          tasks=self.v4_tasks((("T1", "无"), ("T2", "T1"))))
+        result = self.cli("check", "legal")
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["errors"], [])
+        plan = workflow.load_plan(str(self.root), "legal")
+        self.assertTrue(plan.is_v4)
+        self.assertTrue(plan.has_node_section)
+        self.assertEqual([node.id for node in plan.nodes], ["N1", "N2"])
+        first, second = plan.nodes
+        self.assertEqual(first.tasks, ["T1"])
+        self.assertEqual(first.deps, [])
+        self.assertFalse(first.is_final)
+        self.assertEqual(first.predecessors, [])
+        self.assertEqual(first.get("分组理由"), "fixture 分组理由：功能完整性与下游依赖")
+        self.assertEqual(first.get("审查职责"), "逐任务一行结论 + 节点整体结论")
+        self.assertEqual(first.get("送审条件"), "归属任务全部已实现，必要验证完成，未解决事项列明")
+        self.assertEqual(second.tasks, ["T2"])
+        self.assertEqual(second.deps, ["N1"])
+        self.assertTrue(second.is_final)
+        # 等待图：等待者 → 被等待者；终审边＝终审 → 每个其它节点（D-10/D-21）。
+        self.assertEqual(workflow.wait_graph(plan), {"N1": set(), "N2": {"N1"}})
+
+    def test_review_nodes_wait_graph_merges_task_and_declared_and_final_edges(self):
+        nodes = (self.node_block("N1", "T1")
+                 + self.node_block("N2", "T2", deps="N1")
+                 + self.node_block("N3", "T3", deps="N2", final="是"))
+        self.make_v4_plan(slug="graph", nodes=nodes,
+                          tasks=self.v4_tasks((("T1", "无"), ("T2", "T1"), ("T3", "T2"))))
+        self.assertEqual(self.cli("check", "graph")["errors"], [])
+        plan = workflow.load_plan(str(self.root), "graph")
+        self.assertEqual(workflow.wait_graph(plan),
+                         {"N1": set(), "N2": {"N1"}, "N3": {"N1", "N2"}})
+
+    def test_review_nodes_wait_cycle_from_declaration_only(self):
+        nodes = (self.node_block("N1", "T1", deps="N2")
+                 + self.node_block("N2", "T2", deps="N1")
+                 + self.node_block("N3", "T3", final="是"))
+        self.make_v4_plan(slug="decl-cycle", nodes=nodes,
+                          tasks=self.v4_tasks((("T1", "无"), ("T2", "无"), ("T3", "无"))))
+        self.assertEqual(
+            self.check_messages("decl-cycle"),
+            ["节点等待图存在环（等待者 → 被等待者）：N1 → N2 → N1——"
+             "两条来源（任务依赖导出的跨节点边 ∪ 显式声明的节点依赖边）合并后判环。"],
+        )
+
+    def test_review_nodes_wait_cycle_from_mixed_sources(self):
+        """任务依赖 A→B ＋ 声明 B→A：各自无环、合并成环（第七轮审阅用例）。"""
+        mixed = (self.node_block("N1", "T1")
+                 + self.node_block("N2", "T2", deps="N1")
+                 + self.node_block("N3", "T3", final="是"))
+        tasks = self.v4_tasks((("T1", "T2"), ("T2", "无"), ("T3", "无")))
+        self.make_v4_plan(slug="mixed", nodes=mixed, tasks=tasks)
+        plan = workflow.load_plan(str(self.root), "mixed")
+        self.assertEqual(workflow.wait_cycles(workflow.wait_graph(plan)), [["N1", "N2", "N1"]])
+        self.assertEqual(
+            self.check_messages("mixed"),
+            ["节点等待图存在环（等待者 → 被等待者）：N1 → N2 → N1——"
+             "两条来源（任务依赖导出的跨节点边 ∪ 显式声明的节点依赖边）合并后判环。"],
+        )
+        # 单来源各自无环：去掉声明边 → 无环；去掉任务依赖 → 无环。
+        self.make_v4_plan(slug="mixed-task-only",
+                          nodes=(self.node_block("N1", "T1")
+                                 + self.node_block("N2", "T2")
+                                 + self.node_block("N3", "T3", final="是")),
+                          tasks=tasks)
+        self.assertEqual(self.cli("check", "mixed-task-only")["errors"], [])
+        self.make_v4_plan(slug="mixed-declared-only",
+                          nodes=(self.node_block("N1", "T1")
+                                 + self.node_block("N2", "T2", deps="N1")
+                                 + self.node_block("N3", "T3", final="是")),
+                          tasks=self.v4_tasks((("T1", "无"), ("T2", "无"), ("T3", "无"))))
+        self.assertEqual(self.cli("check", "mixed-declared-only")["errors"], [])
+
+    def test_review_nodes_final_scheduling_constraints(self):
+        self.make_v4_plan(slug="two-finals",
+                          nodes=(self.node_block("N1", "T1", final="是")
+                                 + self.node_block("N2", "T2", final="是")))
+        self.assertEqual(
+            self.check_messages("two-finals"),
+            ["格式 4 计划必须恰有一个『兼任终审：是』的审查节点，当前是 2 个（N1、N2）。"],
+        )
+        self.make_v4_plan(slug="final-waited",
+                          nodes=(self.node_block("N1", "T1", deps="N2")
+                                 + self.node_block("N2", "T2", final="是")))
+        messages = self.check_messages("final-waited")
+        self.assertEqual(len(messages), 2)
+        self.assertIn("节点等待图存在环（等待者 → 被等待者）：N1 → N2 → N1", messages[0])
+        self.assertEqual(
+            messages[1],
+            "终审节点 N2 不得为其它节点的上游，但 N1 在等它——终审等待全部验收，不能反过来被别人等待。",
+        )
+
+    def test_review_nodes_missing_and_invalid_fields_carry_node_id(self):
+        self.make_v4_plan(slug="missing", nodes=self.node_block(
+            "N1", "T1, T2", final="是", omit="分组理由"))
+        self.assertEqual(
+            self.check_messages("missing"),
+            ["审查节点 N1 缺少『分组理由』字段（六项必填，缺一不可）。"],
+        )
+        self.make_v4_plan(slug="bad-verdict", nodes=self.node_block("N1", "T1, T2", final="yes"))
+        messages = self.check_messages("bad-verdict")
+        self.assertIn("审查节点 N1 的『兼任终审』只能是『是』或『否』，当前是『yes』。", messages)
+        self.make_v4_plan(slug="empty-owner", nodes=self.node_block("N1", "", final="是"))
+        messages = self.check_messages("empty-owner")
+        self.assertIn("审查节点 N1 缺少『归属任务』字段（六项必填，缺一不可）。", messages)
+        self.assertNotIn("审查节点 N1 的『归属任务』没有列出真实任务 ID。", messages)
+        self.make_v4_plan(slug="prose-owner", nodes=self.node_block(
+            "N1", "见分组理由", final="是"))
+        self.assertIn("审查节点 N1 的『归属任务』没有列出真实任务 ID。",
+                      self.check_messages("prose-owner"))
+
+    def test_review_nodes_reference_errors(self):
+        nodes = (self.node_block("N1", "T1", deps="N9")
+                 + self.node_block("N2", "T2", final="是"))
+        self.make_v4_plan(slug="dep-missing", nodes=nodes)
+        self.assertEqual(self.check_messages("dep-missing"),
+                         ["审查节点 N1 依赖的节点 N9 不存在。"])
+        nodes = (self.node_block("N1", "T1", pred="N9")
+                 + self.node_block("N2", "T2", final="是"))
+        self.make_v4_plan(slug="pred-missing", nodes=nodes)
+        self.assertEqual(
+            self.check_messages("pred-missing"),
+            ["审查节点 N1 的前身 N9 解析不到——"
+             "前身须存在于当前计划文本或本工作流的历史记录（审查记录与事件）中。"],
+        )
+        self.make_v4_plan(slug="task-unknown", nodes=self.node_block("N1", "T1, T9", final="是"))
+        messages = self.check_messages("task-unknown")
+        self.assertEqual(messages, [
+            "审查节点 N1 的归属任务 T9 不存在。",
+            "任务 T2 不属于任何审查节点——格式 4 下每个任务恰属一个节点。",
+        ])
+        self.make_v4_plan(slug="task-shared",
+                          nodes=(self.node_block("N1", "T1", final="是")
+                                 + self.node_block("N2", "T1, T2")))
+        self.assertIn("任务 T1 同时归属审查节点 N1、N2——每个任务恰属一个节点。",
+                      self.check_messages("task-shared"))
+        self.make_v4_plan(slug="no-section", section=False)
+        self.assertEqual(
+            self.check_messages("no-section"),
+            ["格式 4 计划缺少 `## 审查节点` 段——节点是格式 4 的验收单位，"
+             "每个任务必须恰属一个节点。"],
+        )
+        self.make_v4_plan(slug="no-blocks", nodes="")
+        self.assertEqual(
+            self.check_messages("no-blocks"),
+            ["『审查节点』段里没有任何节点块（形如 `### N1 <名称>`）。"],
+        )
+        self.make_v4_plan(slug="bad-heading", nodes="### 说明\n\n一些说明文字\n"
+                          + self.node_block("N1", "T1, T2", final="是"))
+        self.assertTrue(any("三级标题必须是节点块" in message and "### 说明" in message
+                            for message in self.check_messages("bad-heading")))
+
+    def test_review_nodes_merge_rejected_and_legal_splits_accepted(self):
+        self.make_v4_plan(slug="multi-pred", nodes=self.node_block(
+            "N1", "T1, T2", pred="N7, N8", final="是"))
+        self.assertEqual(
+            self.check_messages("multi-pred"),
+            ["审查节点 N1 声明了多个前身（N7、N8）——"
+             "首版不支持已送审节点合并，每个新节点最多承接一个前身。"],
+        )
+        self.make_v4_plan(slug="pred-in-use",
+                          nodes=(self.node_block("N1", "T1", pred="N2")
+                                 + self.node_block("N2", "T2", final="是")))
+        self.assertEqual(
+            self.check_messages("pred-in-use"),
+            ["审查节点 N1 的前身 N2 仍是本计划中在用的节点——"
+             "调整应替换或移除原节点，而不是并列引用。"],
+        )
+        history = [self.node_event("N0", "L1")]
+        self.make_v4_plan(slug="split-history",
+                          nodes=(self.node_block("N1", "T1", pred="N0")
+                                 + self.node_block("N2", "T2", final="是")),
+                          events=history)
+        self.assertEqual(self.cli("check", "split-history")["errors"], [])
+        self.make_v4_plan(slug="split-lineage",
+                          nodes=(self.node_block("N1", "T1", pred="L1")
+                                 + self.node_block("N2", "T2", final="是")),
+                          events=history)
+        self.assertEqual(self.cli("check", "split-lineage")["errors"], [])
+        # 同一前身由多个子节点分别承接（拆分场景，④）：各自继承同一谱系根。
+        self.make_v4_plan(slug="split-shared",
+                          nodes=(self.node_block("N1", "T1", pred="N0")
+                                 + self.node_block("N2", "T2", pred="N0")
+                                 + self.node_block("N3", "T3", final="是")),
+                          tasks=self.v4_tasks((("T1", "无"), ("T2", "无"), ("T3", "无"))),
+                          events=history)
+        self.assertEqual(self.cli("check", "split-shared")["errors"], [])
+        ambiguous = [self.node_event("N0", "L1", "evt-1"), self.node_event("N0", "L2", "evt-2")]
+        self.make_v4_plan(slug="pred-ambiguous",
+                          nodes=(self.node_block("N1", "T1", pred="N0")
+                                 + self.node_block("N2", "T2", final="是")),
+                          events=ambiguous)
+        self.assertEqual(
+            self.check_messages("pred-ambiguous"),
+            ["审查节点 N1 的前身 N0 在历史记录里映射到多个谱系根（L1、L2）——"
+             "解析歧义，须人工裁定后重写。"],
+        )
+
+    def test_review_nodes_format3_ignores_section_and_init_stays_v3(self):
+        self.cli("init", "fresh", "--goal", "fixture")
+        self.assertIn("**格式**: 3", self.plan("fresh").read_text())
+        self.assertEqual(workflow.PLAN_FORMAT_CURRENT, 3)
+        self.make_v4_plan(slug="old", version=3)
+        before = subprocess.run(
+            [sys.executable, "-B", str(SCRIPT), "check", "old"],
+            cwd=self.root, capture_output=True, text=True)
+        self.assertEqual(before.returncode, 0, before.stdout + before.stderr)
+        plan = workflow.load_plan(str(self.root), "old")
+        self.assertEqual(plan.nodes, [])
+        self.assertFalse(plan.has_node_section)
+        illegal = ("### N1 只有一个字段\n\n- **归属任务**：T1\n- **依赖节点**：N9\n"
+                   "- **兼任终审**：是\n- **前身**：N8, N7\n\n"
+                   "### 说明\n\n### N2 另一个终审\n\n- **归属任务**：T9\n- **兼任终审**：是\n")
+        self.make_v4_plan(slug="old", version=3, nodes=illegal)
+        after = subprocess.run(
+            [sys.executable, "-B", str(SCRIPT), "check", "old"],
+            cwd=self.root, capture_output=True, text=True)
+        self.assertEqual(after.returncode, 0, after.stdout + after.stderr)
+        self.assertEqual(before.stdout, after.stdout)
+        self.assertEqual(before.stderr, after.stderr)
+        self.assertEqual(workflow.load_plan(str(self.root), "old").nodes, [])
+
 
 if __name__ == "__main__":
     unittest.main()
