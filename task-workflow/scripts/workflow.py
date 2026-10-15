@@ -11,6 +11,7 @@
     workflow.py slice   [slug] <task-id>
     workflow.py record  [slug] <task-id> --commits <range> --verdict <clean|issues>   （格式 ≤3）
     workflow.py record  [slug] <task-id> --commits <range> --evidence "<验收与结果>" --operation-id <id>  （格式 ≥4，两态记账）
+    workflow.py review  [slug] <N1> --verdict <pass|fail> --commits <range> --lines "<T1: 结论＋依据；…>" --evidence "<引用>" --operation-id <id>  （格式 ≥4，节点审查）
     workflow.py check   [slug]
     workflow.py approve [slug] <方案|计划> --by "<用户的原话>"
     workflow.py gate    [slug] --reason "<升级原因>"
@@ -135,6 +136,13 @@ REF_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9_-]*")
 HISTORY_NODE_KEYS = ("节点", "node")
 HISTORY_LINEAGE_KEYS = ("谱系", "lineage")
 HISTORY_PREDECESSOR_KEYS = ("前身", "predecessor")
+
+# 节点审查（T3：D-01/D-03/D-15/D-18）。审查阶段首版恒为 1（阶段递增属 T6，
+# 此处只带默认值，不发明推进语义）；节点版本只由声明字段决定——剔除运行字段
+# 之后，改 `状态` 不动版本，改任务验收要求等声明即换版本。
+NODE_PHASE_FIRST = 1
+NODE_RUN_FIELDS = ("状态",)
+NODE_REVIEW_VERDICTS = ("pass", "fail")
 
 # 设计文档：与状态控制分开的独立产物，必须落在项目仓库里（.workflow/ 自忽略）
 DESIGN_DOC_KEY = "设计文档"
@@ -1944,11 +1952,13 @@ def _hash_file(h, path):
 # ---------------------------------------------------------------- 结构化证据（旧账本只读兼容）
 
 # 格式 ≥4 新增的事件类型（D-04）：`implemented` 承载两态记账与操作 ID 协议，
-# `projection_repair` 记录投影自动修复。事件名字面量一律走这两个常量。
+# `node_review` 承载节点审查结论（T3），`projection_repair` 记录投影自动修复。
+# 事件名字面量一律走这三个常量。
 EVENT_IMPLEMENTED = "implemented"
+EVENT_NODE_REVIEW = "node_review"
 PROJECTION_REPAIR = "projection_repair"
 EVENT_TYPES = {"start", "verify", "manual", "waiver", "evidence", "command_retired", "close", "reopen",
-               EVENT_IMPLEMENTED, PROJECTION_REPAIR}
+               EVENT_IMPLEMENTED, EVENT_NODE_REVIEW, PROJECTION_REPAIR}
 VIEW_MARKER = "<!-- workflow-events-view -->"
 
 
@@ -2113,6 +2123,113 @@ def restore_ledger_rows(root, slug, event):
 def _digest(value):
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
                                      separators=(",", ":")).encode()).hexdigest()
+
+
+# --------------------------------------------- 节点审查（格式 ≥4；T3：D-01/D-03/D-15/D-18）
+
+def node_version(plan, node):
+    """节点版本：{节点块 ＋ 各归属任务块}声明字段规范化文本的 sha256 前 16 位（D-18）。
+
+    剔除 `状态` 等运行字段：只改运行状态不换版本；节点声明或任务要求（含验收定义）
+    变化即版本变化——旧结论属于旧版本，`review` 记录同时保存版本，供后续判定沿用
+    （比较与失效规则属 T5，这里只负责稳定计算并随审查记录保存）。
+    """
+    def declared(fields):
+        return {key: value for key, value in sorted(fields.items())
+                if key not in NODE_RUN_FIELDS}
+
+    by_id = {task.id: task for task in plan.tasks}
+    payload = {
+        "node": {"id": node.id, "fields": declared(node.fields)},
+        "tasks": [{"id": tid, "fields": declared(by_id[tid].fields) if tid in by_id else {}}
+                  for tid in node.tasks],
+    }
+    return _digest(payload)[:16]
+
+
+def node_lineage(events, node_id):
+    """该节点已有的审查谱系根（从 `node_review` 事件解析）；没有即 None。
+
+    谱系根在首次送审时生成并随事件持久化，此后一律复用：重放/重试不会重新生成，
+    只改节点声明也不换谱系（结论版本用 `节点版本` 另记）。同一节点出现多个不同谱系
+    → 身份不唯一，拒绝继续。
+    """
+    found = []
+    for event in events:
+        if event["type"] != EVENT_NODE_REVIEW or event["data"].get("节点") != node_id:
+            continue
+        lineage = event["data"]["谱系"]
+        if lineage not in found:
+            found.append(lineage)
+    if len(found) > 1:
+        raise WorkflowError(
+            f"节点 {node_id} 在事件里出现了多个谱系根（{'、'.join(found)}）——"
+            "审查谱系是稳定身份，必须唯一，拒绝继续（先修复事件文件里的重复条目）。"
+        )
+    return found[0] if found else None
+
+
+def new_node_lineage(slug, node):
+    """首次送审生成谱系根 ID：`<节点ID>-<8 位摘要>`（含节点 ID 便于人读）。
+
+    只在事件里解析不到谱系时调用一次，随后随事件持久化；摘要取工作流与节点 ID，
+    与节点版本无关——声明变化不换谱系，只换结论版本。
+    """
+    return f"{node.id}-{_digest({'workflow': slug, 'node': node.id})[:8]}"
+
+
+def round_count(events, lineage, phase=NODE_PHASE_FIRST):
+    """修复轮次计数：同【谱系 × 审查阶段】内 `node_review` 事件数 − 1，下限 0。
+
+    首审不计轮；「修复＋复核（含主控核对）」每多一条审查记录记一轮；同一操作 ID
+    的重试是幂等重放（只有一条事件），因此不重复计数。上限 2 的拒绝与提示属 T6，
+    本函数只提供读数；`phase` 默认首版恒 1 的阶段。
+    """
+    total = sum(1 for event in events
+                if event["type"] == EVENT_NODE_REVIEW
+                and event["data"].get("谱系") == lineage
+                and event["data"].get("审查阶段") == phase)
+    return max(0, total - 1)
+
+
+REVIEW_LINE_START = re.compile(r"(?:^|[\n；;])\s*(T\d+)\s*[:：]")
+
+
+def parse_review_lines(raw, owners):
+    """解析 `--lines`（宽松）：`T<n>:` 起一行，结论取到下一个行首。
+
+    返回 (rows, problem)：rows ＝ [{task, conclusion}] 按书写顺序；problem 非空即
+    拒绝。宽松点：`；`、`;`、换行都能分隔，行首空白与全/半角冒号都认，结论正文里
+    出现别的标点不影响（只有下一个 `T<n>:` 才另起一行）。严格点：任务集合必须
+    **恰好等于**归属任务集合（缺、多、重复行任一即拒绝，信息列明差异），且每行结论
+    非空——行数只证明覆盖记录齐全，不证明检查充分。
+    """
+    matches = list(REVIEW_LINE_START.finditer(raw))
+    if not matches:
+        return [], "没有解析出任何 `<任务ID>: <结论＋依据>` 行"
+    rows = []
+    for index, match in enumerate(matches):
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(raw)
+        rows.append({"task": match.group(1), "conclusion": raw[start:end].strip()})
+    tasks = [row["task"] for row in rows]
+    owner_set = set(owners)
+    duplicates = sorted({tid for tid in tasks if tasks.count(tid) > 1})
+    missing = [tid for tid in owners if tid not in set(tasks)]
+    extra = sorted(set(tasks) - owner_set)
+    blank = [row["task"] for row in rows if not row["conclusion"]]
+    problems = []
+    if duplicates:
+        problems.append("重复行：" + "、".join(duplicates))
+    if missing:
+        problems.append("缺行：" + "、".join(missing))
+    if extra:
+        problems.append("多行：" + "、".join(extra))
+    if blank:
+        problems.append("缺结论＋依据：" + "、".join(blank))
+    if problems:
+        return rows, "；".join(problems) + f"——必须逐行覆盖归属任务 {'、'.join(owners)}"
+    return rows, None
 
 
 def acceptance_fingerprint(plan):
@@ -2320,6 +2437,45 @@ def parse_events(lines, slug):
                                       for key in ("section", "row"))
                                for item in ledger_rows)):
                     raise ValueError("已实现事件缺少账本行")
+            if kind == EVENT_NODE_REVIEW:
+                # 节点审查记录：节点、谱系、阶段、节点版本、已审范围、逐任务行、结论、
+                # 前提与未关闭问题占位（前提语义随 T5）、请求摘要与 receipt 缺一不可。
+                if (not isinstance(data.get("节点"), str) or not data["节点"].strip()
+                        or not isinstance(data.get("谱系"), str) or not data["谱系"].strip()
+                        or type(data.get("审查阶段")) is not int or data["审查阶段"] < 1
+                        or data.get("verdict") not in NODE_REVIEW_VERDICTS):
+                    raise ValueError("节点审查事件缺少节点、谱系、审查阶段或结论")
+                if not re.fullmatch(r"[a-f0-9]{16}", str(data.get("节点版本", ""))):
+                    raise ValueError("节点审查事件缺少节点版本")
+                if (not isinstance(data.get("commits"), str)
+                        or not isinstance(data.get("evidence"), str) or not data["evidence"].strip()):
+                    raise ValueError("节点审查事件缺少已审提交范围或审查依据")
+                if (not isinstance(data.get("entry"), str) or not data["entry"].strip()
+                        or not isinstance(data.get("request"), str)
+                        or not re.fullmatch(r"[a-f0-9]{64}", data["request"])):
+                    raise ValueError("节点审查事件缺少入口或请求摘要")
+                if operation_id_problem(data.get("operation_id")) is not None:
+                    raise ValueError("节点审查事件的操作 ID 无效")
+                if (not isinstance(data.get("premises"), list) or not all(
+                        isinstance(item, str) and item.strip() for item in data["premises"])):
+                    raise ValueError("节点审查事件缺少前提占位")
+                if (not isinstance(data.get("open_issues"), list) or not all(
+                        isinstance(item, str) and item.strip() for item in data["open_issues"])):
+                    raise ValueError("节点审查事件缺少未关闭问题占位")
+                lines = data.get("lines")
+                if not isinstance(lines, list) or not lines:
+                    raise ValueError("节点审查事件缺少逐任务行")
+                for row in lines:
+                    if (not isinstance(row, dict)
+                            or any(not isinstance(row.get(key), str) or not row[key].strip()
+                                   for key in ("task", "conclusion"))):
+                        raise ValueError("节点审查事件的逐任务行缺少任务或结论")
+                if len({row["task"] for row in lines}) != len(lines):
+                    raise ValueError("节点审查事件的逐任务行有重复任务")
+                receipt = data.get("receipt")
+                if (not isinstance(receipt, dict) or not isinstance(receipt.get("result"), dict)
+                        or not isinstance(receipt.get("text"), str)):
+                    raise ValueError("节点审查事件缺少结果 receipt")
             if kind == PROJECTION_REPAIR:
                 repairs = data.get("repairs")
                 if (not isinstance(data.get("entry"), str) or not data["entry"].strip()
@@ -2422,6 +2578,11 @@ def sync_event_view(root, slug, events=None):
         if event["type"] == "verify":
             detail = (f"命令：{data['command']}\n退出码：{data['exit_code']}；稳定：{data['stable']}"
                       f"\n工作树：{data['fingerprint']}；验收：{data['acceptance']}\n输出：{data['receipt']}")
+        elif event["type"] == EVENT_NODE_REVIEW:
+            detail = (f"节点 {data['节点']} → {data['verdict']}；谱系 {data['谱系']}，"
+                      f"阶段 {data['审查阶段']}，版本 {data['节点版本']}\n"
+                      f"已审范围：{data['commits'] or '—'}；依据：{data['evidence']}\n"
+                      + "\n".join(f"{row['task']}：{row['conclusion']}" for row in data["lines"]))
         elif event["type"] in ("manual", "waiver"):
             detail = (f"{data['item']}：{data.get('status', 'waived')}；{data.get('reason', '')}"
                       f"\n用户答复：{data['by']}\n来源：{data['source']}")
@@ -2451,19 +2612,20 @@ def append_events(root, slug, new):
 
 # --------------------------------------------- 状态投影（格式 ≥4；D-04）
 
-# 任务状态的推导序：pending < implemented < complete。投影落后于推导 → 自动修复；
-# 投影领先（计划写了实现态却没有对应事件）→ 拒绝，不按计划状态静默回退。
-_STATUS_ORDER = {STATUS_PENDING: 0, STATUS_IMPLEMENTED: 1, STATUS_COMPLETE: 2}
-# 当前引擎能由事件推导出的状态（T2 两档）。`complete` 的推导来源＝节点审查通过后
-# 映射，随 T3 引入；在那之前它出现在计划里属「无法推导」，不是「投影领先」。
-DERIVED_STATUSES_V4 = (STATUS_PENDING, STATUS_IMPLEMENTED)
+# 任务状态的推导与投影修复方向（T3 裁决 2）：有实现证据时不一致一律按事件推导修复
+# （落后修复上；`complete` 缺 `pass` 支撑修复下）；投影声称有进度却没有实现证据 →
+# 拒绝，不按计划状态静默回退。
 
 
 def derived_states(plan, events):
-    """由事件重放推导各任务的期望状态（格式 ≥4）。
+    """由事件重放推导各任务的期望状态（格式 ≥4）——三档派生的单一真源（D-09/D-18）。
 
-    本任务（T2）两档：某任务存在 `implemented` 事件 → 期望 `implemented`；
-    否则期望 `pending`。节点审查通过后的 `complete` 映射属 T3，届时在此扩展。
+    ① 无 `implemented` 事件 → 期望 `pending`；
+    ② 有实现证据、所属节点在【该谱系 × 当前阶段（首版恒 1）】下的**最近一条**
+       `node_review` 为 `pass` → 期望 `complete`（＝已验收，D-03）；
+    ③ 有实现证据、最近一条不是 `pass`（含审后 `fail`）→ 期望 `implemented`
+       （已实现不因节点未通过而退回「待实现」）。
+    `repair_projection` 与各入口共用这一条规则，不得各自取「最近一次 pass」。
     事件引用了计划里不存在的任务 → 无法推导，抛错拒绝（不静默忽略）。
     """
     known = {task.id for task in plan.tasks}
@@ -2473,15 +2635,35 @@ def derived_states(plan, events):
             continue
         for tid in event["data"]["tasks"]:
             if tid not in known:
-                # T3/T5：改名/拆分/调整是设计里的预期场景，届时须用谱系解析放宽这条
+                # T5：改名/拆分/调整是设计里的预期场景，届时须用谱系解析放宽这条
                 # 拒绝（给出合法恢复路径）；在此之前它是唯一出路——不得静默忽略。
                 raise WorkflowError(
                     f"事件 {event['id']}（implemented）引用了计划里没有的任务 {tid}——"
                     "事件与计划无法对应，无法推导状态，拒绝继续（不得按计划状态静默放行）。"
                 )
             implemented.add(tid)
-    return {task.id: (STATUS_IMPLEMENTED if task.id in implemented else STATUS_PENDING)
-            for task in plan.tasks}
+    # 节点当前谱系（事件里解析；T3 一个节点只有一个谱系根）与最近一条有效结论。
+    lineage_of, latest_verdict = {}, {}
+    for event in events:
+        if event["type"] != EVENT_NODE_REVIEW:
+            continue
+        data = event["data"]
+        lineage_of[data["节点"]] = data["谱系"]     # 事件顺序：后来的定义覆盖先前的
+        latest_verdict[(data["谱系"], data["审查阶段"])] = data["verdict"]
+    passed = set()
+    for node in plan.nodes:
+        lineage = lineage_of.get(node.id)
+        if lineage is not None and latest_verdict.get((lineage, NODE_PHASE_FIRST)) == "pass":
+            passed.update(tid for tid in node.tasks if tid in known)
+    out = {}
+    for task in plan.tasks:
+        if task.id not in implemented:
+            out[task.id] = STATUS_PENDING
+        elif task.id in passed:
+            out[task.id] = STATUS_COMPLETE
+        else:
+            out[task.id] = STATUS_IMPLEMENTED
+    return out
 
 
 def _write_plan(plan):
@@ -2491,19 +2673,22 @@ def _write_plan(plan):
 
 
 def repair_projection(root, slug, entry="（未标注）"):
-    """格式 ≥4：核对计划状态投影与事件重放推导，落后即修复；领先或不可推导即拒绝。
+    """格式 ≥4：核对计划状态投影与事件重放推导，按事件双向修复；无证据的领先即拒绝。
 
     写入顺序与记账一致（先事件、后状态）：不一致时先写 `projection_repair` 事件
     （含触发入口与逐任务 from→to），再回写计划状态；随后原操作照常继续。
-    事件缺失（计划写了实现态却没有对应事件）或状态无法推导 → 抛错拒绝：
-    events.jsonl 是权威记录，计划状态只是可重放投影，不一致不得静默放过。
+    修复方向按事件推导，双向（T3 裁决 2）：有实现证据时一律修复到推导值——
+    投影落后修复上（pending→implemented、implemented→complete，后者是审查通过后
+    中断的常见残留态），投影 `complete` 但无 `pass` 支撑修复下（`fail` 后中断的
+    合法残留态）。投影声称 `implemented`/`complete` 而**没有任何实现证据** → 抛错
+    拒绝：events.jsonl 是权威记录，事件缺失不得静默回退，也不得只改计划不写事件。
     格式 ≤3 不参与（调用方按格式分流；这里再兜一道，保持函数可独立复用）。
     """
     plan = load_plan(root, slug)
     if not plan.is_v4:
         return
     derived = derived_states(plan, read_events(root, slug))
-    repairs, ahead, underivable = [], [], []
+    repairs, ahead = [], []
     for task in plan.tasks:
         want, have = derived[task.id], task.status
         if have == want:
@@ -2514,21 +2699,12 @@ def repair_projection(root, slug, entry="（未标注）"):
                 f"（只能是 {'/'.join(plan.valid_statuses)}），且无法由事件重放推导——"
                 "拒绝继续；先修正为合法状态或补齐对应事件。"
             )
-        if have not in DERIVED_STATUSES_V4:
-            # 合法但当前引擎推不出来（如 `complete`）：这是推导来源缺失，不是投影领先。
-            underivable.append(
-                f"{task.id}：计划 {have}，而当前引擎只能从事件推导 "
-                + " / ".join(DERIVED_STATUSES_V4))
-        elif _STATUS_ORDER[want] > _STATUS_ORDER[have]:
-            repairs.append({"task": task.id, "from": have, "to": want})
-        else:
+        if want == STATUS_PENDING:
+            # 无实现证据却声称已有进度：事件缺失或冲突，不得静默回退。
             ahead.append(f"{task.id}：计划 {have} → 事件推导 {want}")
-    if underivable:
-        raise WorkflowError(
-            "计划状态无法由事件重放推导，拒绝继续：\n  - " + "\n  - ".join(underivable)
-            + "\n（`complete` 由节点审查通过后映射，该推导来源随 T3 引入；在此之前"
-            "不得手工把任务标成已验收，也不得按计划状态静默放行。）"
-        )
+        else:
+            # 有实现证据：双向修复到推导值（含 `complete` 缺 `pass` 支撑的修复下）。
+            repairs.append({"task": task.id, "from": have, "to": want})
     if ahead:
         raise WorkflowError(
             "计划状态领先于事件重放推导，事件缺失或相互冲突，拒绝继续：\n  - "
@@ -3516,8 +3692,8 @@ def _section_lines(lines, name):
     return out
 
 
-def _check_commit_range(root, raw, plan, has_note):
-    """校验 record 的 `--commits <base>..<head>`，返回 [(level, message)]。
+def _check_commit_range(root, raw, plan, has_note, empty_hint=None):
+    """校验 record / review 的 `--commits <base>..<head>`，返回 [(level, message)]。
 
     为什么值得校验：提交范围是账本里「这个任务改了什么」的唯一记录，终审也按它取
     diff。空范围（base == head）或写错的 sha 会让这两件事同时失效，而账本本身看不出来。
@@ -3525,6 +3701,7 @@ def _check_commit_range(root, raw, plan, has_note):
     **阶段性提交**是硬要求：每个任务完成即提交，别把几个任务攒成一次。
     格式 2 的计划按 ERROR 拦；老计划降为 WARNING——那批计划可能是按「不提交」的
     约定跑起来的（有的项目全局约束就写着"提交只在用户明确要求时做"），不该被升级打断。
+    `empty_hint` 覆盖空范围时的提示文案（review 的已审范围用；默认文案逐字不变）。
     """
     out = []
 
@@ -3567,6 +3744,7 @@ def _check_commit_range(root, raw, plan, has_note):
         if has_note:
             add(
                 "WARNING",
+                empty_hint or
                 "本任务没有产生提交（base 与 head 指向同一个提交）——"
                 "已按 `--note` 记下理由。",
             )
@@ -3705,6 +3883,180 @@ def record_implemented(args, root, slug, plan):
     return result, text
 
 
+def review_node(args, root, slug, plan):
+    """格式 ≥4 的 `review`：记节点审查结论——`pass` 后成员任务才映射 `complete`。
+
+    一次操作只写一条 `node_review` 事件：操作 ID、节点、谱系、审查阶段、节点版本、
+    已审提交范围、逐任务行、审查依据、结论、前提与未关闭问题占位（`premises`/`open_issues`
+    首版恒空——前提语义留 T5，不在此发明）、请求摘要与结果 receipt。写序＝先事件、
+    后状态：`pass` 把成员任务写 `complete`，`fail` 保持 `implemented`——不映射 `complete`、
+    不释放跨节点依赖，也不把已实现退回待实现。账本不新增行（事件即记录，呈现由 sync 承担）。
+    同 ID＋同请求重试 → 幂等重放原结果（不写事件、不改计划、不重复计轮）；
+    同 ID＋不同请求 → 拒绝。
+    """
+    verdict = args.verdict
+    evidence = (args.evidence or "").strip()
+    if not evidence:
+        raise WorkflowError(
+            "review 必须给 `--evidence \"<引用>\"`：审查依据（读到的实际改动与必要上下文、"
+            "复用的验证与证据引用、失败信号自查）随结论保存——缺它结论没有可核的来源。"
+        )
+    commits = (args.commits or "").strip()
+    if not commits:
+        raise WorkflowError(
+            "review 必须给 `--commits <base7>..<head7>`：已审提交范围是结论绑定的一部分"
+            "（它决定这条结论覆盖哪个版本），缺它无法判断结论对谁有效。"
+        )
+    node = next((item for item in plan.nodes if item.id == args.node_id), None)
+    if node is None:
+        raise WorkflowError(
+            f"计划里没有审查节点 {args.node_id}。现有节点："
+            + ("、".join(item.id for item in plan.nodes) or "（一个都没有）")
+            + "——格式 ≥4 的审查单位是节点（任务是执行单位）。"
+        )
+    owners = node.tasks
+    if not owners:
+        raise WorkflowError(
+            f"审查节点 {node.id} 没有列出归属任务，无法送审——先在计划里补『归属任务』字段。"
+        )
+    by_id = {task.id: task for task in plan.tasks}
+    unknown = [tid for tid in owners if tid not in by_id]
+    if unknown:
+        raise WorkflowError(
+            f"审查节点 {node.id} 的归属任务 {'、'.join(unknown)} 不在计划里——先修正计划。"
+        )
+    rows, problem = parse_review_lines(args.lines or "", owners)
+    if problem:
+        raise WorkflowError(
+            f"`--lines` 不合格：{problem}。逐任务一行结论，每行都要写清依据："
+            "`--lines \"T1: 验收依据/结论；T2: 验收依据/结论\"`。"
+        )
+
+    # 请求身份：节点 + 结论 + 已审范围 + 逐任务行（任务序不敏感）+ 证据。
+    request = operation_request_digest({
+        "entry": "review",
+        "node": node.id,
+        "verdict": verdict,
+        "commits": args.commits,
+        "evidence": evidence,
+        "lines": sorted([row["task"], row["conclusion"]] for row in rows),
+    })
+    action, existing = resolve_operation(root, slug, args.operation_id, request, "review")
+    if action == "replay":
+        # 幂等重放：不写事件、不改计划；返回随事件持久化的原结果（含显示文案）。
+        return replay_result(existing, args.operation_id)
+
+    require_plan_approval(root, slug, plan)   # 与 record/slice 同一道门，防绕过
+    ledger_check_owner(root, slug)
+
+    events = read_events(root, slug)
+    # 送审条件（机械部分）：归属任务全部已实现（按事件推导，不按计划投影）。
+    derived = derived_states(plan, events)
+    pending = [tid for tid in owners if derived.get(tid) == STATUS_PENDING]
+    if pending:
+        raise WorkflowError(
+            f"审查节点 {node.id} 的归属任务尚未全部实现，不得送审：{'、'.join(pending)} 没有 "
+            "`implemented` 事件——先 `record` 记实现与证据，再送审"
+            "（必要验证与未解决事项的核对由审查者负责，引擎只闸这一条机械条件）。"
+        )
+
+    problems = _check_commit_range(
+        root, args.commits, plan, True,
+        "节点内任务都没有产生提交（base 与 head 指向同一个提交），已审范围为空——"
+        "确认这与实际一致。",
+    )
+    blockers = [message for level, message in problems if level == "ERROR"]
+    if blockers:
+        raise WorkflowError(
+            "已审提交范围不合法，先修正再记审查结论：\n"
+            + "\n".join(f"  - {m}" for m in blockers)
+        )
+    warnings = [message for level, message in problems if level == "WARNING"]
+
+    version = node_version(plan, node)
+    lineage = node_lineage(events, node.id) or new_node_lineage(slug, node)
+    phase = NODE_PHASE_FIRST
+    prior = sum(1 for event in events
+                if event["type"] == EVENT_NODE_REVIEW
+                and event["data"].get("谱系") == lineage
+                and event["data"].get("审查阶段") == phase)
+    mapped = STATUS_COMPLETE if verdict == "pass" else STATUS_IMPLEMENTED
+    items = owners
+    event = _event(slug, lifecycle(root, slug)["cycle"], EVENT_NODE_REVIEW, {
+        "节点": node.id,
+        "谱系": lineage,
+        "审查阶段": phase,
+        "节点版本": version,
+        "commits": args.commits,
+        "lines": rows,
+        "evidence": evidence,
+        "verdict": verdict,
+        "premises": [],
+        "open_issues": [],
+        "operation_id": args.operation_id,
+        "request": request,
+        "entry": "review",
+    })
+    result = {
+        "slug": slug,
+        "node": node.id,
+        "lineage": lineage,
+        "phase": phase,
+        "rounds": prior,
+        "verdict": verdict,
+        "commits": args.commits,
+        "evidence": evidence,
+        "node_version": version,
+        "tasks": items,
+        "mapped_status": mapped,
+        "operation_id": args.operation_id,
+        "event": event["id"],
+        "premises": [],
+        "open_issues": [],
+        "warnings": warnings,
+    }
+    label = "、".join(items)
+    if verdict == "pass":
+        text = (f"✓ 节点 {node.id} → pass：{label} 映射 {STATUS_COMPLETE}"
+                f"（谱系 {lineage}，第 {prior} 轮）；审查记录已入事件流")
+    else:
+        text = (f"✗ 节点 {node.id} → fail：{label} 保持 {STATUS_IMPLEMENTED}"
+                f"（谱系 {lineage}，第 {prior} 轮）；节点未通过，跨节点依赖不释放；"
+                "修复后送复审")
+    if warnings:
+        text = "⚠ " + "\n⚠ ".join(warnings) + "\n" + text
+    event["data"]["receipt"] = {"result": result, "text": text}
+    for tid in items:
+        if by_id[tid].field_lines.get("状态") is None:
+            raise WorkflowError(f"{tid} 缺少『状态』字段行，无法回写。")
+
+    # 写入顺序固定：先 append 事件、再回写计划状态（D-04）；审查不新增账本行。
+    append_events(root, slug, [event])
+    for tid in items:
+        plan.lines[by_id[tid].field_lines["状态"]] = f"- **状态**：{mapped}"
+    _write_plan(plan)
+    return result, text
+
+
+def cmd_review(args):
+    root = find_project_root()
+    slug = resolve_slug(root, args.slug)
+    require_active(root, slug)
+    plan = load_plan(root, slug)
+    if not plan.is_v4:
+        raise WorkflowError(
+            f"本计划是格式 {plan.format_version}——`review` 只在格式 ≥4（审查节点制）生效："
+            "格式 ≤3 的审查单位是任务，没有节点审查形态（也不该为它补一个空壳）。"
+            "要把该工作流升级为节点审查，先把计划头部 `**格式**` 升到 4 并补齐 "
+            "`## 审查节点` 段；`--recheck`/`--new-phase` 属后续任务，尚未提供。"
+        )
+    # 入口统一在动作前做投影检查（already-closed / 归属检查之后、审批门之前）：
+    # 落后先修复（留 projection_repair）、领先即拒绝——与 record/slice/close 同一协议。
+    repair_projection(root, slug, "review")
+    plan = load_plan(root, slug)   # 修复可能已回写状态行，重新取计划
+    return review_node(args, root, slug, plan)
+
+
 def cmd_record(args):
     root = find_project_root()
     slug = resolve_slug(root, args.slug)
@@ -3712,7 +4064,7 @@ def cmd_record(args):
     plan = load_plan(root, slug)
     if plan.is_v4:
         # 入口统一在动作前做投影检查：落后先修复（留 projection_repair）、领先即拒绝。
-        # `review`（T3 新增）按同一入口协议接入——不得各入口各自判断状态。
+        # `review` 按同一入口协议接入（见 cmd_review）——不得各入口各自判断状态。
         repair_projection(root, slug, "record")
         plan = load_plan(root, slug)   # 修复可能已回写状态行，重新取计划
         return record_implemented(args, root, slug, plan)
@@ -4094,6 +4446,23 @@ def build_parser():
     s.add_argument("--note", default="")
     _add_json(s)
     s.set_defaults(func=cmd_record)
+
+    s = sub.add_parser("review", help="记节点审查结论（格式 ≥4；pass 后成员任务映射 complete）")
+    s.add_argument("slug", nargs="?")
+    s.add_argument("node_id", help="审查节点 ID（形如 N1）")
+    s.add_argument("--verdict", required=True, choices=["pass", "fail"],
+                   help="节点整体结论：pass 映射成员任务 complete；fail 保持已实现")
+    s.add_argument("--commits", default="", help="已审提交范围 <base7>..<head7>")
+    s.add_argument("--lines", default="",
+                   help="逐任务行：`T1: 结论＋依据；T2: …`（`；` 或换行分隔，须覆盖全部归属任务）")
+    s.add_argument("--evidence", default="", help="审查依据：读到的改动与上下文、复用的验证/证据引用")
+    s.add_argument(
+        "--operation-id",
+        default="",
+        help="必填：本次记账操作的稳定 ID；首次执行前生成并保存，重试复用",
+    )
+    _add_json(s)
+    s.set_defaults(func=cmd_review)
 
     s = sub.add_parser("close", help="收尾记账（有未验证内容时拒绝）")
     s.add_argument("slug", nargs="?")

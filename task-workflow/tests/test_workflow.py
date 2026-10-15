@@ -1851,16 +1851,21 @@ class WorkflowCLI(unittest.TestCase):
         self.assertTrue(self.record_v4("T1", slug="t2", text=True).startswith(shown))
         self.assertEqual(ledger_path.read_text().count("已实现（操作 rv-N1-1） |"), 1)
 
-    def test_two_state_complete_without_event_is_underivable_not_ahead(self):
-        """M5：`complete` 在 T2 没有推导来源 → 报「无法由事件重放推导」，不得误归为领先。"""
+    def test_two_state_complete_without_pass_support_is_repaired_down(self):
+        """M5 的 T3 更新（裁决 2）：`complete` 现有推导来源＝节点审查 `pass`（D-18）；
+        有实现证据但没有 `pass` 支撑 → 按事件推导**修复下**（`fail` 后中断的合法
+        残留态），不再报「无法由事件重放推导」——这是 T3 的合法演进。"""
         self.make_v4_plan(slug="t2done", nodes=self.node_block("N1", "T1, T2", final="是"))
         self.approve_v4("t2done")
+        self.record_v4("T1", slug="t2done", operation_id="rv-N1-9")
         self.plan("t2done").write_text(
-            self.plan("t2done").read_text().replace("- **状态**：pending", "- **状态**：complete", 1))
-        message = self.cli("slice", "t2done", "T1", expected=1)["error"]
-        self.assertIn("无法由事件重放推导", message)
-        self.assertIn("T1", message)
-        self.assertNotIn("领先于事件重放推导", message)
+            self.plan("t2done").read_text().replace("- **状态**：implemented", "- **状态**：complete", 1))
+        self.cli("slice", "t2done", "T2")
+        self.assertEqual(workflow.load_plan(str(self.root), "t2done").tasks[0].status, "implemented")
+        repairs = self.repair_events("t2done")
+        self.assertEqual(len(repairs), 1)
+        self.assertEqual(repairs[0]["data"]["repairs"],
+                         [{"task": "T1", "from": "complete", "to": "implemented"}])
 
     def test_two_state_close_checks_closed_before_projection(self):
         """M4：已关闭周期先返回 already-closed，不向关闭周期追加修复事件。"""
@@ -1999,6 +2004,329 @@ class WorkflowCLI(unittest.TestCase):
             message = self.cli(*args, expected=1)["error"]
             self.assertIn("结构化证据损坏", message)
             self.assertIn("receipt", message)
+
+    # ------------------------------------------------ 节点审查 review（T3）
+
+    def commit_range(self):
+        """制造一个真实提交，返回 `<base7>..<head7>` 范围的字符串。"""
+        base = self.git("rev-parse", "--short", "HEAD")
+        self.git("-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid",
+                 "commit", "--allow-empty", "-qm", "work")
+        return f"{base}..HEAD"
+
+    def review_lines(self, *pairs):
+        return "；".join(f"{tid}: {conclusion}" for tid, conclusion in pairs)
+
+    def review_v4(self, node="N1", slug="v4", verdict="pass", operation_id="rv-N1-1",
+                  lines=None, evidence="审查依据：读 git diff 与 record 证据，逐任务结论见 --lines",
+                  commits="HEAD..HEAD", expected=0, text=False, **extra):
+        if lines is None:
+            lines = self.review_lines(
+                ("T1", "依据 record 证据（跑 `true` 退出码 0），实现符合规格"),
+                ("T2", "同 T1；组内集成关系已查，无新问题"))
+        args = ["review", slug, node, "--verdict", verdict, "--commits", commits,
+                "--lines", lines, "--evidence", evidence, "--operation-id", operation_id]
+        for key, value in extra.items():
+            args.extend(["--" + key.replace("_", "-"), value])
+        return (self.cli_text(*args, expected=expected) if text
+                else self.cli(*args, expected=expected))
+
+    def node_review_events(self, slug="v4"):
+        return [event for event in self.events(slug) if event["type"] == "node_review"]
+
+    def ledger_body(self, slug="v4"):
+        """账本在事件视图之前的部分——审查/修复不得新增账本行。"""
+        path = self.root / ".workflow" / slug / "ledger.md"
+        return path.read_text().split(workflow.VIEW_MARKER)[0]
+
+    def node_review_plan(self, slug="t3", nodes=None, tasks=None):
+        """节点 N1（T1、T2）＋节点 N2（T3，依赖 N1，兼任终审）：下游派发观察位。"""
+        if nodes is None:
+            nodes = (self.node_block("N1", "T1, T2")
+                     + self.node_block("N2", "T3", deps="N1", final="是"))
+        if tasks is None:
+            tasks = self.v4_tasks((("T1", "无"), ("T2", "无"), ("T3", "T1")))
+        self.make_v4_plan(slug=slug, nodes=nodes, tasks=tasks)
+        self.approve_v4(slug)
+
+    def test_three_review_pass_maps_members_complete_and_releases_downstream(self):
+        self.node_review_plan()
+        self.record_v4("T1", slug="t3", operation_id="rec-t1")
+        self.record_v4("T2", slug="t3", operation_id="rec-t2")
+        plan = workflow.load_plan(str(self.root), "t3")
+        self.assertEqual([task.status for task in plan.tasks], ["implemented", "implemented", "pending"])
+        self.assertEqual(plan.states()["T3"], "BLOCKED")   # 上游未验收：跨节点下游阻塞
+        self.assertNotIn("T3", [item["id"] for item in self.cli("next", "t3")["ready"]])
+
+        span = self.commit_range()
+        body = self.ledger_body("t3")
+        result = self.review_v4("N1", slug="t3", commits=span, operation_id="rv-N1-1")
+        self.assertEqual(result["verdict"], "pass")
+        self.assertEqual(result["node"], "N1")
+        self.assertEqual(result["mapped_status"], workflow.STATUS_COMPLETE)
+        self.assertEqual(result["tasks"], ["T1", "T2"])
+        self.assertEqual(result["rounds"], 0)
+        self.assertEqual(result["warnings"], [])
+        self.assertTrue(result["lineage"].startswith("N1-"), result["lineage"])
+
+        plan = workflow.load_plan(str(self.root), "t3")
+        self.assertEqual([task.status for task in plan.tasks],
+                         ["complete", "complete", "pending"])
+        self.assertEqual(plan.states()["T3"], "READY")     # 节点验收后下游可派发
+        self.assertIn("T3", [item["id"] for item in self.cli("next", "t3")["ready"]])
+        self.cli("slice", "t3", "T3")
+
+        records = self.node_review_events("t3")
+        self.assertEqual(len(records), 1)
+        data = records[0]["data"]
+        self.assertEqual(data["节点"], "N1")
+        self.assertEqual(data["谱系"], result["lineage"])
+        self.assertEqual(data["审查阶段"], 1)
+        self.assertEqual(data["verdict"], "pass")
+        self.assertEqual(data["commits"], span)
+        self.assertEqual(data["premises"], [])
+        self.assertEqual(data["open_issues"], [])
+        self.assertEqual(data["operation_id"], "rv-N1-1")
+        self.assertEqual(data["entry"], "review")
+        self.assertEqual([row["task"] for row in data["lines"]], ["T1", "T2"])
+        self.assertTrue(all(row["conclusion"] for row in data["lines"]))
+        self.assertEqual(data["节点版本"], workflow.node_version(plan, plan.nodes[0]))
+        self.assertRegex(data["节点版本"], r"^[a-f0-9]{16}$")
+        self.assertEqual(data["receipt"]["result"]["event"], records[0]["id"])
+        self.assertEqual(workflow.round_count(self.events("t3"), data["谱系"]), 0)
+        # 审查不新增账本行（事件即记录；账本正文不变）
+        self.assertEqual(self.ledger_body("t3"), body)
+
+    def test_three_review_fail_keeps_implemented_and_does_not_map_complete(self):
+        self.node_review_plan(slug="t3f")
+        self.record_v4("T1", slug="t3f", operation_id="rec-t1")
+        self.record_v4("T2", slug="t3f", operation_id="rec-t2")
+        result = self.review_v4(
+            "N1", slug="t3f", verdict="fail", operation_id="rv-N1-1",
+            lines=self.review_lines(("T1", "依据 record 证据，符合规格"),
+                                    ("T2", "缺边界用例：输入为空时行为未验证")))
+        self.assertEqual(result["verdict"], "fail")
+        self.assertEqual(result["mapped_status"], workflow.STATUS_IMPLEMENTED)
+        plan = workflow.load_plan(str(self.root), "t3f")
+        self.assertEqual([task.status for task in plan.tasks],
+                         ["implemented", "implemented", "pending"])
+        self.assertEqual(plan.states()["T3"], "BLOCKED")   # 节点未通过：不释放跨节点依赖
+        records = self.node_review_events("t3f")
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["data"]["verdict"], "fail")
+        derived = workflow.derived_states(plan, workflow.read_events(str(self.root), "t3f"))
+        self.assertEqual(derived, {"T1": "implemented", "T2": "implemented", "T3": "pending"})
+
+    def test_three_review_lines_must_cover_owners_exactly(self):
+        self.node_review_plan(slug="t3l")
+        self.record_v4("T1", slug="t3l", operation_id="rec-t1")
+        self.record_v4("T2", slug="t3l", operation_id="rec-t2")
+        cases = [
+            ("T1: 只写了 T1", "缺行：T2"),
+            ("T1: a；T2: b；T3: c", "多行：T3"),
+            ("T1: a；T1: b；T2: c", "重复行：T1"),
+            ("T1: ；T2: b", "缺结论＋依据：T1"),
+            ("", "没有解析出任何"),
+            ("   \n  ", "没有解析出任何"),
+        ]
+        for lines, needle in cases:
+            with self.subTest(lines=lines):
+                message = self.review_v4("N1", slug="t3l", lines=lines, expected=1)["error"]
+                self.assertIn(needle, message)
+                self.assertIn("T1", message)
+        self.assertEqual(self.node_review_events("t3l"), [])
+        self.assertEqual([task.status for task in workflow.load_plan(str(self.root), "t3l").tasks],
+                         ["implemented", "implemented", "pending"])
+        # 宽松解析（正向）：换行分隔、半角冒号、结论里的标点都不误判成新行
+        self.review_v4("N1", slug="t3l", operation_id="rv-N1-1",
+                       lines="T1: 结论一，含；分号与逗号\nT2: 结论二; 补充说明")
+        records = self.node_review_events("t3l")
+        self.assertEqual(len(records), 1)
+        self.assertEqual([row["task"] for row in records[0]["data"]["lines"]], ["T1", "T2"])
+        self.assertEqual(records[0]["data"]["lines"][0]["conclusion"], "结论一，含；分号与逗号")
+        self.assertEqual(records[0]["data"]["lines"][1]["conclusion"], "结论二; 补充说明")
+
+    def test_three_review_requires_all_members_implemented(self):
+        self.node_review_plan(slug="t3r")
+        self.record_v4("T1", slug="t3r", operation_id="rec-t1")
+        message = self.review_v4("N1", slug="t3r", operation_id="rv-N1-1", expected=1)["error"]
+        self.assertIn("尚未全部实现", message)
+        self.assertIn("T2", message)
+        self.assertEqual(self.node_review_events("t3r"), [])
+
+    def test_three_review_requires_operation_id_and_known_node(self):
+        self.node_review_plan(slug="t3o")
+        self.record_v4("T1", slug="t3o", operation_id="rec-t1")
+        self.record_v4("T2", slug="t3o", operation_id="rec-t2")
+        for operation_id, needle in (("", "--operation-id"), ("rv N1 1", "空白")):
+            with self.subTest(operation_id=operation_id):
+                message = self.review_v4("N1", slug="t3o", operation_id=operation_id,
+                                         expected=1)["error"]
+                self.assertIn(needle, message)
+        message = self.review_v4("N9", slug="t3o", operation_id="rv-N9-1", expected=1)["error"]
+        self.assertIn("没有审查节点 N9", message)
+        self.assertIn("N1", message)
+        self.assertEqual(self.node_review_events("t3o"), [])
+        self.assertEqual([task.status for task in workflow.load_plan(str(self.root), "t3o").tasks],
+                         ["implemented", "implemented", "pending"])
+
+    def test_three_review_idempotent_replay_and_conflict_rejected(self):
+        self.node_review_plan(slug="t3i")
+        self.record_v4("T1", slug="t3i", operation_id="rec-t1")
+        self.record_v4("T2", slug="t3i", operation_id="rec-t2")
+        first = self.review_v4("N1", slug="t3i", operation_id="rv-N1-1")
+        events, plan_text, body = (self.events("t3i"), self.plan("t3i").read_text(),
+                                   self.ledger_body("t3i"))
+        # 同 ID＋相同请求（逐任务行书写顺序无关）→ 幂等重放：返回原结果、零写入、轮次不双计
+        replay = self.review_v4(
+            "N1", slug="t3i", operation_id="rv-N1-1",
+            lines=self.review_lines(("T2", "同 T1；组内集成关系已查，无新问题"),
+                                    ("T1", "依据 record 证据（跑 `true` 退出码 0），实现符合规格")))
+        self.assert_replay_matches(replay, first)
+        self.assertEqual(self.events("t3i"), events)
+        self.assertEqual(self.plan("t3i").read_text(), plan_text)
+        self.assertEqual(self.ledger_body("t3i"), body)
+        self.assertEqual(len(self.node_review_events("t3i")), 1)
+        self.assertEqual(workflow.round_count(events, first["lineage"]), 0)
+        # 同 ID＋不同请求 → 拒绝（结论、逐任务行、已审范围任一不同）
+        span = self.commit_range()
+        for extra in ({"verdict": "fail"}, {"lines": self.review_lines(("T1", "另一份结论"), ("T2", "另一份结论"))},
+                      {"commits": span}):
+            with self.subTest(extra=extra):
+                message = self.review_v4("N1", slug="t3i", operation_id="rv-N1-1",
+                                         expected=1, **extra)["error"]
+                self.assertIn("请求摘要不符", message)
+        self.assertEqual(len(self.node_review_events("t3i")), 1)
+        self.assertEqual(workflow.round_count(self.events("t3i"), first["lineage"]), 0)
+
+    def test_three_review_reuses_lineage_and_counts_rounds(self):
+        self.node_review_plan(slug="t3n")
+        self.record_v4("T1", slug="t3n", operation_id="rec-t1")
+        self.record_v4("T2", slug="t3n", operation_id="rec-t2")
+        first = self.review_v4("N1", slug="t3n", operation_id="rv-N1-1")
+        lineage = first["lineage"]
+        self.assertEqual(first["rounds"], 0)
+        self.assertEqual(workflow.round_count(self.events("t3n"), lineage), 0)
+        second = self.review_v4("N1", slug="t3n", verdict="fail", operation_id="rv-N1-2",
+                                lines=self.review_lines(("T1", "仍符合规格"),
+                                                        ("T2", "修复未到位：缺失败信号自查")))
+        self.assertEqual(second["lineage"], lineage)   # 同节点第二次送审复用谱系
+        self.assertEqual(second["rounds"], 1)
+        self.assertEqual(workflow.round_count(self.events("t3n"), lineage), 1)
+        third = self.review_v4("N1", slug="t3n", operation_id="rv-N1-3",
+                               lines=self.review_lines(("T1", "复核通过"),
+                                                       ("T2", "修复已到位，复核通过")))
+        self.assertEqual(third["lineage"], lineage)
+        self.assertEqual(third["rounds"], 2)
+        self.assertEqual(workflow.round_count(self.events("t3n"), lineage), 2)
+        records = self.node_review_events("t3n")
+        self.assertEqual([event["data"]["谱系"] for event in records], [lineage] * 3)
+        self.assertEqual([task.status for task in workflow.load_plan(str(self.root), "t3n").tasks],
+                         ["complete", "complete", "pending"])
+        # 同请求重试仍不双计：事件数、轮次都不变
+        self.assert_replay_matches(
+            self.review_v4("N1", slug="t3n", operation_id="rv-N1-3",
+                           lines=self.review_lines(("T1", "复核通过"),
+                                                   ("T2", "修复已到位，复核通过"))), third)
+        self.assertEqual(len(self.node_review_events("t3n")), 3)
+        self.assertEqual(workflow.round_count(self.events("t3n"), lineage), 2)
+
+    def test_three_node_version_follows_declared_fields_only(self):
+        self.node_review_plan(slug="t3v")
+        plan = workflow.load_plan(str(self.root), "t3v")
+        before = workflow.node_version(plan, plan.nodes[0])
+        self.assertRegex(before, r"^[a-f0-9]{16}$")
+        # 只改运行字段（状态）→ 版本不变
+        self.plan("t3v").write_text(
+            self.plan("t3v").read_text().replace("- **状态**：pending", "- **状态**：complete", 1))
+        changed = workflow.load_plan(str(self.root), "t3v")
+        self.assertEqual(workflow.node_version(changed, changed.nodes[0]), before)
+        # 改某任务的验收要求（声明字段）→ 版本变化：旧结论不得据此沿用（D-18）
+        self.plan("t3v").write_text(
+            self.plan("t3v").read_text().replace("- **验收**：结果正确", "- **验收**：结果正确且边界明确", 1))
+        edited = workflow.load_plan(str(self.root), "t3v")
+        self.assertNotEqual(workflow.node_version(edited, edited.nodes[0]), before)
+
+    def test_three_review_rejected_on_legacy_plan_and_no_stubs(self):
+        self.make_v4_plan(slug="t3legacy", version=3)
+        self.approve_v4("t3legacy")
+        message = self.review_v4("N1", slug="t3legacy", expected=1)["error"]
+        self.assertIn("格式 3", message)
+        self.assertIn("review", message)
+        self.assertFalse((self.root / ".workflow/t3legacy/events.jsonl").exists())
+        # `--recheck`/`--new-phase` 属 T5/T6：不建空壳——参数不存在（argparse 直接拒绝）
+        process = subprocess.run(
+            [sys.executable, "-B", str(SCRIPT), "review", "t3legacy", "N1",
+             "--verdict", "pass", "--recheck", "rv-N1-1"],
+            cwd=self.root, capture_output=True, text=True)
+        self.assertEqual(process.returncode, 2, process.stdout + process.stderr)
+        self.assertIn("unrecognized arguments", process.stderr)
+
+    def test_three_review_interrupt_after_event_replays_and_repairs_projection(self):
+        """崩溃窗口（pass 事件已写、状态未写）→ 入口修复投影，重放返回原结果。"""
+        self.node_review_plan(slug="t3c")
+        self.record_v4("T1", slug="t3c", operation_id="rec-t1")
+        self.record_v4("T2", slug="t3c", operation_id="rec-t2")
+        shown = self.review_v4("N1", slug="t3c", operation_id="rv-N1-1", text=True)
+        self.assertIn("映射 complete", shown)
+        self.rollback_complete("t3c")   # 事件在、状态未回写
+        self.assertEqual([task.status for task in workflow.load_plan(str(self.root), "t3c").tasks],
+                         ["implemented", "implemented", "pending"])
+        replay_text = self.review_v4("N1", slug="t3c", operation_id="rv-N1-1", text=True)
+        self.assertTrue(replay_text.startswith(shown), replay_text)
+        self.assertIn("幂等重放", replay_text)
+        self.assertEqual([task.status for task in workflow.load_plan(str(self.root), "t3c").tasks],
+                         ["complete", "complete", "pending"])
+        self.assertEqual(len(self.node_review_events("t3c")), 1)
+        repairs = self.repair_events("t3c")
+        self.assertEqual(len(repairs), 1)
+        self.assertEqual(repairs[0]["data"]["entry"], "review")
+        self.assertEqual(repairs[0]["data"]["repairs"],
+                         [{"task": "T1", "from": "implemented", "to": "complete"},
+                          {"task": "T2", "from": "implemented", "to": "complete"}])
+
+    def rollback_complete(self, slug="v4", status="implemented"):
+        """把已验收任务的计划状态手工回退（构造审查通过后的中断残留态）。"""
+        self.plan(slug).write_text(
+            self.plan(slug).read_text().replace("- **状态**：complete", f"- **状态**：{status}"))
+
+    def test_three_projection_repairs_down_after_fail_crash_window(self):
+        """`fail` 事件已写、状态仍是 `complete`（中断残留）→ 入口修复下。"""
+        self.node_review_plan(slug="t3d")
+        self.record_v4("T1", slug="t3d", operation_id="rec-t1")
+        self.record_v4("T2", slug="t3d", operation_id="rec-t2")
+        self.review_v4("N1", slug="t3d", operation_id="rv-N1-1")
+        self.review_v4("N1", slug="t3d", verdict="fail", operation_id="rv-N1-2",
+                       lines=self.review_lines(("T1", "仍符合规格"), ("T2", "发现必修问题")))
+        self.assertEqual([task.status for task in workflow.load_plan(str(self.root), "t3d").tasks],
+                         ["implemented", "implemented", "pending"])
+        self.plan("t3d").write_text(
+            self.plan("t3d").read_text().replace("- **状态**：implemented", "- **状态**：complete"))
+        self.cli("slice", "t3d", "T3")
+        self.assertEqual([task.status for task in workflow.load_plan(str(self.root), "t3d").tasks],
+                         ["implemented", "implemented", "pending"])
+        repairs = self.repair_events("t3d")
+        self.assertEqual(len(repairs), 1)
+        self.assertEqual(repairs[0]["data"]["repairs"],
+                         [{"task": "T1", "from": "complete", "to": "implemented"},
+                          {"task": "T2", "from": "complete", "to": "implemented"}])
+
+    def test_three_projection_refuses_progress_without_implementation_evidence(self):
+        """无 `implemented` 事件却声称有进度（implemented/complete）→ 拒绝，零写入。"""
+        self.node_review_plan(slug="t3p")
+        for claimed in ("complete", "implemented"):
+            with self.subTest(claimed=claimed):
+                self.plan("t3p").write_text(
+                    self.plan("t3p").read_text().replace("- **状态**：pending",
+                                                         f"- **状态**：{claimed}", 1))
+                message = self.cli("slice", "t3p", "T1", expected=1)["error"]
+                self.assertIn("领先于事件重放推导", message)
+                self.assertIn("T1", message)
+                self.assertNotIn("无法由事件重放推导", message)
+                self.plan("t3p").write_text(
+                    self.plan("t3p").read_text().replace(f"- **状态**：{claimed}",
+                                                         "- **状态**：pending", 1))
+        self.assertFalse((self.root / ".workflow/t3p/events.jsonl").exists())
 
     def test_review_nodes_format3_ignores_section_and_init_stays_v3(self):
         self.cli("init", "fresh", "--goal", "fixture")
