@@ -105,10 +105,24 @@ PLAN_FORMAT_CURRENT = PLAN_FORMAT_V3
 NODE_SECTION = "审查节点"
 NODE_HEADER = re.compile(r"^###\s+(N\d+)\s*(.*)$")
 NODE_FIELD = re.compile(r"^(?:-\s+)?\*\*(?P<key>[^*]+?)\*\*\s*[:：]\s*(?P<value>.*)$")
-NODE_REF = re.compile(r"\bN\d+\b")
 NODE_REQUIRED_FIELDS = ("归属任务", "分组理由", "审查职责", "依赖节点", "送审条件", "兼任终审")
 NODE_FINAL_VALUES = ("是", "否")
-NODE_NONE_VALUES = ("", "无", "-", "—", "none", "n/a", "na", "null", "nil")
+# 三个列表字段（归属任务 / 依赖节点 / 前身）共用的严格值解析：
+# 先剥离一个尾部括号注解（`无（原 N3 已并入）` → `无`、`N0（原谱系 L1）` → `N0`，
+# 注解里的 ID 不参与声明——否则一句说明会被读成真依赖或多前身），再按
+# 「无 | 分隔符分隔的 ID 列表」逐项全匹配；残余无法解析的值报 ERROR，
+# 不静默降级为空集（依赖缺失比多一条报错更难查）。
+NODE_LIST_SEPARATOR = re.compile(r"\s*[,，、;；]\s*")
+NODE_ANNOTATION = re.compile(r"[（(][^（()）]*[）)]\s*$")
+NODE_NONE = "无"
+TASK_ID_PATTERN = r"T\d+"
+NODE_ID_PATTERN = r"N\d+"
+PREDECESSOR_PATTERN = r"[A-Za-z][A-Za-z0-9_-]*"
+NODE_LIST_FIELDS = (
+    ("归属任务", TASK_ID_PATTERN),
+    ("依赖节点", NODE_ID_PATTERN),
+    ("前身", PREDECESSOR_PATTERN),
+)
 REF_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9_-]*")
 HISTORY_NODE_KEYS = ("节点", "node")
 HISTORY_LINEAGE_KEYS = ("谱系", "lineage")
@@ -291,6 +305,35 @@ class Task:
         return re.findall(r"[`'\"]?([\w./\-]+\.[A-Za-z0-9]+)", raw)
 
 
+def parse_id_list(raw, pattern):
+    """列表字段的值解析：剥离一个尾部括号注解后，只接受 `无` 或分隔符分隔的 ID 列表。
+
+    返回 (values, problem)：problem 为 None 表示通过；否则是一句可读的原因。
+    严格解析是有意为之——无法识别的值必须报错，不得静默降级为空集；
+    值非法时该字段不产生任何列表项（check 已 ERROR，计划不得执行）。
+    """
+    given = raw.strip()
+    text = _strip_annotation(given)
+    if not text:
+        if given:
+            return [], "剥离尾部括号注解后没有可解析内容"
+        return [], None
+    if text == NODE_NONE:
+        return [], None
+    tokens = NODE_LIST_SEPARATOR.split(text)
+    if any(not token for token in tokens):
+        return [], "存在空的列表项（分隔符重复）"
+    bad = [token for token in tokens if not re.fullmatch(pattern, token)]
+    if bad:
+        return [], "无法解析的列表项：" + "、".join(bad)
+    return tokens, None
+
+
+def _strip_annotation(text):
+    """剥离一个尾部括号注解：`无（原 N3 已并入）` → `无`。"""
+    return NODE_ANNOTATION.sub("", text).strip()
+
+
 class Node:
     """审查节点块（格式 ≥4）：`### N<n> <名称>` ＋ 六项必填字段 ＋ 可选「前身」。
 
@@ -307,18 +350,19 @@ class Node:
     def get(self, key):
         return self.fields.get(key, "").strip()
 
+    def parse_list(self, key, pattern):
+        """解析列表字段（三个字段共用），返回 (values, problem)。"""
+        return parse_id_list(self.get(key), pattern)
+
     @property
     def tasks(self):
-        """『归属任务』里列出的任务 ID。"""
-        return sorted(set(TASK_REF.findall(self.get("归属任务"))))
+        """『归属任务』里列出的任务 ID（值非法时为空，由 check 报「字段值非法」）。"""
+        return sorted(set(self.parse_list("归属任务", TASK_ID_PATTERN)[0]))
 
     @property
     def deps(self):
         """『依赖节点』声明的节点 ID（`无` 表示不声明）。声明即约束（D-21）。"""
-        raw = self.get("依赖节点")
-        if _none_marker(raw):
-            return []
-        return sorted(set(NODE_REF.findall(raw)))
+        return sorted(set(self.parse_list("依赖节点", NODE_ID_PATTERN)[0]))
 
     @property
     def is_final(self):
@@ -328,15 +372,7 @@ class Node:
     @property
     def predecessors(self):
         """『前身』声明的引用（合法时最多一个；`无` 表示没有）。"""
-        raw = self.get("前身")
-        if _none_marker(raw):
-            return []
-        return REF_TOKEN.findall(raw)
-
-
-def _none_marker(raw):
-    """字段值是否表示「无」（避免把 none/n/a 这类词当成引用）。"""
-    return raw.strip().rstrip(".。").lower() in NODE_NONE_VALUES
+        return self.parse_list("前身", PREDECESSOR_PATTERN)[0]
 
 
 class Plan:
@@ -538,7 +574,8 @@ class Plan:
                 continue
             sec = SECTION_HEADER.match(line)
             if sec:
-                inside = sec.group(1).strip().startswith(NODE_SECTION)
+                # 段名精确匹配：`## 审查节点与边界` 这类近似标题不是节点段。
+                inside = sec.group(1).strip() == NODE_SECTION
                 if inside:
                     self.has_node_section = True
                 current = None
@@ -1027,10 +1064,27 @@ def _node_findings(plan, by_id):
         add("ERROR", f"『{NODE_SECTION}』段里没有任何节点块（形如 `### N1 <名称>`）。")
         return out
 
-    node_ids = {node.id for node in plan.nodes}
+    node_id_list = [node.id for node in plan.nodes]
+    node_ids = set(node_id_list)
+    for nid in sorted({nid for nid in node_id_list if node_id_list.count(nid) > 1}):
+        add(
+            "ERROR",
+            f"审查节点 ID 重复：{nid}——两个以上的节点块共用一个 ID，"
+            "归属、终审与等待图都会塌缩到同一节点上（节点 ID 是稳定身份）。",
+        )
     history = lineage_history(plan)
     finals = []
     for node in plan.nodes:
+        problems = {}
+        for key, pattern in NODE_LIST_FIELDS:
+            values, problem = node.parse_list(key, pattern)
+            problems[key] = problem
+            if problem and node.get(key):
+                add(
+                    "ERROR",
+                    f"审查节点 {node.id} 的『{key}』字段值非法（{problem}）——"
+                    "只接受『无』或逗号分隔的 ID 列表。",
+                )
         for key in NODE_REQUIRED_FIELDS:
             if not node.get(key):
                 add("ERROR", f"审查节点 {node.id} 缺少『{key}』字段（六项必填，缺一不可）。")
@@ -1041,12 +1095,14 @@ def _node_findings(plan, by_id):
                 f"审查节点 {node.id} 的『兼任终审』只能是『是』或『否』，"
                 f"当前是『{verdict}』。",
             )
-        if verdict == "是":
-            finals.append(node.id)
+        if verdict == "是" and node.id not in finals:
+            finals.append(node.id)   # 重复 ID 已被「节点 ID 重复」报过，不再放大
         listed = node.tasks
         if not node.get("归属任务"):
             pass   # 空值/缺字段已按「缺项」报过，不再重复
-        elif not listed:
+        elif not listed and not problems["归属任务"]:
+            # 值为「无」或剥注解后为空：没列出真实任务 ID；
+            # 值非法时上面已报「字段值非法」，不再叠加。
             add("ERROR", f"审查节点 {node.id} 的『归属任务』没有列出真实任务 ID。")
         for tid in listed:
             if tid not in by_id:
@@ -1086,7 +1142,7 @@ def _node_findings(plan, by_id):
     owners = {}
     for node in plan.nodes:
         for tid in node.tasks:
-            if tid in by_id:
+            if tid in by_id and node.id not in owners.get(tid, ()):
                 owners.setdefault(tid, []).append(node.id)
     for task in plan.tasks:
         held = owners.get(task.id, [])

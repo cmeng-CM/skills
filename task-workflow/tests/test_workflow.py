@@ -1286,7 +1286,7 @@ class WorkflowCLI(unittest.TestCase):
             for tid, deps in pairs)
 
     def make_v4_plan(self, slug="v4", nodes=None, tasks=None, version=4, events=None,
-                     section=True):
+                     section=True, section_name="审查节点"):
         """格式 4 fixture；nodes=None 时用合法的「单节点兼任终审」段。"""
         if not (self.root / ".workflow" / slug).exists():
             self.cli("init", slug, "--goal", "fixture v4")
@@ -1305,7 +1305,7 @@ class WorkflowCLI(unittest.TestCase):
             "## 验证覆盖\n| 对象 | 验证手段 | 类型 | 必需性 | 证据 |\n|---|---|---|---|---|\n"
             "| D-01 | `source.py::test_example` | 自动化 | 必需 | |\n"
             "### 不验证的部分\n- 无\n")
-        middle = ("## 审查节点\n\n" + nodes + "\n") if section else ""
+        middle = (f"## {section_name}\n\n" + nodes + "\n") if section else ""
         self.plan(slug).write_text(head + middle + "## 阶段\n### Phase 1: fixture\n\n" + tasks)
         if events is not None:
             (self.root / ".workflow" / slug / "events.jsonl").write_text(
@@ -1429,10 +1429,111 @@ class WorkflowCLI(unittest.TestCase):
         messages = self.check_messages("empty-owner")
         self.assertIn("审查节点 N1 缺少『归属任务』字段（六项必填，缺一不可）。", messages)
         self.assertNotIn("审查节点 N1 的『归属任务』没有列出真实任务 ID。", messages)
-        self.make_v4_plan(slug="prose-owner", nodes=self.node_block(
-            "N1", "见分组理由", final="是"))
-        self.assertIn("审查节点 N1 的『归属任务』没有列出真实任务 ID。",
-                      self.check_messages("prose-owner"))
+        self.make_v4_plan(slug="none-owner", nodes=self.node_block(
+            "N1", "无（原 T3 拆分）", final="是"))
+        messages = self.check_messages("none-owner")
+        self.assertIn("审查节点 N1 的『归属任务』没有列出真实任务 ID。", messages)
+        self.assertNotIn("审查节点 N1 的『归属任务』字段值非法（剥离尾部括号注解后没有可解析内容）"
+                         "——只接受『无』或逗号分隔的 ID 列表。", messages)
+
+    def test_review_nodes_duplicate_ids_rejected(self):
+        duplicate = self.node_block("N1", "T1", final="是") + "\n" + self.node_block("N1", "T1")
+        self.make_v4_plan(slug="dup-id", nodes=duplicate)
+        messages = self.check_messages("dup-id")
+        self.assertIn(
+            "审查节点 ID 重复：N1——两个以上的节点块共用一个 ID，"
+            "归属、终审与等待图都会塌缩到同一节点上（节点 ID 是稳定身份）。",
+            messages)
+        self.assertFalse(any("同时归属" in message for message in messages))
+        self.assertFalse(any("N1、N1" in message for message in messages))
+        self.assertEqual(len([m for m in messages if "节点 ID 重复" in m]), 1)
+
+    def test_review_nodes_field_values_strip_annotation_and_stay_strict(self):
+        # `无（注解）` 不产生等待边：注解里的 N3 恰是终审节点，旧实现会误加边并报假环。
+        nodes = (self.node_block("N1", "T1", deps="无（原 N3 已并入）")
+                 + self.node_block("N2", "T2", deps="无（上游已完成）")
+                 + self.node_block("N3", "T3", final="是"))
+        self.make_v4_plan(slug="annotated-none", nodes=nodes,
+                          tasks=self.v4_tasks((("T1", "无"), ("T2", "无"), ("T3", "无"))))
+        self.assertEqual(self.cli("check", "annotated-none")["errors"], [])
+        plan = workflow.load_plan(str(self.root), "annotated-none")
+        self.assertEqual(workflow.wait_graph(plan), {"N1": set(), "N2": set(), "N3": {"N1", "N2"}})
+        # `N0（注解）` 是单前身（注解里的谱系 ID 不算第二前身），经历史记录解析通过。
+        self.make_v4_plan(slug="annotated-pred",
+                          nodes=(self.node_block("N1", "T1", pred="N0（原谱系 L1）")
+                                 + self.node_block("N2", "T2", final="是")),
+                          events=[self.node_event("N0", "L1")])
+        self.assertEqual(self.cli("check", "annotated-pred")["errors"], [])
+        self.assertEqual(workflow.load_plan(str(self.root), "annotated-pred").nodes[0].predecessors,
+                         ["N0"])
+        # 剥注解后仍是多前身 → 合并拒绝。
+        self.make_v4_plan(slug="annotated-merge",
+                          nodes=self.node_block("N1", "T1, T2", pred="N7, N8（原两节点合并）", final="是"))
+        self.assertEqual(
+            self.check_messages("annotated-merge"),
+            ["审查节点 N1 声明了多个前身（N7、N8）——"
+             "首版不支持已送审节点合并，每个新节点最多承接一个前身。"],
+        )
+        # 严格解析：无法解析的值报「字段值非法」，不静默降级为空集。
+        self.make_v4_plan(slug="bad-dep",
+                          nodes=(self.node_block("N1", "T1", deps="hello")
+                                 + self.node_block("N2", "T2", final="是")))
+        self.assertEqual(
+            self.check_messages("bad-dep"),
+            ["审查节点 N1 的『依赖节点』字段值非法（无法解析的列表项：hello）——"
+             "只接受『无』或逗号分隔的 ID 列表。"],
+        )
+        self.make_v4_plan(slug="bad-owner-value", nodes=self.node_block("N1", "T1 与 T2", final="是"))
+        self.assertIn(
+            "审查节点 N1 的『归属任务』字段值非法（无法解析的列表项：T1 与 T2）——"
+            "只接受『无』或逗号分隔的 ID 列表。",
+            self.check_messages("bad-owner-value"))
+        self.make_v4_plan(slug="annotation-only",
+                          nodes=(self.node_block("N1", "T1", deps="（原 N3 已并入）")
+                                 + self.node_block("N2", "T2", final="是")))
+        self.assertIn(
+            "审查节点 N1 的『依赖节点』字段值非法（剥离尾部括号注解后没有可解析内容）——"
+            "只接受『无』或逗号分隔的 ID 列表。",
+            self.check_messages("annotation-only"))
+
+    def test_review_nodes_parsing_compatibility_matrix(self):
+        # 围栏内的假节点标题不算节点块；半角冒号可解析；未知字段忽略不报错。
+        nodes = ("```\n### N9 围栏里的假标题\n```\n\n"
+                 "### N1 全量验收\n\n"
+                 "- **归属任务**: T1, T2\n"
+                 "- **分组理由**：fixture 分组理由\n"
+                 "- **审查职责**：逐任务一行\n"
+                 "- **依赖节点**: 无\n"
+                 "- **送审条件**：归属任务全部已实现\n"
+                 "- **兼任终审**：是\n"
+                 "- **备注**：未知字段应被忽略\n")
+        self.make_v4_plan(slug="compat", nodes=nodes)
+        self.assertEqual(self.cli("check", "compat")["errors"], [])
+        plan = workflow.load_plan(str(self.root), "compat")
+        self.assertEqual([node.id for node in plan.nodes], ["N1"])
+        self.assertEqual(plan.nodes[0].tasks, ["T1", "T2"])
+        self.assertEqual(plan.nodes[0].deps, [])
+        self.assertEqual(plan.nodes[0].get("备注"), "未知字段应被忽略")
+
+    def test_review_nodes_section_name_is_exact_and_repeats_union(self):
+        # 近似段名（带后缀）不是节点段：`## 审查节点与边界` 里的块不被解析。
+        self.make_v4_plan(slug="near-name", section_name="审查节点与边界")
+        self.assertEqual(
+            self.check_messages("near-name"),
+            ["格式 4 计划缺少 `## 审查节点` 段——节点是格式 4 的验收单位，"
+             "每个任务必须恰属一个节点。"],
+        )
+        self.assertEqual(workflow.load_plan(str(self.root), "near-name").nodes, [])
+        # 重复同名段沿用引擎既有的段处理行为：段正文合并，两块都被解析。
+        nodes = (self.node_block("N1", "T1", final="是") + "\n## 审查节点\n\n"
+                 + self.node_block("N2", "T2"))
+        self.make_v4_plan(slug="repeat-section", nodes=nodes,
+                          tasks=self.v4_tasks((("T1", "无"), ("T2", "无"))))
+        self.assertEqual(self.cli("check", "repeat-section")["errors"], [])
+        self.assertEqual(
+            [node.id for node in workflow.load_plan(str(self.root), "repeat-section").nodes],
+            ["N1", "N2"],
+        )
 
     def test_review_nodes_reference_errors(self):
         nodes = (self.node_block("N1", "T1", deps="N9")
