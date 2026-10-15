@@ -1,0 +1,5 @@
+# Fixture verification observation
+
+The real run will execute tests/check.py and print fixture actual function behavior: works.
+The driver checks zero exit, stable before/after hashes and exact stdout before submitting this result.
+This verifies CLI/evidence behavior for a tiny fixture, not the full delivery suite's semantic quality.

@@ -1,0 +1,160 @@
+{
+  "configuration": "current",
+  "config_operation": "configure-suite-001",
+  "implementation": {
+    "T-01": {
+      "status": "passed",
+      "operation_id": "implement-T-01-capability_docs"
+    },
+    "T-02": {
+      "status": "passed",
+      "operation_id": "implement-T-02-runtime_engine"
+    },
+    "T-03": {
+      "status": "passed",
+      "operation_id": "implement-T-03-root"
+    }
+  },
+  "review": {
+    "R-01": {
+      "status": "passed",
+      "operation_id": "review-R-01-final"
+    }
+  },
+  "verification": {
+    "AC-01": {
+      "status": "passed",
+      "operation_id": "verify-AC-01-final"
+    },
+    "AC-02": {
+      "status": "passed",
+      "operation_id": "verify-AC-02-final"
+    },
+    "AC-03": {
+      "status": "passed",
+      "operation_id": "verify-AC-03-final"
+    },
+    "AC-04": {
+      "status": "passed",
+      "operation_id": "verify-AC-04-final"
+    },
+    "AC-05": {
+      "status": "passed",
+      "operation_id": "verify-AC-05-final"
+    },
+    "AC-06": {
+      "status": "passed",
+      "operation_id": "verify-AC-06-final"
+    }
+  },
+  "issues": {},
+  "lifecycle": "closed",
+  "closure": {
+    "actor": {
+      "context": "root-session",
+      "id": "root"
+    },
+    "config_op": "configure-suite-001",
+    "exceptions": [],
+    "mode": "complete",
+    "report": {
+      "bytes": 1679,
+      "object_hash": "6688b5d37ed9b93d3b9cf69e6de448677f7e17878225e0659cf63b4c7e6c43aa",
+      "path": "docs/delivery/2026-10-15-delivery-suite/close-ready.md"
+    },
+    "state": {
+      "closure": null,
+      "config_operation": "configure-suite-001",
+      "configuration": "current",
+      "implementation": {
+        "T-01": {
+          "operation_id": "implement-T-01-capability_docs",
+          "status": "passed"
+        },
+        "T-02": {
+          "operation_id": "implement-T-02-runtime_engine",
+          "status": "passed"
+        },
+        "T-03": {
+          "operation_id": "implement-T-03-root",
+          "status": "passed"
+        }
+      },
+      "issues": {},
+      "lifecycle": "active",
+      "review": {
+        "R-01": {
+          "operation_id": "review-R-01-final",
+          "status": "passed"
+        }
+      },
+      "runs": {
+        "run-AC-01-final": {
+          "acceptance": "AC-01",
+          "exit_code": 0,
+          "status": "finished",
+          "timed_out": false
+        },
+        "run-AC-04-final": {
+          "acceptance": "AC-04",
+          "exit_code": 0,
+          "status": "finished",
+          "timed_out": false
+        },
+        "run-AC-06-final": {
+          "acceptance": "AC-06",
+          "exit_code": 0,
+          "status": "finished",
+          "timed_out": false
+        }
+      },
+      "verification": {
+        "AC-01": {
+          "operation_id": "verify-AC-01-final",
+          "status": "passed"
+        },
+        "AC-02": {
+          "operation_id": "verify-AC-02-final",
+          "status": "passed"
+        },
+        "AC-03": {
+          "operation_id": "verify-AC-03-final",
+          "status": "passed"
+        },
+        "AC-04": {
+          "operation_id": "verify-AC-04-final",
+          "status": "passed"
+        },
+        "AC-05": {
+          "operation_id": "verify-AC-05-final",
+          "status": "passed"
+        },
+        "AC-06": {
+          "operation_id": "verify-AC-06-final",
+          "status": "passed"
+        }
+      }
+    },
+    "summary": "三项实施、非实现者整体审查、六项必需验收均当前通过；安装与保护核对通过，无例外。首版局限和需查看事项完整保留。"
+  },
+  "runs": {
+    "run-AC-01-final": {
+      "status": "finished",
+      "acceptance": "AC-01",
+      "exit_code": 0,
+      "timed_out": false
+    },
+    "run-AC-04-final": {
+      "status": "finished",
+      "acceptance": "AC-04",
+      "exit_code": 0,
+      "timed_out": false
+    },
+    "run-AC-06-final": {
+      "status": "finished",
+      "acceptance": "AC-06",
+      "exit_code": 0,
+      "timed_out": false
+    }
+  }
+}

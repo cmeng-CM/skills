@@ -1,0 +1,13 @@
+{
+  "ok": false,
+  "counts": {
+    "skills": 6,
+    "markdown": 35,
+    "json": 5,
+    "local_links": 47
+  },
+  "errors": [
+    "delivery-verify/tests/behavior-cases.json: invalid JSON: Expecting value: line 1 column 15 (char 14)"
+  ],
+  "scope": "Packaging, basic metadata, explicit-entry policy, JSON syntax and ordinary local Markdown links only; no semantic quality or behavioral guarantee."
+}

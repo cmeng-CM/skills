@@ -1,0 +1,77 @@
+{
+  "root_manifest_matches": true,
+  "link_checks": [
+    {
+      "path": "/Users/cm/.agents/skills/delivery-design",
+      "is_symlink": true,
+      "target_matches": true,
+      "entry_readable": true
+    },
+    {
+      "path": "/Users/cm/.agents/skills/delivery-plan",
+      "is_symlink": true,
+      "target_matches": true,
+      "entry_readable": true
+    },
+    {
+      "path": "/Users/cm/.agents/skills/delivery-implement",
+      "is_symlink": true,
+      "target_matches": true,
+      "entry_readable": true
+    },
+    {
+      "path": "/Users/cm/.agents/skills/delivery-review",
+      "is_symlink": true,
+      "target_matches": true,
+      "entry_readable": true
+    },
+    {
+      "path": "/Users/cm/.agents/skills/delivery-verify",
+      "is_symlink": true,
+      "target_matches": true,
+      "entry_readable": true
+    },
+    {
+      "path": "/Users/cm/.agents/skills/delivery-orchestrate",
+      "is_symlink": true,
+      "target_matches": true,
+      "entry_readable": true
+    },
+    {
+      "path": "/Users/cm/.claude/skills/delivery-design",
+      "is_symlink": true,
+      "target_matches": true,
+      "entry_readable": true
+    },
+    {
+      "path": "/Users/cm/.claude/skills/delivery-plan",
+      "is_symlink": true,
+      "target_matches": true,
+      "entry_readable": true
+    },
+    {
+      "path": "/Users/cm/.claude/skills/delivery-implement",
+      "is_symlink": true,
+      "target_matches": true,
+      "entry_readable": true
+    },
+    {
+      "path": "/Users/cm/.claude/skills/delivery-review",
+      "is_symlink": true,
+      "target_matches": true,
+      "entry_readable": true
+    },
+    {
+      "path": "/Users/cm/.claude/skills/delivery-verify",
+      "is_symlink": true,
+      "target_matches": true,
+      "entry_readable": true
+    },
+    {
+      "path": "/Users/cm/.claude/skills/delivery-orchestrate",
+      "is_symlink": true,
+      "target_matches": true,
+      "entry_readable": true
+    }
+  ]
+}

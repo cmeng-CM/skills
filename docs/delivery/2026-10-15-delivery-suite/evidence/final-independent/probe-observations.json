@@ -1,0 +1,13 @@
+{
+  "resolution": "resolved",
+  "review_after_resolution": "passed",
+  "orphan_rejected": "cannot remove finding owner review:R1; preserve stable IDs and resolve findings there, or start a linked new work item",
+  "config_after_reject": "configure",
+  "repair_lifecycle": "closed",
+  "exit_zero": 0,
+  "actual_stdout": "BROKEN\n",
+  "post_run_A1": "pending",
+  "A1": "failed",
+  "A2": "unknown",
+  "unknown_exception": "only currently evidenced failed criteria can be excepted; not unknown/stale/pending"
+}

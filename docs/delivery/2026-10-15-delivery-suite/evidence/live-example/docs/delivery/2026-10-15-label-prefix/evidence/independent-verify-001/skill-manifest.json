@@ -1,0 +1,34 @@
+[
+  {
+    "path": "SKILL.md",
+    "sha256": "7f543dfa8f5f1bf0179f1aa986c4c3ab4b402180149c9dc625e15077b1ecf177"
+  },
+  {
+    "path": "agents/openai.yaml",
+    "sha256": "85f1870427a86fa35b1b24ba78666995126ce3af09aee87b169750d70e9b06f6"
+  },
+  {
+    "path": "assets/verification-template.md",
+    "sha256": "c6864c4c0f5fbdadbe42804132cb43bfa62b120f54edf348f48c702217bf4164"
+  },
+  {
+    "path": "references/delivery-contract.md",
+    "sha256": "6233673c08cc5d824db86f47b208012a959d19b2017575ea0b1e9fac5686d36f"
+  },
+  {
+    "path": "references/example-verification.md",
+    "sha256": "94c91c622f1be9cb5e53b9ee69cfae21fb08f523c3738ff6905c6eba0316aaf6"
+  },
+  {
+    "path": "references/verification-standard.md",
+    "sha256": "71bbf0a18e346c3cca4bbb0f2a0ca385dc572fcafd3e1f5df035d15dbbea9254"
+  },
+  {
+    "path": "references/work-rules.md",
+    "sha256": "58f47a228c71ad78431d38a506c24f9f8f5f595c6ec08397b3d4ea37b6abf61d"
+  },
+  {
+    "path": "tests/behavior-cases.json",
+    "sha256": "c3d03421fc065550ede90abc8b0a760f4db02724192e2efc4fccaa6a174b8bb5"
+  }
+]

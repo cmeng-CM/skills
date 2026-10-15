@@ -1,0 +1,17 @@
+{
+  "argv": [
+    "python3",
+    "-B",
+    "delivery-orchestrate/scripts/delivery.py",
+    "close",
+    "--work",
+    "docs/delivery/2026-10-15-delivery-suite",
+    "--input",
+    "docs/delivery/2026-10-15-delivery-suite/admission/close-001.json",
+    "--op",
+    "close-suite-final"
+  ],
+  "exit": 0,
+  "stdout": "{\n  \"seq\": 20,\n  \"at\": \"2026-10-15T13:42:17.305247+00:00\",\n  \"kind\": \"close\",\n  \"op\": \"close-suite-final\",\n  \"request_hash\": \"f89cf7b819dd4a9c67ad10444e0f2e079bef24a96c636a94d8dc5bb577e92577\",\n  \"payload\": {\n    \"mode\": \"complete\",\n    \"actor\": {\n      \"id\": \"root\",\n      \"context\": \"root-session\"\n    },\n    \"summary\": \"三项实施、非实现者整体审查、六项必需验收均当前通过；安装与保护核对通过，无例外。首版局限和需查看事项完整保留。\",\n    \"report\": {\n      \"path\": \"docs/delivery/2026-10-15-delivery-suite/close-ready.md\",\n      \"object_hash\": \"6688b5d37ed9b93d3b9cf69e6de448677f7e17878225e0659cf63b4c7e6c43aa\",\n      \"bytes\": 1679\n    },\n    \"config_op\": \"configure-suite-001\",\n    \"exceptions\": [],\n    \"state\": {\n      \"configuration\": \"current\",\n      \"config_operation\": \"configure-suite-001\",\n      \"implementation\": {\n        \"T-01\": {\n          \"status\": \"passed\",\n          \"operation_id\": \"implement-T-01-capability_docs\"\n        },\n        \"T-02\": {\n          \"status\": \"passed\",\n          \"operation_id\": \"implement-T-02-runtime_engine\"\n        },\n        \"T-03\": {\n          \"status\": \"passed\",\n          \"operation_id\": \"implement-T-03-root\"\n        }\n      },\n      \"review\": {\n        \"R-01\": {\n          \"status\": \"passed\",\n          \"operation_id\": \"review-R-01-final\"\n        }\n      },\n      \"verification\": {\n        \"AC-01\": {\n          \"status\": \"passed\",\n          \"operation_id\": \"verify-AC-01-final\"\n        },\n        \"AC-02\": {\n          \"status\": \"passed\",\n          \"operation_id\": \"verify-AC-02-final\"\n        },\n        \"AC-03\": {\n          \"status\": \"passed\",\n          \"operation_id\": \"verify-AC-03-final\"\n        },\n        \"AC-04\": {\n          \"status\": \"passed\",\n          \"operation_id\": \"verify-AC-04-final\"\n        },\n        \"AC-05\": {\n          \"status\": \"passed\",\n          \"operation_id\": \"verify-AC-05-final\"\n        },\n        \"AC-06\": {\n          \"status\": \"passed\",\n          \"operation_id\": \"verify-AC-06-final\"\n        }\n      },\n      \"issues\": {},\n      \"lifecycle\": \"active\",\n      \"closure\": null,\n      \"runs\": {\n        \"run-AC-01-final\": {\n          \"status\": \"finished\",\n          \"acceptance\": \"AC-01\",\n          \"exit_code\": 0,\n          \"timed_out\": false\n        },\n        \"run-AC-04-final\": {\n          \"status\": \"finished\",\n          \"acceptance\": \"AC-04\",\n          \"exit_code\": 0,\n          \"timed_out\": false\n        },\n        \"run-AC-06-final\": {\n          \"status\": \"finished\",\n          \"acceptance\": \"AC-06\",\n          \"exit_code\": 0,\n          \"timed_out\": false\n        }\n      }\n    }\n  },\n  \"previous\": \"19ddc52613ec1c50ab8d7e3d81c7d852a204150a9dc229371f134874a9e11568\",\n  \"hash\": \"674b52e1a7fd499a60433db6dccbe0c40a291eaa2bedcd7ab30347198aa66ee1\"\n}\n",
+  "stderr": ""
+}

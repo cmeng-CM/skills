@@ -1,0 +1,80 @@
+{
+  "seq": 2,
+  "at": "2026-10-15T13:36:22.726620+00:00",
+  "kind": "configure",
+  "op": "configure",
+  "request_hash": "c6742c3eccc9c1070c503b717454444843526bc929dbc43ba80a1b8b86a2a074",
+  "payload": {
+    "sources": {
+      "plan": {
+        "path": "docs/delivery/2026-10-15-cli-fixture/plan.md",
+        "quote": "T1 exposes message() returning works.",
+        "object_hash": "9eb09b3646037ea1f5e36c08e54f282224a41eeaca17920fbf7a26f1eec78094",
+        "bytes": 199
+      },
+      "authorization": {
+        "path": "docs/delivery/2026-10-15-cli-fixture/authorization.md",
+        "quote": "SIMULATED fixture authorization: exercise local CLI transitions for T1 only.",
+        "object_hash": "df3a1c1c03271be73c9f7201da3a99b568e2795acf65f005f6111346d537c94b",
+        "bytes": 213,
+        "scope": "Isolated fixture T1; no real-world authorization is asserted"
+      }
+    },
+    "spec": {
+      "tasks": [
+        {
+          "id": "T1",
+          "scope": [
+            "src",
+            "tests"
+          ],
+          "depends": []
+        }
+      ],
+      "reviews": [
+        {
+          "id": "R1",
+          "tasks": [
+            "T1"
+          ],
+          "whole": true
+        }
+      ],
+      "acceptance": [
+        {
+          "id": "A1",
+          "tasks": [
+            "T1"
+          ],
+          "required": true,
+          "method": "command",
+          "command": [
+            "/Users/cm/workspace/github/ppt-master/.venv/bin/python3",
+            "-B",
+            "tests/check.py"
+          ],
+          "criteria": "Actual message() behavior returns works",
+          "environment": "Isolated local CLI fixture using current Python executable",
+          "waivable": false,
+          "depends": [
+            {
+              "kind": "review",
+              "id": "R1"
+            }
+          ]
+        }
+      ]
+    },
+    "actor": {
+      "id": "fixture-controller",
+      "context": "fixture-control-context"
+    },
+    "skill_revision": "fixture-plan-contract-1",
+    "contract_version": 1,
+    "mapping_reason": "SIMULATED explicit mapping for CLI behavior test only.",
+    "reused": [],
+    "resolution_history": []
+  },
+  "previous": "0e173d3eb37b8fe4dca0f85034c2b3d78f8b676f5c431ec5fad464ef41949115",
+  "hash": "9513f47a0239df75efccd95dea12a5fb8744dc2ff75e4b83e5bc14ca145e949e"
+}

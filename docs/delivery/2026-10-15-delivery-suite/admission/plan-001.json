@@ -1,0 +1,217 @@
+{
+  "schema_version": 1,
+  "contract_version": 1,
+  "actor": {
+    "id": "root",
+    "context": "root-session"
+  },
+  "skill_revision": "six-skill-content-sha256-manifest:301113c8c2403d9de4d9aac1dfe7078fa3f363acdbd0c11d2d6f3188e05fcf50",
+  "plan": {
+    "path": "docs/delivery/2026-10-15-delivery-suite/plan.md",
+    "quote": "这里的 T-04 是收尾活动而非产品功能"
+  },
+  "design": {
+    "path": "docs/delivery/2026-10-15-delivery-suite/design.md",
+    "quote": "## 6. 验证与验收"
+  },
+  "authorization": {
+    "path": "docs/delivery/2026-10-15-delivery-suite/authorization.md",
+    "quote": "可以，直接执行吧，直到执行完成",
+    "scope": "新delivery六skills、实际验证安装、本地提交，不push；不改原skill"
+  },
+  "mapping_reason": "已读取design第6章和plan任务分解。T1对应五能力，T2运行引擎，T3编排协议和包装检查。T4是审查验证安装收尾活动，映射整体R1及AC1..6而非循环产品任务；为保持全套实际版本一致，最终六项验收覆盖三个任务。command机械输出由另行逐项语义判断支持，不冒充行为证明。",
+  "tasks": [
+    {
+      "id": "T-01",
+      "scope": [
+        "delivery-design",
+        "delivery-plan",
+        "delivery-implement",
+        "delivery-review",
+        "delivery-verify"
+      ],
+      "depends": []
+    },
+    {
+      "id": "T-02",
+      "scope": [
+        "delivery-orchestrate/scripts/delivery.py",
+        "delivery-orchestrate/tests",
+        "delivery-orchestrate/references/runtime-api.md"
+      ],
+      "depends": []
+    },
+    {
+      "id": "T-03",
+      "scope": [
+        "delivery-orchestrate/SKILL.md",
+        "delivery-orchestrate/agents",
+        "delivery-orchestrate/assets",
+        "delivery-orchestrate/references/contracts.md",
+        "delivery-orchestrate/references/orchestration.md",
+        "delivery-orchestrate/scripts/check_suite.py"
+      ],
+      "depends": [
+        {
+          "kind": "implementation",
+          "id": "T-01"
+        },
+        {
+          "kind": "implementation",
+          "id": "T-02"
+        }
+      ]
+    }
+  ],
+  "reviews": [
+    {
+      "id": "R-01",
+      "tasks": [
+        "T-01",
+        "T-02",
+        "T-03"
+      ],
+      "whole": true
+    }
+  ],
+  "acceptance": [
+    {
+      "id": "AC-01",
+      "tasks": [
+        "T-01",
+        "T-02",
+        "T-03"
+      ],
+      "required": true,
+      "method": "command",
+      "criteria": "六个skill可校验且引用可达；五能力不导入编排代码；包装检查与真实独立样本联合判断。",
+      "environment": "当前macOS本地工作区，具体Python路径见运行输出；真实产品与原始报告",
+      "waivable": false,
+      "depends": [
+        {
+          "kind": "review",
+          "id": "R-01"
+        }
+      ],
+      "command": [
+        "python3",
+        "-B",
+        "delivery-orchestrate/scripts/check_suite.py",
+        "--skills-root",
+        ".",
+        "--json"
+      ]
+    },
+    {
+      "id": "AC-02",
+      "tasks": [
+        "T-01",
+        "T-02",
+        "T-03"
+      ],
+      "required": true,
+      "method": "inspection",
+      "criteria": "三类新报告规范、模板、填充示例完整，事实/结论/限制可区分；独立内容审查和实际报告。",
+      "environment": "当前macOS本地工作区，具体Python路径见运行输出；真实产品与原始报告",
+      "waivable": false,
+      "depends": [
+        {
+          "kind": "review",
+          "id": "R-01"
+        }
+      ]
+    },
+    {
+      "id": "AC-03",
+      "tasks": [
+        "T-01",
+        "T-02",
+        "T-03"
+      ],
+      "required": true,
+      "method": "inspection",
+      "criteria": "正常CLI流程可闭环；循环、伪独立、失败漏处理、缺验证不得放行；命令执行不等于通过。",
+      "environment": "当前macOS本地工作区，具体Python路径见运行输出；真实产品与原始报告",
+      "waivable": false,
+      "depends": [
+        {
+          "kind": "review",
+          "id": "R-01"
+        }
+      ]
+    },
+    {
+      "id": "AC-04",
+      "tasks": [
+        "T-01",
+        "T-02",
+        "T-03"
+      ],
+      "required": true,
+      "method": "command",
+      "criteria": "新删改、原证据篡改、重试冲突、关闭后变化可识别；历史保留。",
+      "environment": "当前macOS本地工作区，具体Python路径见运行输出；真实产品与原始报告",
+      "waivable": false,
+      "depends": [
+        {
+          "kind": "review",
+          "id": "R-01"
+        }
+      ],
+      "command": [
+        "python3",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "delivery-orchestrate/tests",
+        "-v"
+      ]
+    },
+    {
+      "id": "AC-05",
+      "tasks": [
+        "T-01",
+        "T-02",
+        "T-03"
+      ],
+      "required": true,
+      "method": "inspection",
+      "criteria": "79个原文件摘要一致，12个新软链正确且不替代旧入口。",
+      "environment": "当前macOS本地工作区，具体Python路径见运行输出；真实产品与原始报告",
+      "waivable": false,
+      "depends": [
+        {
+          "kind": "review",
+          "id": "R-01"
+        }
+      ]
+    },
+    {
+      "id": "AC-06",
+      "tasks": [
+        "T-01",
+        "T-02",
+        "T-03"
+      ],
+      "required": true,
+      "method": "command",
+      "criteria": "未知契约拒绝，显式重接纳不绕过失败；design44、plan14项机械回归通过。",
+      "environment": "当前macOS本地工作区，具体Python路径见运行输出；真实产品与原始报告",
+      "waivable": false,
+      "depends": [
+        {
+          "kind": "review",
+          "id": "R-01"
+        }
+      ],
+      "command": [
+        "python3",
+        "-B",
+        "-c",
+        "import subprocess,sys; results=[subprocess.run([sys.executable,'-B','-m','unittest','discover','-s',p,'-v']).returncode for p in ['delivery-design/tests','delivery-plan/tests']]; sys.exit(any(results))"
+      ]
+    }
+  ]
+}

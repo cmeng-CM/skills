@@ -1,0 +1,12 @@
+{
+  "seq": 9,
+  "at": "2026-10-15T13:36:23.205876+00:00",
+  "kind": "reopen",
+  "op": "reopen",
+  "request_hash": "8eb996bca4d61e4edcdf1b8bd2cc219f1c2006ed860849031a196cee1a86d4cc",
+  "payload": {
+    "reason": "SIMULATED follow-up tests evidence invalidation; retain prior close event"
+  },
+  "previous": "b3407c9af47d0bc8dbc51cf46ef7d06e3c6128089e1d0a70a68eb80a3d4b5b5e",
+  "hash": "0783e7d22d7ebb2e666eccb742d0c8eb89b29d6791b7060e74ea9d6369e02052"
+}

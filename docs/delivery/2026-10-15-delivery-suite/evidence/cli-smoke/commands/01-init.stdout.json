@@ -1,0 +1,12 @@
+{
+  "seq": 1,
+  "at": "2026-10-15T13:36:22.684202+00:00",
+  "kind": "init",
+  "op": "init",
+  "request_hash": "2187c7ea6a36e727e19b8493073da5bfae4e1e841f1efe81fe12794ef4933adb",
+  "payload": {
+    "title": "SIMULATED CLI smoke"
+  },
+  "previous": "0000000000000000000000000000000000000000000000000000000000000000",
+  "hash": "0e173d3eb37b8fe4dca0f85034c2b3d78f8b676f5c431ec5fad464ef41949115"
+}

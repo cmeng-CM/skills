@@ -1,0 +1,178 @@
+{
+  "script": "/Users/cm/workspace/github/skills/delivery-orchestrate/scripts/check_suite.py",
+  "script_sha256": "fde302a4a2bbd545a04caabd08885356e2362908887a80173a90e7779fe0e8ee",
+  "temporary_workspace": "/private/tmp/delivery-suite-package-probes-uhjj1tl6",
+  "copied_skill_files": {
+    "delivery-design/SKILL.md": "a43e17b407b122ddc78f3ab30d9859012f943fbfd8e8e75820507fa5ffa9341f",
+    "delivery-design/agents/openai.yaml": "a1499d95abd8447558c535fe5554adcc3c9b988a0a39264a6283d430effe1e94",
+    "delivery-design/references/delivery-contract.md": "ac71ea74c14a32ecb9fc5923f62bf0c655891b199b7cc9964f29613893f908cf",
+    "delivery-design/references/document-standard.md": "33717eaf1f2c3e390c2004f8aa8b41a20b2ddba609cb6b8ca024000db24c523a",
+    "delivery-design/references/preparation.md": "1e093acffc41ff13aca68edda2256336eff5362e25208923aea9921710f5e0d8",
+    "delivery-design/references/review.md": "c6e957c13467b55f86a91321d16979a216c5098df5d6ce24c04f76ea4eaf81bd",
+    "delivery-design/scripts/check_doc.py": "04b243c0f440d3a01f88d7f683c456add273f7559bcb27542cb161f1afc20512",
+    "delivery-design/tests/behavior-cases.json": "450118e2784762f85e80d938de81e5dc0b586aba065af85a14df5138f407bd39",
+    "delivery-design/tests/test_check_doc.py": "147cc3671a9a865d7d9b93e51a9da8c4766d69fe0b988b44e631d185d47ed8b6",
+    "delivery-implement/SKILL.md": "f01e3af9874a37a487342fc108d21c7d6b74ea20448d60c740c69299a48cd88c",
+    "delivery-implement/agents/openai.yaml": "d48433ebc66a1b2961a14458fc90c6c342f942527e6a6328902411e46eee29a9",
+    "delivery-implement/assets/implementation-template.md": "8e6177836f364a6d070cbe7f5e462117aff951c3b6f0c122b26769eac0726a21",
+    "delivery-implement/references/delivery-contract.md": "0777dedd11495bb86a0be01d22929032a14607057efdf26817bde205ce12d5fa",
+    "delivery-implement/references/example-implementation.md": "a869d9785257f4914b2cfe7300df2cddb49c3b809f07e0545a7ad6400561f424",
+    "delivery-implement/references/implementation-standard.md": "77ce92f18d0508a16501f04beda2c45816b88d1c478c1264dea6d8003c291309",
+    "delivery-implement/references/work-rules.md": "2bc1f603fbdeea27802a1f448b20fc57cdf47a6772f72178506666633e9352b5",
+    "delivery-implement/tests/behavior-cases.json": "fe77112ff1dcf6727591cd0ab4a10eac88aa2ba13a12989ae0d05d23c2c1ae03",
+    "delivery-orchestrate/SKILL.md": "1479d1ede48df529ea692b7cb19880820e1a8044f8e463b339b406b0d473fb29",
+    "delivery-orchestrate/agents/openai.yaml": "a1499d95abd8447558c535fe5554adcc3c9b988a0a39264a6283d430effe1e94",
+    "delivery-orchestrate/assets/dispatch-template.md": "274b133c22761bca27ddf591485b6a3fd59c36466684eb34effec91b4437db27",
+    "delivery-orchestrate/references/contracts.md": "c843a44c6d893cc38b9de3aaa0db3afe2b031e336bebd9c6eba07a07164c46a3",
+    "delivery-orchestrate/references/orchestration.md": "52c064480998dfae19c943ba6d3cf8c1b1f33ce5bc27a5fbfb10031518fc1370",
+    "delivery-orchestrate/references/runtime-api.md": "aba34a9bf7796371c95c02e3931ea09ece56970c303b6d293521bc53d6a01673",
+    "delivery-orchestrate/scripts/check_suite.py": "fde302a4a2bbd545a04caabd08885356e2362908887a80173a90e7779fe0e8ee",
+    "delivery-orchestrate/scripts/delivery.py": "035ee216eb6eb46468c4d626bf79de76eb499a25c2f4190ac57c9d519561ae92",
+    "delivery-orchestrate/tests/test_delivery.py": "2c1be57cf1f34ca28978fbe391aca1829dd2f1750a8a5adc8057766a2eceef14",
+    "delivery-plan/SKILL.md": "bddec1a81393bbbd39cfc2fc8ce7f7c843e0b3a9652033c682a73b0ff7c58f3b",
+    "delivery-plan/agents/openai.yaml": "a1499d95abd8447558c535fe5554adcc3c9b988a0a39264a6283d430effe1e94",
+    "delivery-plan/assets/plan-template.md": "cbe310cd5aa358ff9e8cec8e8990eb278fbb2d3b01e44259048bc4d6fff09816",
+    "delivery-plan/references/delivery-contract.md": "7dfd1917b4648a2c60df7370c2d51e41256cbf710182ad625e208cf40fddca6f",
+    "delivery-plan/references/example-plan.md": "4d8a2c52a4e73e4761a464ed8e211b76d3f60e53e5b004f79a1f37c6aa328185",
+    "delivery-plan/references/plan-standard.md": "d9a381d52c20f9f44dfe3d14341ff4f19936fb9b5cda7d4a0103abd5a49c3ba7",
+    "delivery-plan/references/preparation.md": "55e63a132bea24c4e0830358a6c437b88d6a98d59ca804859247107913eed606",
+    "delivery-plan/references/review.md": "0dfb6ef694cd6aa93aa4d525eb65b27502ce8085be421ba0377ce05983cb532d",
+    "delivery-plan/scripts/check_plan.py": "641f61a0f17cea38536f02e6355ca0577f38b483bdf19485bdcbd2d376f50ad5",
+    "delivery-plan/tests/behavior-cases.json": "eef9080024e381e70b21f97345fcd0467879bc41c60928b9adf0f1d26f43efe4",
+    "delivery-plan/tests/test_check_plan.py": "de10dc7a87b87974f0278864e83532b75c2b00ef63f376c6c27f568ababed0ed",
+    "delivery-review/SKILL.md": "5f7e8fcbfd781f498ebc04254914e5e94f724f442c4e9d5b5df4bb5540f17aa7",
+    "delivery-review/agents/openai.yaml": "0fb3fed7b7379ddfa1f938cd87b698da06363d1e2d053816b98c7e71a313aea3",
+    "delivery-review/assets/review-template.md": "e7dc7e3798b17974f47fa101b7e1e088793c54d3a9d7ccc6aa411eb9fb407b3b",
+    "delivery-review/references/delivery-contract.md": "c64355228b9b6c4f155a8df5048bb3c5a1b5881579772f57efea0d5d9e76ba76",
+    "delivery-review/references/example-review.md": "37b97469141ea3a149210ead4f56b5c844234775d6a0df50937616b257c0bf5d",
+    "delivery-review/references/review-standard.md": "8d2ad8e8edf7715813aa6288694a29b1c7c25faf1cf8084428709712753f8629",
+    "delivery-review/references/work-rules.md": "4b57e7d8b5c85ca28dc4431e56a4389ec1d996a50029ebed674115c538d79c95",
+    "delivery-review/tests/behavior-cases.json": "b48fd040ae6c8b1144c8ad53ca2336c1855fda17606b1d5e3eea5ef2b5236adc",
+    "delivery-verify/SKILL.md": "7f543dfa8f5f1bf0179f1aa986c4c3ab4b402180149c9dc625e15077b1ecf177",
+    "delivery-verify/agents/openai.yaml": "85f1870427a86fa35b1b24ba78666995126ce3af09aee87b169750d70e9b06f6",
+    "delivery-verify/assets/verification-template.md": "c6864c4c0f5fbdadbe42804132cb43bfa62b120f54edf348f48c702217bf4164",
+    "delivery-verify/references/delivery-contract.md": "6233673c08cc5d824db86f47b208012a959d19b2017575ea0b1e9fac5686d36f",
+    "delivery-verify/references/example-verification.md": "94c91c622f1be9cb5e53b9ee69cfae21fb08f523c3738ff6905c6eba0316aaf6",
+    "delivery-verify/references/verification-standard.md": "71bbf0a18e346c3cca4bbb0f2a0ca385dc572fcafd3e1f5df035d15dbbea9254",
+    "delivery-verify/references/work-rules.md": "58f47a228c71ad78431d38a506c24f9f8f5f595c6ec08397b3d4ea37b6abf61d",
+    "delivery-verify/tests/behavior-cases.json": "c3d03421fc065550ede90abc8b0a760f4db02724192e2efc4fccaa6a174b8bb5"
+  },
+  "results": [
+    {
+      "case": "normal",
+      "command": [
+        "/Users/cm/workspace/github/ppt-master/.venv/bin/python3",
+        "-B",
+        "/Users/cm/workspace/github/skills/delivery-orchestrate/scripts/check_suite.py",
+        "--skills-root",
+        "/private/tmp/delivery-suite-package-probes-uhjj1tl6/normal",
+        "--json"
+      ],
+      "time": "2026-10-15T21:31:47.453454+08:00",
+      "mutation": null,
+      "exit_code": 0,
+      "ok": true,
+      "errors": [],
+      "expected_exit_code": 0,
+      "expectation_met": true
+    },
+    {
+      "case": "broken-link",
+      "command": [
+        "/Users/cm/workspace/github/ppt-master/.venv/bin/python3",
+        "-B",
+        "/Users/cm/workspace/github/skills/delivery-orchestrate/scripts/check_suite.py",
+        "--skills-root",
+        "/private/tmp/delivery-suite-package-probes-uhjj1tl6/broken-link",
+        "--json"
+      ],
+      "time": "2026-10-15T21:31:47.505664+08:00",
+      "mutation": [
+        "append",
+        "delivery-implement/SKILL.md",
+        "\n[Broken probe](references/this-file-does-not-exist.md)\n"
+      ],
+      "exit_code": 1,
+      "ok": false,
+      "errors": [
+        "delivery-implement/SKILL.md: broken local link: references/this-file-does-not-exist.md"
+      ],
+      "expected_exit_code": 1,
+      "expectation_met": true
+    },
+    {
+      "case": "missing-file",
+      "command": [
+        "/Users/cm/workspace/github/ppt-master/.venv/bin/python3",
+        "-B",
+        "/Users/cm/workspace/github/skills/delivery-orchestrate/scripts/check_suite.py",
+        "--skills-root",
+        "/private/tmp/delivery-suite-package-probes-uhjj1tl6/missing-file",
+        "--json"
+      ],
+      "time": "2026-10-15T21:31:47.592461+08:00",
+      "mutation": [
+        "delete",
+        "delivery-review/references/review-standard.md",
+        ""
+      ],
+      "exit_code": 1,
+      "ok": false,
+      "errors": [
+        "delivery-review/SKILL.md: broken local link: references/review-standard.md",
+        "delivery-review/references/delivery-contract.md: broken local link: review-standard.md"
+      ],
+      "expected_exit_code": 1,
+      "expectation_met": true
+    },
+    {
+      "case": "missing-entry",
+      "command": [
+        "/Users/cm/workspace/github/ppt-master/.venv/bin/python3",
+        "-B",
+        "/Users/cm/workspace/github/skills/delivery-orchestrate/scripts/check_suite.py",
+        "--skills-root",
+        "/private/tmp/delivery-suite-package-probes-uhjj1tl6/missing-entry",
+        "--json"
+      ],
+      "time": "2026-10-15T21:31:47.644272+08:00",
+      "mutation": [
+        "delete",
+        "delivery-verify/SKILL.md",
+        ""
+      ],
+      "exit_code": 1,
+      "ok": false,
+      "errors": [
+        "delivery-verify: missing SKILL.md"
+      ],
+      "expected_exit_code": 1,
+      "expectation_met": true
+    },
+    {
+      "case": "invalid-json",
+      "command": [
+        "/Users/cm/workspace/github/ppt-master/.venv/bin/python3",
+        "-B",
+        "/Users/cm/workspace/github/skills/delivery-orchestrate/scripts/check_suite.py",
+        "--skills-root",
+        "/private/tmp/delivery-suite-package-probes-uhjj1tl6/invalid-json",
+        "--json"
+      ],
+      "time": "2026-10-15T21:31:47.697120+08:00",
+      "mutation": [
+        "replace",
+        "delivery-verify/tests/behavior-cases.json",
+        "{\"unfinished\":"
+      ],
+      "exit_code": 1,
+      "ok": false,
+      "errors": [
+        "delivery-verify/tests/behavior-cases.json: invalid JSON: Expecting value: line 1 column 15 (char 14)"
+      ],
+      "expected_exit_code": 1,
+      "expectation_met": true
+    }
+  ],
+  "scope": "真实临时副本包装探针，仅证明所列结构损坏被发现，不证明专业语义或模型行为。"
+}

@@ -1,0 +1,131 @@
+[
+  {
+    "name": "design-tests",
+    "argv": [
+      "/Users/cm/workspace/github/ppt-master/.venv/bin/python3",
+      "-B",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "delivery-design/tests",
+      "-v"
+    ],
+    "exit": 0,
+    "stdout": "",
+    "stderr": "_and_new_cases_have_observable_criteria) ... ok\ntest_runtime_standard_retains_six_required_five_optional (test_check_doc.SkillResources.test_runtime_standard_retains_six_required_five_optional) ... ok\n\n----------------------------------------------------------------------\nRan 44 tests in 0.227s\n\nOK\n"
+  },
+  {
+    "name": "plan-tests",
+    "argv": [
+      "/Users/cm/workspace/github/ppt-master/.venv/bin/python3",
+      "-B",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "delivery-plan/tests",
+      "-v"
+    ],
+    "exit": 0,
+    "stdout": "",
+    "stderr": "known_internal_id_and_explicit_external_source) ... ok\ntest_unstructured_document_discloses_unchecked_scope (test_check_plan.PlanCheckTests.test_unstructured_document_discloses_unchecked_scope) ... ok\n\n----------------------------------------------------------------------\nRan 14 tests in 0.094s\n\nOK\n"
+  },
+  {
+    "name": "design-doc",
+    "argv": [
+      "/Users/cm/workspace/github/ppt-master/.venv/bin/python3",
+      "-B",
+      "delivery-design/scripts/check_doc.py",
+      "docs/delivery/2026-10-15-delivery-suite/design.md"
+    ],
+    "exit": 0,
+    "stdout": "机械检查：0 个错误，0 个警告；profile=feature-change\n范围：支持的标题、空节、D-NN 定义与引用、文内锚点及占位提示；外部链接和复杂 Markdown 未验证。\n结果不代表设计可行、共识完整、用户批准或验收通过。输入文件未修改。\n",
+    "stderr": ""
+  },
+  {
+    "name": "plan-doc",
+    "argv": [
+      "/Users/cm/workspace/github/ppt-master/.venv/bin/python3",
+      "-B",
+      "delivery-plan/scripts/check_plan.py",
+      "docs/delivery/2026-10-15-delivery-suite/plan.md",
+      "--json"
+    ],
+    "exit": 0,
+    "stdout": ": true,\n  \"findings\": [],\n  \"scope\": [\n    \"识别本地 ID 4 个、外部声明 6 个；跨表汇总允许重复引用。\",\n    \"核对已声明已细化的任务卡 4 张；只检查已支持字段非空，不判断实际可执行性。\",\n    \"识别依赖表 1 张、关系 3 条；仅对这些关系检查循环。\",\n    \"未检查语义覆盖、关键决策确认的真实性、图文一致性、外部材料与实际证据；未展开 ID 区间或自然语言依赖。\"\n  ],\n  \"counts\": {\n    \"local_ids\": 4,\n    \"external_ids\": 6,\n    \"detailed_tasks\": 4,\n    \"dependency_edges\": 3\n  },\n  \"path\": \"docs/delivery/2026-10-15-delivery-suite/plan.md\"\n}\n",
+    "stderr": ""
+  },
+  {
+    "name": "package-design",
+    "argv": [
+      "/Users/cm/workspace/github/ppt-master/.venv/bin/python3",
+      "-B",
+      "/Users/cm/.codex/skills/.system/skill-creator/scripts/quick_validate.py",
+      "delivery-design"
+    ],
+    "exit": 0,
+    "stdout": "Skill is valid!\n",
+    "stderr": ""
+  },
+  {
+    "name": "package-plan",
+    "argv": [
+      "/Users/cm/workspace/github/ppt-master/.venv/bin/python3",
+      "-B",
+      "/Users/cm/.codex/skills/.system/skill-creator/scripts/quick_validate.py",
+      "delivery-plan"
+    ],
+    "exit": 0,
+    "stdout": "Skill is valid!\n",
+    "stderr": ""
+  },
+  {
+    "name": "package-implement",
+    "argv": [
+      "/Users/cm/workspace/github/ppt-master/.venv/bin/python3",
+      "-B",
+      "/Users/cm/.codex/skills/.system/skill-creator/scripts/quick_validate.py",
+      "delivery-implement"
+    ],
+    "exit": 0,
+    "stdout": "Skill is valid!\n",
+    "stderr": ""
+  },
+  {
+    "name": "package-review",
+    "argv": [
+      "/Users/cm/workspace/github/ppt-master/.venv/bin/python3",
+      "-B",
+      "/Users/cm/.codex/skills/.system/skill-creator/scripts/quick_validate.py",
+      "delivery-review"
+    ],
+    "exit": 0,
+    "stdout": "Skill is valid!\n",
+    "stderr": ""
+  },
+  {
+    "name": "package-verify",
+    "argv": [
+      "/Users/cm/workspace/github/ppt-master/.venv/bin/python3",
+      "-B",
+      "/Users/cm/.codex/skills/.system/skill-creator/scripts/quick_validate.py",
+      "delivery-verify"
+    ],
+    "exit": 0,
+    "stdout": "Skill is valid!\n",
+    "stderr": ""
+  },
+  {
+    "name": "package-orchestrate",
+    "argv": [
+      "/Users/cm/workspace/github/ppt-master/.venv/bin/python3",
+      "-B",
+      "/Users/cm/.codex/skills/.system/skill-creator/scripts/quick_validate.py",
+      "delivery-orchestrate"
+    ],
+    "exit": 0,
+    "stdout": "Skill is valid!\n",
+    "stderr": ""
+  }
+]

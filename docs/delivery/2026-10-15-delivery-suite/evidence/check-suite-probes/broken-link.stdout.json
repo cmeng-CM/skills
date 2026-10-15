@@ -1,0 +1,13 @@
+{
+  "ok": false,
+  "counts": {
+    "skills": 6,
+    "markdown": 35,
+    "json": 5,
+    "local_links": 48
+  },
+  "errors": [
+    "delivery-implement/SKILL.md: broken local link: references/this-file-does-not-exist.md"
+  ],
+  "scope": "Packaging, basic metadata, explicit-entry policy, JSON syntax and ordinary local Markdown links only; no semantic quality or behavioral guarantee."
+}

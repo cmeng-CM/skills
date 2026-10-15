@@ -1,0 +1,83 @@
+{
+  "project": "/private/tmp/delivery-resolution-zrqbomxc",
+  "before": {
+    "configuration": "current",
+    "config_operation": "configure",
+    "implementation": {
+      "T1": {
+        "status": "passed",
+        "operation_id": "impl"
+      }
+    },
+    "review": {
+      "R1": {
+        "status": "passed",
+        "operation_id": "review-fixed"
+      }
+    },
+    "verification": {
+      "AC1": {
+        "status": "pending",
+        "operation_id": null
+      }
+    },
+    "issues": {
+      "F1": {
+        "blocking": true,
+        "id": "F1",
+        "severity": "major",
+        "summary": "defect",
+        "tasks": [
+          "T1"
+        ],
+        "owner_kind": "review",
+        "owner_target": "R1",
+        "origin_op": "review-fail",
+        "status": "resolved",
+        "resolution_op": "review-fixed"
+      }
+    },
+    "lifecycle": "active",
+    "closure": null
+  },
+  "after": {
+    "configuration": "current",
+    "config_operation": "configure",
+    "implementation": {
+      "T1": {
+        "status": "passed",
+        "operation_id": "impl"
+      }
+    },
+    "review": {
+      "R1": {
+        "status": "passed",
+        "operation_id": "review-again"
+      }
+    },
+    "verification": {
+      "AC1": {
+        "status": "pending",
+        "operation_id": null
+      }
+    },
+    "issues": {
+      "F1": {
+        "blocking": true,
+        "id": "F1",
+        "severity": "major",
+        "summary": "defect",
+        "tasks": [
+          "T1"
+        ],
+        "owner_kind": "review",
+        "owner_target": "R1",
+        "origin_op": "review-fail",
+        "status": "resolved",
+        "resolution_op": "review-fixed"
+      }
+    },
+    "lifecycle": "active",
+    "closure": null
+  }
+}

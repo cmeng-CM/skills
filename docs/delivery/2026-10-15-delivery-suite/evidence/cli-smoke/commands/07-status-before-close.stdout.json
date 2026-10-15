@@ -1,0 +1,33 @@
+{
+  "configuration": "current",
+  "config_operation": "configure",
+  "implementation": {
+    "T1": {
+      "status": "passed",
+      "operation_id": "implementation"
+    }
+  },
+  "review": {
+    "R1": {
+      "status": "passed",
+      "operation_id": "review"
+    }
+  },
+  "verification": {
+    "A1": {
+      "status": "passed",
+      "operation_id": "verification"
+    }
+  },
+  "issues": {},
+  "lifecycle": "active",
+  "closure": null,
+  "runs": {
+    "run-A1": {
+      "status": "finished",
+      "acceptance": "A1",
+      "exit_code": 0,
+      "timed_out": false
+    }
+  }
+}

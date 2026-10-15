@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "contract_version": 1,
+  "skill_revision": "fixture-only; engine-snapshot.sha256 identifies tested executable",
+  "kind": "implementation",
+  "target": "T1",
+  "actor": {
+    "id": "fixture-implementer",
+    "context": "fixture-implementation-context"
+  },
+  "report": {
+    "path": "docs/delivery/2026-10-15-cli-fixture/implementation/001.md"
+  },
+  "result": "passed",
+  "summary": "SIMULATED capability admission for real CLI state-transition testing; no actual human authorization or independent review is asserted.",
+  "evidence": [
+    {
+      "path": "src/app.py"
+    }
+  ]
+}

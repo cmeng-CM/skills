@@ -1,0 +1,12 @@
+{
+  "result": "passed",
+  "executed_commands": 15,
+  "expected_rejections": 2,
+  "actual_command_observation": "fixture actual function behavior: works",
+  "closed_record_rejected": true,
+  "reopened_product_change_invalidates_implementation_review_verification": true,
+  "original_close_event_preserved": true,
+  "actors_and_authorization": "explicitly simulated fixture only",
+  "limits": "CLI/state/evidence smoke only; does not establish real independent review, real user authorization, or full semantic skill quality.",
+  "engine_sha256": "035ee216eb6eb46468c4d626bf79de76eb499a25c2f4190ac57c9d519561ae92"
+}

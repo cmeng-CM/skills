@@ -1,0 +1,19 @@
+$ ['/Users/cm/workspace/github/ppt-master/.venv/bin/python3', '-B', 'delivery-plan/scripts/check_plan.py', 'docs/delivery/2026-10-15-delivery-suite/plan.md', '--json']
+exit=0
+{
+  "ok": true,
+  "findings": [],
+  "scope": [
+    "识别本地 ID 4 个、外部声明 6 个；跨表汇总允许重复引用。",
+    "核对已声明已细化的任务卡 4 张；只检查已支持字段非空，不判断实际可执行性。",
+    "识别依赖表 1 张、关系 3 条；仅对这些关系检查循环。",
+    "未检查语义覆盖、关键决策确认的真实性、图文一致性、外部材料与实际证据；未展开 ID 区间或自然语言依赖。"
+  ],
+  "counts": {
+    "local_ids": 4,
+    "external_ids": 6,
+    "detailed_tasks": 4,
+    "dependency_edges": 3
+  },
+  "path": "docs/delivery/2026-10-15-delivery-suite/plan.md"
+}

@@ -1,0 +1,16 @@
+{
+  "command": [
+    "/Users/cm/workspace/github/ppt-master/.venv/bin/python3",
+    "-B",
+    "-m",
+    "unittest",
+    "discover",
+    "-p",
+    "test_label.py",
+    "-v"
+  ],
+  "cwd": "/private/tmp/delivery-suite-live-example",
+  "time": "2026-10-15T21:27:50.068397+08:00",
+  "returncode": 1,
+  "expected": "prefix unsupported before implementation"
+}

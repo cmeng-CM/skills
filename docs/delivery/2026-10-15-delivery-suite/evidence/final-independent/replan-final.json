@@ -1,0 +1,100 @@
+{
+  "orphan_reconfigure_rejected": "cannot remove finding owner review:R1; preserve stable IDs and resolve findings there, or start a linked new work item",
+  "configuration_after_rejection": "configure",
+  "state_after_valid_repair": {
+    "configuration": "current",
+    "config_operation": "configure",
+    "implementation": {
+      "T1": {
+        "status": "passed",
+        "operation_id": "impl"
+      }
+    },
+    "review": {
+      "R1": {
+        "status": "passed",
+        "operation_id": "review-fixed"
+      }
+    },
+    "verification": {
+      "AC1": {
+        "status": "passed",
+        "operation_id": "verification"
+      }
+    },
+    "issues": {
+      "F1": {
+        "blocking": true,
+        "id": "F1",
+        "severity": "major",
+        "summary": "defect",
+        "tasks": [
+          "T1"
+        ],
+        "owner_kind": "review",
+        "owner_target": "R1",
+        "origin_op": "review-fail",
+        "status": "resolved",
+        "resolution_op": "review-fixed"
+      }
+    },
+    "lifecycle": "closed",
+    "closure": {
+      "actor": {
+        "context": "orchestrator",
+        "id": "orchestrator"
+      },
+      "config_op": "configure",
+      "exceptions": [],
+      "mode": "complete",
+      "report": {
+        "bytes": 20,
+        "object_hash": "a554363de036b69b870acab9d454d276982948df3483a22d75ae6c4411e7b307",
+        "path": "report.md"
+      },
+      "state": {
+        "closure": null,
+        "config_operation": "configure",
+        "configuration": "current",
+        "implementation": {
+          "T1": {
+            "operation_id": "impl",
+            "status": "passed"
+          }
+        },
+        "issues": {
+          "F1": {
+            "blocking": true,
+            "id": "F1",
+            "origin_op": "review-fail",
+            "owner_kind": "review",
+            "owner_target": "R1",
+            "resolution_op": "review-fixed",
+            "severity": "major",
+            "status": "resolved",
+            "summary": "defect",
+            "tasks": [
+              "T1"
+            ]
+          }
+        },
+        "lifecycle": "active",
+        "review": {
+          "R1": {
+            "operation_id": "review-fixed",
+            "status": "passed"
+          }
+        },
+        "runs": {},
+        "verification": {
+          "AC1": {
+            "operation_id": "verification",
+            "status": "passed"
+          }
+        }
+      },
+      "summary": "original valid owner has resolved issue"
+    },
+    "runs": {}
+  }
+}

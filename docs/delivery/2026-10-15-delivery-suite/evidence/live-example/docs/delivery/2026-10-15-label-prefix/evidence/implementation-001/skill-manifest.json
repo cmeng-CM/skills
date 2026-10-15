@@ -1,0 +1,10 @@
+{
+  "SKILL.md": "f01e3af9874a37a487342fc108d21c7d6b74ea20448d60c740c69299a48cd88c",
+  "agents/openai.yaml": "d48433ebc66a1b2961a14458fc90c6c342f942527e6a6328902411e46eee29a9",
+  "assets/implementation-template.md": "8e6177836f364a6d070cbe7f5e462117aff951c3b6f0c122b26769eac0726a21",
+  "references/delivery-contract.md": "0777dedd11495bb86a0be01d22929032a14607057efdf26817bde205ce12d5fa",
+  "references/example-implementation.md": "a869d9785257f4914b2cfe7300df2cddb49c3b809f07e0545a7ad6400561f424",
+  "references/implementation-standard.md": "77ce92f18d0508a16501f04beda2c45816b88d1c478c1264dea6d8003c291309",
+  "references/work-rules.md": "2bc1f603fbdeea27802a1f448b20fc57cdf47a6772f72178506666633e9352b5",
+  "tests/behavior-cases.json": "fe77112ff1dcf6727591cd0ab4a10eac88aa2ba13a12989ae0d05d23c2c1ae03"
+}

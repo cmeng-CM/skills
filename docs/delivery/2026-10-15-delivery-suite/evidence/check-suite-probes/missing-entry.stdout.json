@@ -1,0 +1,13 @@
+{
+  "ok": false,
+  "counts": {
+    "skills": 5,
+    "markdown": 29,
+    "json": 4,
+    "local_links": 39
+  },
+  "errors": [
+    "delivery-verify: missing SKILL.md"
+  ],
+  "scope": "Packaging, basic metadata, explicit-entry policy, JSON syntax and ordinary local Markdown links only; no semantic quality or behavioral guarantee."
+}

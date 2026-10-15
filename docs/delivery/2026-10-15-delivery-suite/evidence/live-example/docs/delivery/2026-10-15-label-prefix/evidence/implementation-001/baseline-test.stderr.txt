@@ -1,0 +1,37 @@
+test_chinese_prefix_is_literal (test_label.LabelContractTests.test_chinese_prefix_is_literal) ... ERROR
+test_default_call_keeps_previous_trim_behavior (test_label.LabelContractTests.test_default_call_keeps_previous_trim_behavior) ... ok
+test_empty_body_retains_only_prefix (test_label.LabelContractTests.test_empty_body_retains_only_prefix) ... ERROR
+test_prefix_cannot_be_passed_positionally (test_label.LabelContractTests.test_prefix_cannot_be_passed_positionally) ... ok
+test_prefix_whitespace_is_preserved_without_separator (test_label.LabelContractTests.test_prefix_whitespace_is_preserved_without_separator) ... ERROR
+
+======================================================================
+ERROR: test_chinese_prefix_is_literal (test_label.LabelContractTests.test_chinese_prefix_is_literal)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/delivery-suite-live-example/test_label.py", line 20, in test_chinese_prefix_is_literal
+    self.assertEqual(label(" x ", prefix="中文"), "中文x")
+                     ~~~~~^^^^^^^^^^^^^^^^^^^^^^
+TypeError: label() got an unexpected keyword argument 'prefix'
+
+======================================================================
+ERROR: test_empty_body_retains_only_prefix (test_label.LabelContractTests.test_empty_body_retains_only_prefix)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/delivery-suite-live-example/test_label.py", line 16, in test_empty_body_retains_only_prefix
+    self.assertEqual(label("   ", prefix="p"), "p")
+                     ~~~~~^^^^^^^^^^^^^^^^^^^
+TypeError: label() got an unexpected keyword argument 'prefix'
+
+======================================================================
+ERROR: test_prefix_whitespace_is_preserved_without_separator (test_label.LabelContractTests.test_prefix_whitespace_is_preserved_without_separator)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/delivery-suite-live-example/test_label.py", line 12, in test_prefix_whitespace_is_preserved_without_separator
+    self.assertEqual(label(" x ", prefix=" p "), " p x")
+                     ~~~~~^^^^^^^^^^^^^^^^^^^^^
+TypeError: label() got an unexpected keyword argument 'prefix'
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.002s
+
+FAILED (errors=3)
