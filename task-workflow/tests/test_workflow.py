@@ -2254,14 +2254,15 @@ class WorkflowCLI(unittest.TestCase):
         self.assertIn("格式 3", message)
         self.assertIn("review", message)
         self.assertFalse((self.root / ".workflow/t3legacy/events.jsonl").exists())
-        # `--new-phase` 属 T6：不建空壳——参数不存在（argparse 直接拒绝）。
-        # `--recheck` 已由 T5 实现，同一入口仍按格式分流（格式 ≤3 拒绝，见上一条断言）。
-        process = subprocess.run(
-            [sys.executable, "-B", str(SCRIPT), "review", "t3legacy", "N1",
-             "--verdict", "pass", "--new-phase", "fixture"],
-            cwd=self.root, capture_output=True, text=True)
-        self.assertEqual(process.returncode, 2, process.stdout + process.stderr)
-        self.assertIn("unrecognized arguments", process.stderr)
+        # `--new-phase` 已由 T6 实现：与普通 review 同一入口，格式 ≤3 在同一道格式检查上
+        # 被拒（不为旧格式补空壳）；`--recheck` 同理（见上一条断言）。
+        args = ["review", "t3legacy", "N1", "--new-phase", "--basis", "fixture 实质变化",
+                "--confirmation", "rv-N1-1", "--confirmed-commit", "HEAD..HEAD",
+                "--operation-id", "np-N1-1"]
+        message = self.cli(*args, expected=1)["error"]
+        self.assertIn("格式 3", message)
+        self.assertIn("review", message)
+        self.assertFalse((self.root / ".workflow/t3legacy/events.jsonl").exists())
 
     def test_three_review_interrupt_after_event_replays_and_repairs_projection(self):
         """崩溃窗口（pass 事件已写、状态未写）→ 入口修复投影，重放返回原结果。"""
@@ -2987,6 +2988,322 @@ class WorkflowCLI(unittest.TestCase):
         self.assertEqual(len(repairs), 1)
         self.assertEqual(repairs[0]["data"]["entry"], "review")
         self.assertEqual(workflow.round_count(self.events("t5o"), second["lineage"]), 2)
+
+
+    # ------------------------------------------------ 封顶恢复与受影响审批（T6）
+
+    def t6_plan(self, slug="t6", nodes=None, tasks=None):
+        """N1（T1、T2）＋ N2（T3，依赖 N1，兼任终审）：与 T5 同一跨节点观察位。"""
+        self.t5_plan(slug=slug, nodes=nodes, tasks=tasks)
+
+    def t6_capped(self, slug="t6"):
+        """首审 ＋ 两轮复核 → 两轮修复预算用尽；返回首审结果（含谱系）。"""
+        first = self.t5_review_n1(slug=slug, operation_id="rv-N1-1")
+        self.review_v4("N1", slug=slug, operation_id="rv-N1-2", recheck="rv-N1-1")
+        self.review_v4("N1", slug=slug, operation_id="rv-N1-3", recheck="rv-N1-1")
+        return first
+
+    def new_phase_v4(self, slug="t6", node="N1",
+                     basis="根因分析：验证方法改为先建空输入夹具再跑主路径",
+                     confirmation="rv-N1-3", confirmed_commit="HEAD..HEAD",
+                     operation_id="np-N1-1", expected=0, text=False, **extra):
+        args = ["review", slug, node, "--new-phase", "--basis", basis,
+                "--confirmation", confirmation, "--confirmed-commit", confirmed_commit,
+                "--operation-id", operation_id]
+        for key, value in extra.items():
+            args.extend(["--" + key.replace("_", "-"), value])
+        return (self.cli_text(*args, expected=expected) if text
+                else self.cli(*args, expected=expected))
+
+    def phase_events(self, slug="t6"):
+        return [event for event in self.events(slug) if event["type"] == "review_phase"]
+
+    def test_six_round_cap_rejects_third_round(self):
+        """两轮预算用尽后，第 3 轮普通 review（含 `--recheck`）被拒并给出暂停提示。"""
+        self.t6_plan(slug="t6cap")
+        first = self.t6_capped(slug="t6cap")
+        self.assertEqual(workflow.round_count(self.events("t6cap"), first["lineage"], 1), 2)
+        for extra in ({}, {"recheck": "rv-N1-1"}):
+            with self.subTest(extra=extra):
+                message = self.review_v4("N1", slug="t6cap", operation_id="rv-N1-4",
+                                         expected=1, **extra)["error"]
+                self.assertIn("暂停相关部分及其依赖，进入根因/方案分析", message)
+                self.assertIn("两轮", message)
+                self.assertIn("--new-phase", message)
+        self.assertEqual(len(self.node_review_events("t6cap")), 3)
+        self.assertEqual(self.phase_events("t6cap"), [])
+
+    def test_six_new_phase_opens_resets_rounds_and_keeps_total(self):
+        """合规 `--new-phase`：新阶段从首审级计轮、总账累计可见、成员回到未验收。"""
+        self.t6_plan(slug="t6new")
+        first = self.t6_capped(slug="t6new")
+        lineage = first["lineage"]
+        body = self.ledger_body("t6new")
+        basis = "根因分析：验证方法改为先建空输入夹具再跑主路径；原问题 1–3 接续追踪"
+        result = self.new_phase_v4(slug="t6new", basis=basis, confirmation="rv-N1-3",
+                                   operation_id="np-N1-1")
+        self.assertEqual(result["node"], "N1")
+        self.assertEqual(result["lineage"], lineage)
+        self.assertEqual(result["previous_phase"], 1)
+        self.assertEqual(result["phase"], 2)
+        self.assertEqual(result["rounds"], 0)                       # 新阶段从首审级
+        self.assertEqual(result["total_rounds"], 2)                 # 总账保留
+        self.assertEqual([item["rounds"] for item in result["ledger"]], [2, 0])
+
+        events = self.events("t6new")
+        self.assertEqual(workflow.round_count(events, lineage, 2), 0)
+        self.assertEqual(workflow.round_count(events, lineage, 1), 2)
+        records = self.phase_events("t6new")
+        self.assertEqual(len(records), 1)
+        data = records[0]["data"]
+        self.assertEqual(data["节点"], "N1")
+        self.assertEqual(data["谱系"], lineage)
+        self.assertEqual((data["前阶段"], data["新阶段"]), (1, 2))
+        self.assertEqual(data["basis"], basis)
+        self.assertEqual(data["确认"], {"形态": "记录", "值": "rv-N1-3"})
+        self.assertEqual(data["已确认版本"]["commits"], "HEAD..HEAD")
+        self.assertEqual(data["已确认版本"]["head"], self.git("rev-parse", "HEAD"))
+        self.assertEqual(data["operation_id"], "np-N1-1")
+        self.assertEqual(data["entry"], "review --new-phase")
+        self.assertEqual(data["receipt"]["result"]["phase"], 2)
+        self.assertEqual(data["receipt"]["result"]["event"], records[0]["id"])
+        self.assertEqual(self.ledger_body("t6new"), body)          # 不开账本行
+
+        # 新阶段＝未验收：成员回到「已实现」（不退回待实现），下游不释放
+        self.assertEqual([task.status for task in
+                          workflow.load_plan(str(self.root), "t6new").tasks],
+                         ["implemented", "implemented", "pending"])
+        status = self.cli("status", "t6new")
+        self.assertEqual(status["node_states"]["N1"], workflow.NODE_STATE_INVALID)
+        self.assertIn("N1", status["unaccepted_nodes"])
+        rounds = status["node_rounds"]["N1"]
+        self.assertEqual(rounds["phase"], 2)
+        self.assertEqual(rounds["rounds"], 0)
+        self.assertEqual(rounds["total"], 2)
+        self.assertEqual(rounds["phases"], [{"phase": 1, "rounds": 2}, {"phase": 2, "rounds": 0}])
+        shown = self.cli_text("status", "t6new")
+        self.assertIn("总账", shown)
+        self.assertIn("合计 2 轮", shown)
+        message = self.cli("slice", "t6new", "T3", expected=1)["error"]
+        self.assertIn("N1 未验收", message)
+
+        # 新阶段内重新送审：阶段 2、轮次从 0 计；pass 后成员重新映射 complete
+        again = self.review_v4("N1", slug="t6new", operation_id="rv-N1-5")
+        self.assertEqual(again["phase"], 2)
+        self.assertEqual(again["rounds"], 0)
+        self.assertEqual(self.node_review_events("t6new")[-1]["data"]["审查阶段"], 2)
+        self.assertEqual(self.cli("status", "t6new")["node_states"]["N1"],
+                         workflow.NODE_STATE_VALID)
+        self.assertEqual(self.cli("status", "t6new")["node_rounds"]["N1"]["total"], 2)
+
+    def test_six_new_phase_rejects_missing_stale_and_mixed_bindings(self):
+        """缺确认/缺依据/缺操作 ID、引用不存在、白名单外类型、混用参数、版本不存在。"""
+        self.t6_plan(slug="t6bad")
+        self.t6_capped(slug="t6bad")
+        message = self.new_phase_v4(slug="t6bad", confirmation="", operation_id="np-b1",
+                                    expected=1)["error"]
+        self.assertIn("--confirmation", message)
+        message = self.new_phase_v4(slug="t6bad", basis="   ", operation_id="np-b2",
+                                    expected=1)["error"]
+        self.assertIn("--basis", message)
+        args = ["review", "t6bad", "N1", "--new-phase", "--basis", "实质变化",
+                "--confirmation", "rv-N1-3", "--confirmed-commit", "HEAD..HEAD"]
+        self.assertIn("--operation-id", self.cli(*args, expected=1)["error"])
+        message = self.new_phase_v4(slug="t6bad", confirmation="rv-nope",
+                                    operation_id="np-b3", expected=1)["error"]
+        self.assertIn("记录/操作 ID 引用不存在", message)
+        message = self.new_phase_v4(slug="t6bad", confirmation="rec-t6bad-1",
+                                    operation_id="np-b4", expected=1)["error"]
+        self.assertIn("白名单", message)
+        message = self.new_phase_v4(slug="t6bad", operation_id="np-b5", expected=1,
+                                    verdict="pass")["error"]
+        self.assertIn("互斥", message)
+        message = self.review_v4("N1", slug="t6bad", operation_id="rv-N1-9", expected=1,
+                                 basis="实质变化")["error"]
+        self.assertIn("--new-phase", message)
+        for bad in ("deadbeef..HEAD", "HEAD", "HEAD..deadbeef"):
+            with self.subTest(confirmed_commit=bad):
+                message = self.new_phase_v4(slug="t6bad", confirmation="rv-N1-3",
+                                            confirmed_commit=bad, operation_id="np-b6",
+                                            expected=1)["error"]
+                self.assertIn("所确认版本", message)
+        # 从未送审的节点没有谱系可承接：不得凭空开阶段
+        message = self.new_phase_v4(slug="t6bad", node="N2", confirmation="rv-N1-3",
+                                    operation_id="np-b7", expected=1)["error"]
+        self.assertIn("谱系", message)
+        self.assertEqual(self.phase_events("t6bad"), [])
+        self.assertEqual(len(self.node_review_events("t6bad")), 3)
+
+    def test_six_new_phase_phase_linkage_reuse_and_sequence(self):
+        """阶段衔接：确认所载阶段≠当前、同一确认重复使用、重放序列不连续都拒绝。"""
+        self.t6_plan(slug="t6link")
+        self.t6_capped(slug="t6link")
+        opened = self.new_phase_v4(slug="t6link", confirmation="rv-N1-3", operation_id="np-N1-1")
+        self.assertEqual((opened["previous_phase"], opened["phase"]), (1, 2))
+        # 同一确认记录换新操作 ID 再用 → 拒绝（一次性，不得重复重置预算）
+        message = self.new_phase_v4(slug="t6link", confirmation="rv-N1-3", operation_id="np-N1-2",
+                                    expected=1)["error"]
+        self.assertIn("一次性", message)
+        self.assertIn("rv-N1-3", message)
+        # 确认所载阶段（阶段 1）≠ 当前阶段（阶段 2）→ 拒绝
+        message = self.new_phase_v4(slug="t6link", confirmation="rv-N1-1", operation_id="np-N1-3",
+                                    expected=1)["error"]
+        self.assertIn("阶段", message)
+        # 阶段 2 内的新记录可作下一次新阶段的确认（阶段 2 → 3）
+        second = self.review_v4("N1", slug="t6link", operation_id="rv-N1-5")
+        self.assertEqual((second["phase"], second["rounds"]), (2, 0))
+        third = self.new_phase_v4(slug="t6link", confirmation="rv-N1-5", operation_id="np-N1-4")
+        self.assertEqual((third["previous_phase"], third["phase"]), (2, 3))
+        self.assertEqual(third["total_rounds"], 2)
+        self.assertEqual(len(self.phase_events("t6link")), 2)
+        # 事件重放的阶段序列必须连续：打断序列（1→2 改记 3→4）后拒绝
+        path = self.root / ".workflow/t6link/events.jsonl"
+        events = self.events("t6link")
+        for event in events:
+            if event["type"] == "review_phase":
+                event["data"]["前阶段"], event["data"]["新阶段"] = 3, 4
+                break
+        path.write_text("".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events))
+        message = self.new_phase_v4(slug="t6link", confirmation="rv-N1-3", operation_id="np-N1-5",
+                                    expected=1)["error"]
+        self.assertIn("连续", message)
+        self.assertEqual(len(self.phase_events("t6link")), 2)
+
+    def test_six_confirmed_version_window_binding(self):
+        """旧版本确认不得放行其后该谱系范围内的新变更；纳入确认后通过。"""
+        self.t6_plan(slug="t6ver")
+        self.t6_capped(slug="t6ver")
+        old = self.git("rev-parse", "--short", "HEAD")
+        self.write_file("source.py", "def test_example():\n    return 'later'\n")
+        self.commit_files("T1/T2: 确认之后的又一处改动", "source.py")
+        message = self.new_phase_v4(slug="t6ver", confirmed_commit="%s..%s" % (old, old),
+                                    operation_id="np-N1-1", expected=1)["error"]
+        self.assertIn("所确认版本", message)
+        self.assertIn("未纳入确认", message)
+        self.assertIn("source.py", message)
+        self.assertEqual(self.phase_events("t6ver"), [])
+        # 把该变更纳入所确认版本（B 推到当前 HEAD）→ 通过
+        head = self.git("rev-parse", "--short", "HEAD")
+        result = self.new_phase_v4(slug="t6ver", confirmed_commit="%s..%s" % (old, head),
+                                   operation_id="np-N1-2")
+        self.assertEqual(result["phase"], 2)
+        self.assertEqual(result["confirmed_version"]["head"], self.git("rev-parse", "HEAD"))
+
+    def test_six_new_phase_reapproval_gates_scheme_and_plan(self):
+        """影响面重评：方案正文变化 → 方案门失效；只改计划 → 计划门失效（不新增机制）。"""
+        self.t6_plan(slug="t6gate")
+        self.t6_capped(slug="t6gate")
+        self.new_phase_v4(slug="t6gate", operation_id="np-N1-1")
+        # 方案正文（本计划未声明设计文档 → `## 方案` 一节）变化 → 方案审批失效
+        self.plan("t6gate").write_text(
+            self.plan("t6gate").read_text().replace(
+                "fixture 为什么做、做完是什么样",
+                "fixture 为什么做、做完是什么样（影响面重评后改写）"))
+        message = self.cli("slice", "t6gate", "T3", expected=1)["error"]
+        self.assertIn("『方案』在审批之后被修改过", message)
+        self.cli("approve", "t6gate", "方案", "--by", "fixture 影响面重评：方案正文再确认")
+        self.cli("approve", "t6gate", "计划", "--by", "fixture 影响面重评：计划再确认")
+        self.cli("slice", "t6gate", "T3", expected=1)   # 门过了，但 N1 仍未验收
+        # 只改计划（方案正文不动）→ 计划门失效，不是方案门
+        self.plan("t6gate").write_text(
+            self.plan("t6gate").read_text().replace(
+                "- **预期**：fixture 预期结果", "- **预期**：fixture 预期结果（重评后补一条）", 1))
+        message = self.cli("slice", "t6gate", "T3", expected=1)["error"]
+        self.assertIn("『计划』在审批之后被修改过", message)
+        self.assertNotIn("『方案』在审批之后被修改过", message)
+        self.cli("approve", "t6gate", "计划", "--by", "fixture 计划门重过")
+        message = self.cli("slice", "t6gate", "T3", expected=1)["error"]
+        self.assertIn("N1 未验收", message)             # 只差节点验收：重过计划门即到此
+
+    def test_six_new_phase_idempotent_replay_and_conflict(self):
+        """同操作 ID＋同请求重试返回原结果、不重复开启；同 ID＋不同请求拒绝。"""
+        self.t6_plan(slug="t6idem")
+        self.t6_capped(slug="t6idem")
+        self.new_phase_v4(slug="t6idem", operation_id="np-N1-1")
+        receipt = self.phase_events("t6idem")[0]["data"]["receipt"]   # 原结果随事件持久化
+        first, shown = receipt["result"], receipt["text"]
+        counts = len(self.events("t6idem"))
+        replay = self.new_phase_v4(slug="t6idem", operation_id="np-N1-1")
+        self.assert_replay_matches(replay, first)
+        self.assertEqual(len(self.events("t6idem")), counts)
+        self.assertEqual(len(self.phase_events("t6idem")), 1)
+        self.assertEqual(workflow.round_count(self.events("t6idem"), first["lineage"], 2), 0)
+        message = self.new_phase_v4(slug="t6idem", basis="换一份实质变化说明",
+                                    operation_id="np-N1-1", expected=1)["error"]
+        self.assertIn("请求摘要不符", message)
+        self.assertEqual(len(self.phase_events("t6idem")), 1)
+        # 事件落盘后、状态回写前中断（计划仍是 complete）→ 携原 ID 重试：修复投影、
+        # 返回原结果（文案以原 receipt 开头）、不重复开启新阶段。
+        self.plan("t6idem").write_text(self.plan("t6idem").read_text().replace(
+            "- **状态**：implemented", "- **状态**：complete"))
+        replay_text = self.new_phase_v4(slug="t6idem", operation_id="np-N1-1", text=True)
+        self.assertTrue(replay_text.startswith(shown), replay_text)
+        self.assertIn("幂等重放", replay_text)
+        self.assertEqual(len(self.phase_events("t6idem")), 1)
+        self.assertEqual([task.status for task in
+                          workflow.load_plan(str(self.root), "t6idem").tasks],
+                         ["implemented", "implemented", "pending"])
+        repairs = self.repair_events("t6idem")
+        self.assertEqual([event["data"]["entry"] for event in repairs], ["review"])
+        self.assertEqual(len(workflow.read_events(str(self.root), "t6idem")), counts + 1)
+
+    def test_six_recheck_mode_and_round_attribution_recorded(self):
+        """复核方式与轮次归属写入事件：普通首审 round=0/mode 空；主控核对可选。"""
+        self.t6_plan(slug="t6mode")
+        self.t5_review_n1(slug="t6mode", operation_id="rv-N1-1")
+        data = self.node_review_events("t6mode")[0]["data"]
+        self.assertEqual(data["round"], 0)
+        self.assertEqual(data.get("recheck_mode", ""), "")
+        second = self.review_v4("N1", slug="t6mode", operation_id="rv-N1-2", recheck="rv-N1-1")
+        self.assertEqual((second["round"], second["recheck_mode"]), (1, "定向复核"))
+        third = self.review_v4("N1", slug="t6mode", operation_id="rv-N1-3", recheck="rv-N1-1",
+                               recheck_mode="主控核对")
+        self.assertEqual((third["round"], third["recheck_mode"]), (2, "主控核对"))
+        records = self.node_review_events("t6mode")
+        self.assertEqual([event["data"]["round"] for event in records], [0, 1, 2])
+        self.assertEqual([event["data"].get("recheck_mode", "") for event in records],
+                         ["", "定向复核", "主控核对"])
+        message = self.review_v4("N1", slug="t6mode", operation_id="rv-N1-4",
+                                 recheck="rv-N1-1", recheck_mode="随便看看",
+                                 expected=1)["error"]
+        self.assertIn("主控核对", message)
+        self.assertIn("定向复核", message)
+        message = self.review_v4("N1", slug="t6mode", operation_id="rv-N1-5",
+                                 recheck_mode="主控核对", expected=1)["error"]
+        self.assertIn("--recheck", message)
+        self.assertEqual(len(self.node_review_events("t6mode")), 3)
+
+    def test_six_report_confirmation_form_records_path_and_digest(self):
+        """报告形态：真实存在的报告记录路径＋摘要；同一报告（路径＋摘要）只能用一次。"""
+        self.t6_plan(slug="t6rep")
+        self.t6_capped(slug="t6rep")
+        message = self.new_phase_v4(slug="t6rep", confirmation="reports/missing.md",
+                                    operation_id="np-N1-1", expected=1)["error"]
+        self.assertIn("记录/操作 ID 引用不存在", message)
+        report = self.write_file(".workflow/t6rep/reports/confirm.md",
+                                 "# 独立确认\n\n根因与验证方法已改，原问题 1–3 接续。\n")
+        result = self.new_phase_v4(slug="t6rep", confirmation="reports/confirm.md",
+                                   operation_id="np-N1-2")
+        self.assertEqual(result["phase"], 2)
+        payload = self.phase_events("t6rep")[0]["data"]["确认"]
+        self.assertEqual(payload["形态"], "报告")
+        self.assertEqual(payload["路径"], ".workflow/t6rep/reports/confirm.md")
+        self.assertEqual(payload["摘要"], hashlib.sha256(report.read_bytes()).hexdigest()[:16])
+        self.assertEqual(result["confirmation"], payload)
+        # 同一报告（路径＋摘要）换新操作 ID 再用 → 拒绝（一次性；全路径与简写归一后同身份）
+        message = self.new_phase_v4(slug="t6rep",
+                                    confirmation=".workflow/t6rep/reports/confirm.md",
+                                    operation_id="np-N1-3", expected=1)["error"]
+        self.assertIn("一次性", message)
+        self.assertEqual(len(self.phase_events("t6rep")), 1)
+        # 同一路径内容变了＝另一份凭据（摘要口径，按路径沿用旧状态不成立）
+        report.write_text("# 独立确认（修订）\n\n补一条影响面重评结论。\n")
+        again = self.new_phase_v4(slug="t6rep", confirmation="reports/confirm.md",
+                                  operation_id="np-N1-4")
+        self.assertEqual((again["previous_phase"], again["phase"]), (2, 3))
+        payloads = [event["data"]["确认"] for event in self.phase_events("t6rep")]
+        self.assertEqual(payloads[0]["路径"], payloads[1]["路径"])
+        self.assertNotEqual(payloads[0]["摘要"], payloads[1]["摘要"])
 
 
 if __name__ == "__main__":

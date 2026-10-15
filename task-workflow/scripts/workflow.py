@@ -12,6 +12,8 @@
     workflow.py record  [slug] <task-id> --commits <range> --verdict <clean|issues>   （格式 ≤3）
     workflow.py record  [slug] <task-id> --commits <range> --evidence "<验收与结果>" --operation-id <id>  （格式 ≥4，两态记账）
     workflow.py review  [slug] <N1> --verdict <pass|fail> --commits <range> --lines "<T1: 结论＋依据；…>" --evidence "<引用>" --operation-id <id>  （格式 ≥4，节点审查）
+    workflow.py review  [slug] <N1> --recheck <原操作ID> [--recheck-mode <主控核对|定向复核>] --operation-id <id>  （格式 ≥4，定向复核）
+    workflow.py review  [slug] <N1> --new-phase --basis "<实质变化>" --confirmation <记录引用> --confirmed-commit <A..B> --operation-id <id>  （格式 ≥4，封顶恢复）
     workflow.py check   [slug]
     workflow.py approve [slug] <方案|计划> --by "<用户的原话>"
     workflow.py gate    [slug] --reason "<升级原因>"
@@ -137,12 +139,23 @@ HISTORY_NODE_KEYS = ("节点", "node")
 HISTORY_LINEAGE_KEYS = ("谱系", "lineage")
 HISTORY_PREDECESSOR_KEYS = ("前身", "predecessor")
 
-# 节点审查（T3：D-01/D-03/D-15/D-18）。审查阶段首版恒为 1（阶段递增属 T6，
-# 此处只带默认值，不发明推进语义）；节点版本只由声明字段决定——剔除运行字段
-# 之后，改 `状态` 不动版本，改任务验收要求等声明即换版本。
+# 节点审查（T3：D-01/D-03/D-15/D-18）。审查阶段首版恒为 1，T6 起由
+# `review --new-phase` 推进（每次 +1，事件 `review_phase` 承载）；节点版本只由声明
+# 字段决定——剔除运行字段之后，改 `状态` 不动版本，改任务验收要求等声明即换版本。
 NODE_PHASE_FIRST = 1
 NODE_RUN_FIELDS = ("状态",)
 NODE_REVIEW_VERDICTS = ("pass", "fail")
+# 修复轮次上限与复核方式（T6：D-06/D-16/D-08）。每节点每阶段最多两轮集中修复
+# （主控验收计入，新增问题不重置轮次）；超限后普通 review 一律拒绝，恢复路径是
+# `review --new-phase`。复核方式由调用方声明，随事件保存（主控核对或独立定向复核）。
+FIX_ROUND_LIMIT = 2
+RECHECK_MODES = ("主控核对", "定向复核")
+RECHECK_MODE_DEFAULT = "定向复核"
+# 封顶恢复的独立确认引用（D-06）：两种形态——本工作流一条记录（白名单见下）的
+# 操作 ID，或一份真实存在的报告（`.workflow/<slug>/reports/` 下或仓内相对路径）。
+CONFIRMATION_RECORD = "记录"
+CONFIRMATION_REPORT = "报告"
+CONFIRMATION_FORMS = (CONFIRMATION_RECORD, CONFIRMATION_REPORT)
 # 节点结论状态（D-18 统一口径；T5 收口失效来源与恢复）：`valid`＝已验收（结论有效）、
 # `invalid`＝未验收（无记录或最近一条非 pass）、`recheck`＝待重新确认（版本变化或
 # 失效三条命中，须定向复核）、`paused`＝暂停放行（存在未判定影响的范围外变化，
@@ -2029,16 +2042,19 @@ def _hash_file(h, path):
 
 # 格式 ≥4 新增的事件类型（D-04）：`implemented` 承载两态记账与操作 ID 协议，
 # `node_review` 承载节点审查结论（T3），`projection_repair` 记录投影自动修复，
-# `node_invalidated` 记录结论失效（T5），`impact_assessed` 记录影响判断（T5，D-22）。
-# 事件名字面量一律走这些常量。
+# `node_invalidated` 记录结论失效（T5），`impact_assessed` 记录影响判断（T5，D-22），
+# `review_phase` 记录封顶后开启的新审查阶段（T6，D-06）。事件名字面量一律走这些常量。
 EVENT_IMPLEMENTED = "implemented"
 EVENT_NODE_REVIEW = "node_review"
 EVENT_NODE_INVALIDATED = "node_invalidated"
 EVENT_IMPACT_ASSESSED = "impact_assessed"
+EVENT_REVIEW_PHASE = "review_phase"
 PROJECTION_REPAIR = "projection_repair"
 EVENT_TYPES = {"start", "verify", "manual", "waiver", "evidence", "command_retired", "close", "reopen",
                EVENT_IMPLEMENTED, EVENT_NODE_REVIEW, EVENT_NODE_INVALIDATED, EVENT_IMPACT_ASSESSED,
-               PROJECTION_REPAIR}
+               EVENT_REVIEW_PHASE, PROJECTION_REPAIR}
+# 封顶恢复的确认记录白名单（T6 裁决 C）：能承载独立审查判断、带谱系与阶段字段的记录。
+CONFIRMATION_RECORD_TYPES = (EVENT_NODE_REVIEW, EVENT_IMPACT_ASSESSED)
 VIEW_MARKER = "<!-- workflow-events-view -->"
 
 
@@ -2342,10 +2358,227 @@ def round_count(events, lineage, phase=NODE_PHASE_FIRST):
     """已用修复轮次：同【谱系 × 审查阶段】记录条数 − 1，下限 0。
 
     首审不计轮；「修复＋复核（含主控核对）」每多一条审查记录记一轮；同一操作 ID
-    的重试是幂等重放（只有一条事件），因此不重复计数。上限 2 的拒绝与提示属 T6，
-    本函数只提供读数；`phase` 默认首版恒 1 的阶段。
+    的重试是幂等重放（只有一条事件），因此不重复计数。超限（≥ `FIX_ROUND_LIMIT`）
+    后普通 review 的拒绝属 T6（`round_cap_problem`），这里只提供读数。
     """
     return max(0, node_review_count(events, lineage, phase) - 1)
+
+
+# --------------------------------------------- 封顶恢复（T6：D-06/D-12/D-16）
+
+def lineage_phase_pairs(events, lineage):
+    """该谱系的 `review_phase` 事件（按事件顺序）：[(前阶段, 新阶段)]。
+
+    阶段只能由 `review --new-phase` 推进；把每次开启成对读出，供阶段推导与
+    「重放序列连续」校验共用（同一来源，不两处各取一份）。
+    """
+    return [(event["data"]["前阶段"], event["data"]["新阶段"]) for event in events
+            if event["type"] == EVENT_REVIEW_PHASE and event["data"].get("谱系") == lineage]
+
+
+def lineage_current_phase(events, lineage):
+    """该谱系当前的审查阶段：1、各 `review_phase` 的新阶段、各审查记录的阶段取最大。
+
+    正常流下后三者一致；把审查记录的阶段一并纳入取最大，是为了在事件被手工重排
+    （记录阶段大于开启事件）时不静默回退到旧阶段——写路径仍按连续性校验严格拒绝。
+    """
+    phases = [NODE_PHASE_FIRST]
+    for event in events:
+        data = event["data"]
+        if event["type"] == EVENT_REVIEW_PHASE and data.get("谱系") == lineage:
+            phases.append(data["新阶段"])
+        elif event["type"] == EVENT_NODE_REVIEW and data.get("谱系") == lineage:
+            phases.append(data["审查阶段"])
+    return max(phases)
+
+
+def lineage_rounds_ledger(events, lineage):
+    """跨阶段轮次总账（D-06「总账保留」）：各阶段修复轮次＋合计。
+
+    每阶段轮次与 `round_count` 同谓词（同【谱系 × 阶段】记录条数 − 1，下限 0）；
+    新阶段开启后本阶段从 0 起（首审级），历史阶段的轮次留在总账里可见——
+    「阶段 1：两轮用尽 → 新阶段：…」不得因新阶段而清空。
+    """
+    phase = lineage_current_phase(events, lineage)
+    items = [{"phase": number, "rounds": round_count(events, lineage, number)}
+             for number in range(NODE_PHASE_FIRST, phase + 1)]
+    return {"phase": phase, "rounds": items[-1]["rounds"],
+            "total": sum(item["rounds"] for item in items), "phases": items}
+
+
+def round_cap_problem(node, lineage, phase, events):
+    """两轮修复预算的封顶判定（D-06/T6 裁决 A）——超限返回可读原因，否则 None。
+
+    超限（`round_count ≥ FIX_ROUND_LIMIT`）后普通 review（含 `--recheck`）一律拒绝：
+    继续修已是第三轮，说明前两轮没找到根因；恢复路径不是再修一次，而是暂停相关
+    部分及其依赖、进入根因/方案分析，有实质变化并经独立确认后 `review --new-phase`。
+    """
+    used = round_count(events, lineage, phase)
+    if used < FIX_ROUND_LIMIT:
+        return None
+    return (
+        f"审查节点 {node.id}（谱系 {lineage}，审查阶段 {phase}）的两轮修复预算已用尽"
+        f"（已用 {used} 轮）——第 {used + 1} 轮普通 review 被拒："
+        "暂停相关部分及其依赖，进入根因/方案分析"
+        "（换实现者或升档由失败原因决定；仅补一段说明不构成实质变化）。"
+        "根因、设计或验证方法有实质变化并以独立确认记录为凭时，用 "
+        "`review --new-phase --basis \"…\" --confirmation <记录引用> "
+        "--confirmed-commit <A..B> --operation-id <id>` 开启新审查阶段"
+        "（新阶段重新计两轮，总账保留）。"
+    )
+
+
+def prior_confirmations(events, lineage):
+    """该谱系此前各 `review_phase` 用过的确认引用（一次性判定的唯一来源）。"""
+    return [event["data"].get("确认") or {} for event in events
+            if event["type"] == EVENT_REVIEW_PHASE and event["data"].get("谱系") == lineage]
+
+
+def confirmation_used(payload, prior):
+    """确认引用是否已被用过（T6 裁决 C 的一次性）：记录按操作 ID、报告按路径＋摘要。
+
+    报告形态的摘要取文件内容——同一路径内容变了就是另一份凭据（内容摘要口径）；
+    路径先归一成仓内相对路径，`.workflow/x/reports/a.md` 与 `reports/a.md` 是同一份。
+    """
+    for item in prior:
+        if item.get("形态") != payload.get("形态"):
+            continue
+        if payload["形态"] == CONFIRMATION_RECORD and item.get("值") == payload.get("值"):
+            return True
+        if (payload["形态"] == CONFIRMATION_REPORT and item.get("路径") == payload.get("路径")
+                and item.get("摘要") == payload.get("摘要")):
+            return True
+    return False
+
+
+def resolve_confirmation_record(events, confirmation, lineage):
+    """确认引用的操作 ID 形态（T6 裁决 C(a)）→ (事件, 问题)；问题非空即拒绝。
+
+    核：命中本工作流一条记录；类型在白名单（`node_review`/`impact_assessed`——带
+    谱系与审查阶段、能承载独立审查判断）；属该谱系。「该记录所载阶段 == 当前阶段」
+    的一致性检查（`confirmation_phase_problem`）放在一次性检查之后——同一确认被
+    复用时报「一次性」而不是「阶段不符」，重复使用的诊断才准确。
+    命中不到返回 (None, None)，由报告形态继续解析（两种形态互斥判定，先记录后报告）。
+    """
+    try:
+        event = find_operation(events, confirmation)
+    except WorkflowError as exc:
+        return None, str(exc)
+    if event is None:
+        return None, None
+    if event["type"] not in CONFIRMATION_RECORD_TYPES:
+        return None, (
+            f"`--confirmation {confirmation}` 命中的是 {event['type']} 记录——封顶恢复的"
+            f"确认记录白名单是 {'/'.join(CONFIRMATION_RECORD_TYPES)}（带谱系与审查阶段、"
+            "能承载独立审查判断的记录）。")
+    data = event["data"]
+    if data.get("谱系") != lineage:
+        return None, (
+            f"`--confirmation {confirmation}` 属谱系 {data.get('谱系')}，与节点当前谱系 "
+            f"{lineage} 不一致——确认记录必须属于该谱系。")
+    return event, None
+
+
+def confirmation_phase_problem(event, confirmation, phase):
+    """记录形态的阶段一致性检查（裁决 E：确认所载阶段 == 当前阶段）。"""
+    recorded = event["data"].get("审查阶段")
+    if recorded == phase:
+        return None
+    return (f"`--confirmation {confirmation}` 所载审查阶段 {recorded} 与当前阶段 {phase} "
+            "不一致——阶段衔接不符，拒绝开启新阶段"
+            "（确认必须来自当前阶段的独立审查）。")
+
+
+def resolve_confirmation_report(root, slug, value):
+    """确认引用的报告形态（T6 裁决 C(b)）→ (仓内相对路径, 内容摘要) 或 None。
+
+    只认真实存在的仓内文件：`.workflow/<slug>/reports/` 下（写简名即可）或仓内
+    相对路径指向的；绝对路径与仓外路径不接受。**引擎不读内容**——报告是否属于该
+    谱系、所载阶段是否衔接，由审查者判断（与「实质变化由审查者判断」同一口径）。
+    """
+    text = str(value or "").strip()
+    if not text or text.startswith("/"):
+        return None
+    candidates = [rel_path(text),
+                  rel_path(os.path.join(".workflow", slug, "reports", text)),
+                  rel_path(os.path.join(".workflow", slug, text))]
+    for rel in candidates:
+        if rel in (".", ""):
+            continue
+        full = os.path.join(root, rel)
+        if os.path.isfile(full):
+            try:
+                with open(full, "rb") as fh:
+                    return rel, _content_digest(fh.read())
+            except OSError:
+                return None
+    return None
+
+
+def lineage_reviewed_paths(root, events, lineage):
+    """该谱系已审文件集：其全部 `node_review` 记录已审范围的路径并集。
+
+    「其后该谱系范围无未纳入确认的新变更」里的「范围」＝这些路径（D-06 第三项）；
+    范围之外的变更不因确认版本而受检（另有影响判断兜底）。
+    """
+    paths = set()
+    for event in events:
+        if event["type"] != EVENT_NODE_REVIEW or event["data"].get("谱系") != lineage:
+            continue
+        base_sha, head_sha = _resolved_commits(root, event["data"].get("commits", ""))
+        recorded = event["data"].get("已审提交") or {}
+        base_sha = base_sha or recorded.get("base", "")
+        head_sha = head_sha or recorded.get("head", "")
+        paths |= _reviewed_paths(root, base_sha, head_sha)
+    return paths
+
+
+def confirmed_version_binding(root, raw, lineage, events):
+    """`--confirmed-commit <A>..<B>` 的版本绑定（D-06 第三项，T6 裁决 D）。
+
+    A、B 均为真实提交、A 为 B 的祖先、B 在当前 HEAD 历史里；且 `git log B..HEAD
+    --name-only` 与该谱系已审文件集无交集——旧版本确认不得放行其后的新变更。
+    返回 (base_sha, head_sha, 问题)；问题非空即拒绝（信息含「所确认版本」字样）。
+    """
+    text = str(raw or "").strip()
+    if ".." not in text:
+        return None, None, (
+            f"`--confirmed-commit {raw}` 不是 `<A>..<B>` 形式——所确认版本必须写成提交"
+            "范围（A 为 B 的祖先、B 在当前 HEAD 的历史里）。")
+    left, _, right = text.partition("..")
+    shas = []
+    for label, token in (("A", left.strip()), ("B", right.strip())):
+        if not token:
+            return None, None, (
+                f"`--confirmed-commit` 的 {label} 是空的——所确认版本不存在"
+                "（A、B 都必须是真实存在的提交）。")
+        sha = _git(root, "rev-parse", "--verify", "--quiet", f"{token}^{{commit}}").strip()
+        if not sha:
+            return None, None, (
+                f"`--confirmed-commit` 里的 {label} '{token}' 在这个仓库里查不到"
+                "——所确认版本不存在。")
+        shas.append(sha)
+    base_sha, head_sha = shas
+    if not _git_ok(root, "merge-base", "--is-ancestor", base_sha, head_sha):
+        return None, None, (
+            "所确认版本不合法：`--confirmed-commit` 的 A 不是 B 的祖先"
+            "（范围写反了或跨了分支）。")
+    if not _git_ok(root, "merge-base", "--is-ancestor", head_sha, "HEAD"):
+        return None, None, (
+            "所确认版本不合法：B 不在当前 HEAD 的历史里"
+            "（确认的版本还没并入当前分支）。")
+    reviewed = lineage_reviewed_paths(root, events, lineage)
+    after = {rel_path(line) for line
+             in _git(root, "log", "--name-only", "--no-renames", "--pretty=format:",
+                     f"{head_sha}..HEAD").splitlines() if line.strip()}
+    hits = sorted(after & reviewed)
+    if hits:
+        return None, None, (
+            "所确认版本之后，该谱系范围内还有未纳入确认的新变更——旧版本确认不得放行"
+            f"其后的新变更（{'、'.join(hits)} 在 {text} 之后被改动）。"
+            "把变更纳入所确认版本（B 推到已确认的提交）后重试；"
+            "确需放行则先做独立复核，不要用旧版本的确认记录绕过。")
+    return base_sha, head_sha, None
 
 
 def node_review_index(events):
@@ -2585,7 +2818,9 @@ def invalidation_report(plan, events=None):
     """失效检测（T5 裁决 C；格式 ≥4 每次调度前计算）——按节点返回一份事实快照。
 
     只对**存在审查结论**的节点算（无结论可失）。每项：
-    - `lineage` / `phase` / `record` / `record_op` / `version`：最近一条审查结论；
+    - `lineage` / `phase` / `record` / `record_op` / `version`：最近一条审查结论
+      （`phase` 取该谱系的当前阶段；新阶段已开启但尚无本阶段结论时 `record` 为 None
+      ——当前阶段没有有效结论可谈，不得沿用旧阶段的记录）；
     - `invalidated`：晚于该结论的 `node_invalidated` 事件（原因＋触发证据）——
       已记录的失效在出现新的复核 `pass` 之前一直拦阻放行；
     - `self_change`：已审范围（`git diff --name-only base..head`）上出现新提交或
@@ -2607,9 +2842,16 @@ def invalidation_report(plan, events=None):
         lineage = node_effective_lineage(plan, events, node, index)
         if lineage is None:
             continue
-        phases = [phase for (lin, phase) in index["latest"] if lin == lineage]
-        phase = max(phases)
-        record = index["latest_event"][(lineage, phase)]
+        phase = lineage_current_phase(events, lineage)
+        record = index["latest_event"].get((lineage, phase))
+        if record is None:
+            # 新审查阶段已开启、本阶段尚无结论：当前阶段没有有效结论可谈
+            # （未验收）；不得沿用旧阶段的记录（阶段口径见 D-18）。
+            out[node.id] = {"node": node.id, "lineage": lineage, "phase": phase,
+                            "record": None, "record_op": "", "version": "",
+                            "invalidated": [], "self_change": None, "premise": None,
+                            "pending": [], "pending_digest": ""}
+            continue
         info = {"node": node.id, "lineage": lineage, "phase": phase, "record": record,
                 "record_op": record["data"].get("operation_id", ""),
                 "version": record["data"].get("节点版本", ""),
@@ -2683,7 +2925,8 @@ def node_state(plan, events, node, index=None, report=None):
 
     返回 `{状态词, 原因, 触发证据, 预期值…}`，状态词 ∈ {valid, invalid, recheck, paused}：
     - `invalid`（未验收）：无审查记录，或【谱系 × 当前阶段】下最近一条结论不是 `pass`
-      （缺阶段不减）——后续 `fail` 阻止放行，不得回看更早的 `pass`；
+      （缺阶段不减；新审查阶段开启后本阶段尚无结论同样如此）——后续 `fail` 阻止放行，
+      不得回看更早的 `pass`；
     - `recheck`（待重新确认）：最近结论为 `pass`，但出现下列任一——① 已记录的
       `node_invalidated`（晚于该结论）；② 节点版本与当前计划不符（声明/验收要求变化，
       不依赖提交）；③ 已审范围上出现新提交或工作树变化；④ 已声明前提被触及；
@@ -2702,6 +2945,12 @@ def node_state(plan, events, node, index=None, report=None):
         info["reason"] = "尚无审查记录（未送审）"
         return info
     record = facts["record"]
+    if record is None:
+        # 新审查阶段（`review --new-phase`）已开启、本阶段尚无结论：阶段内没有有效
+        # 结论可谈——旧阶段的 pass 不属于当前阶段（D-18 的阶段口径），未验收。
+        info["reason"] = (f"审查阶段 {facts['phase']} 尚无审查结论"
+                          "（新审查阶段从首审重新开始，轮次重计）")
+        return info
     if record["data"].get("verdict") != "pass":
         info["reason"] = f"最近一条审查结论为 {record['data'].get('verdict')}（不得回看更早的 pass）"
         return info
@@ -3038,6 +3287,11 @@ def parse_events(lines, slug):
                 if "recheck_of" in data and (not isinstance(data["recheck_of"], str)
                                              or not data["recheck_of"].strip()):
                     raise ValueError("节点审查事件的 recheck_of 无效")
+                # 轮次归属与复核方式（T6）：可选字段——T3/T5 的旧记录仍读得回来。
+                if "round" in data and (type(data["round"]) is not int or data["round"] < 0):
+                    raise ValueError("节点审查事件的 round 无效")
+                if "recheck_mode" in data and data["recheck_mode"] not in ("",) + RECHECK_MODES:
+                    raise ValueError("节点审查事件的 recheck_mode 无效")
                 if "已审提交" in data and (not isinstance(data["已审提交"], dict)
                                           or any(not isinstance(data["已审提交"].get(k), str)
                                                  for k in ("base", "head"))):
@@ -3072,6 +3326,45 @@ def parse_events(lines, slug):
                 if (not isinstance(receipt, dict) or not isinstance(receipt.get("result"), dict)
                         or not isinstance(receipt.get("text"), str)):
                     raise ValueError("节点审查事件缺少结果 receipt")
+            if kind == EVENT_REVIEW_PHASE:
+                # 新审查阶段（T6/D-06）：节点、谱系、前阶段→新阶段、实质变化说明、
+                # 独立确认引用、所确认版本、操作 ID、请求摘要与 receipt 缺一不可。
+                # 跨事件的阶段序列连续性属运行时不变量（写路径校验），这里只校验
+                # 单条事件自身的结构（新阶段＝前阶段＋1 是引擎推导的结果）。
+                if (not isinstance(data.get("节点"), str) or not data["节点"].strip()
+                        or not isinstance(data.get("谱系"), str) or not data["谱系"].strip()
+                        or type(data.get("前阶段")) is not int or data["前阶段"] < 1
+                        or data.get("新阶段") != data["前阶段"] + 1):
+                    raise ValueError("新阶段事件缺少节点、谱系或阶段衔接")
+                if not isinstance(data.get("basis"), str) or not data["basis"].strip():
+                    raise ValueError("新阶段事件缺少实质变化说明")
+                confirmation = data.get("确认")
+                if (not isinstance(confirmation, dict)
+                        or confirmation.get("形态") not in CONFIRMATION_FORMS):
+                    raise ValueError("新阶段事件缺少确认引用")
+                if confirmation["形态"] == CONFIRMATION_RECORD:
+                    if (not isinstance(confirmation.get("值"), str)
+                            or not confirmation["值"].strip()):
+                        raise ValueError("新阶段事件的确认记录引用无效")
+                elif (not isinstance(confirmation.get("路径"), str)
+                        or not confirmation["路径"].strip()
+                        or not re.fullmatch(r"[a-f0-9]{16}", str(confirmation.get("摘要", "")))):
+                    raise ValueError("新阶段事件的确认报告引用无效")
+                version = data.get("已确认版本")
+                if (not isinstance(version, dict)
+                        or any(not isinstance(version.get(key), str) or not version[key]
+                               for key in ("commits", "base", "head"))):
+                    raise ValueError("新阶段事件缺少所确认版本")
+                if (not isinstance(data.get("entry"), str) or not data["entry"].strip()
+                        or not isinstance(data.get("request"), str)
+                        or not re.fullmatch(r"[a-f0-9]{64}", data["request"])):
+                    raise ValueError("新阶段事件缺少入口或请求摘要")
+                if operation_id_problem(data.get("operation_id")) is not None:
+                    raise ValueError("新阶段事件的操作 ID 无效")
+                receipt = data.get("receipt")
+                if (not isinstance(receipt, dict) or not isinstance(receipt.get("result"), dict)
+                        or not isinstance(receipt.get("text"), str)):
+                    raise ValueError("新阶段事件缺少结果 receipt")
             if kind == EVENT_NODE_INVALIDATED:
                 # 失效记录：节点、谱系、原因、触发证据（path＋摘要）与触发入口。
                 if (not isinstance(data.get("节点"), str) or not data["节点"].strip()
@@ -3225,6 +3518,15 @@ def sync_event_view(root, slug, events=None):
                       f"阶段 {data['审查阶段']}，版本 {data['节点版本']}\n"
                       f"已审范围：{data['commits'] or '—'}；依据：{data['evidence']}\n"
                       + "\n".join(f"{row['task']}：{row['conclusion']}" for row in data["lines"]))
+        elif event["type"] == EVENT_REVIEW_PHASE:
+            confirmation = data["确认"]
+            shown = (f"{confirmation.get('值')}" if confirmation.get("形态") == CONFIRMATION_RECORD
+                     else f"{confirmation.get('路径')}（{confirmation.get('摘要')}）")
+            detail = (f"节点 {data['节点']} 开启新审查阶段：阶段 {data['前阶段']} → "
+                      f"{data['新阶段']}；谱系 {data['谱系']}\n"
+                      f"实质变化：{data['basis']}\n"
+                      f"确认（{confirmation.get('形态')}）：{shown}；"
+                      f"所确认版本：{data['已确认版本']['commits']}")
         elif event["type"] in ("manual", "waiver"):
             detail = (f"{data['item']}：{data.get('status', 'waived')}；{data.get('reason', '')}"
                       f"\n用户答复：{data['by']}\n来源：{data['source']}")
@@ -3285,7 +3587,7 @@ def derived_states(plan, events):
     """由事件重放推导各任务的期望状态（格式 ≥4）——三档派生的单一真源（D-09/D-18）。
 
     ① 无 `implemented` 事件 → 期望 `pending`；
-    ② 有实现证据、所属节点在【该谱系 × 当前阶段（首版恒 1）】下的**最近一条**
+    ② 有实现证据、所属节点在【该谱系 × 当前阶段】下的**最近一条**
        `node_review` 为 `pass` → 期望 `complete`（＝已验收，D-03）；
     ③ 有实现证据、最近一条不是 `pass`（含审后 `fail`）→ 期望 `implemented`
        （已实现不因节点未通过而退回「待实现」）。
@@ -3415,11 +3717,13 @@ def node_progress(plan, events=None, facts=None):
     - `members`：{节点 ID: [已实现的成员任务 ID]}；
     - `unaccepted`：有已实现成员、结论不是「已验收」的节点（close/verify 的就绪门
       看它；「待重新确认」与「暂停放行」经同一 `node_state` 进入同一集合与同一校验点）；
+    - `rounds`：{节点 ID: 跨阶段轮次总账}（T6；有谱系的节点才有）——新阶段开启后
+      本阶段轮次重计，历史阶段的轮次在总账里可见（D-06「总账保留」）；
     - `debt_tasks`：审查债务之「已实现但未完成节点审查的任务」；
     - `unopened`：审查债务之「尚未开启审查的节点」——有已实现成员但尚无任何
       `node_review` 记录。
     """
-    empty = {"states": {}, "details": {}, "pending": {}, "members": {},
+    empty = {"states": {}, "details": {}, "pending": {}, "members": {}, "rounds": {},
              "unaccepted": [], "debt_tasks": [], "unopened": []}
     if not plan.is_v4:
         return empty
@@ -3433,11 +3737,17 @@ def node_progress(plan, events=None, facts=None):
     members = {node.id: [task.id for task in plan.tasks
                          if task.id in node.tasks and facts[task.id]["implemented"]]
                for node in plan.nodes}
+    rounds = {}
+    for node in plan.nodes:
+        lineage = node_effective_lineage(plan, events, node, index)
+        if lineage:
+            rounds[node.id] = lineage_rounds_ledger(events, lineage)
     return {
         "states": states,
         "details": details,
         "pending": {nid: info["pending"] for nid, info in details.items() if info["pending"]},
         "members": members,
+        "rounds": rounds,
         "unaccepted": [node.id for node in plan.nodes
                        if members[node.id] and states[node.id] != NODE_STATE_VALID],
         "debt_tasks": [task.id for task in plan.tasks
@@ -3449,10 +3759,11 @@ def node_progress(plan, events=None, facts=None):
 
 
 def node_progress_lines(progress):
-    """未验收节点、待判定变化与「审查债务」的展示行（next/status/slice 共用）。
+    """未验收节点、待判定变化、「审查债务」与阶段总账的展示行（next/status/slice 共用）。
 
     待重新确认必须带原因（定向复核要知道为什么）；暂停放行必须带 `impact` 的
-    预期值（被评估结论操作 ID＋逐项 path＋内容摘要＋变化集摘要，D-22）。
+    预期值（被评估结论操作 ID＋逐项 path＋内容摘要＋变化集摘要，D-22）；开过新审查
+    阶段的节点给出跨阶段轮次总账（T6/D-06：新阶段轮次重计、总账保留）。
     """
     lines = []
     if progress["unaccepted"]:
@@ -3468,6 +3779,16 @@ def node_progress_lines(progress):
         for nid in sorted(progress["pending"]):
             lines.append(f"  {nid}：")
             lines.extend(pending_lines(progress["pending"][nid], indent="    "))
+    restored = {nid: info for nid, info in progress.get("rounds", {}).items()
+                if info["phase"] > NODE_PHASE_FIRST}
+    if restored:
+        lines.append("阶段总账（封顶恢复后跨阶段累计）：")
+        for nid in sorted(restored):
+            info = restored[nid]
+            detail = "；".join(f"阶段 {item['phase']} 用 {item['rounds']} 轮"
+                              for item in info["phases"])
+            lines.append(f"  {nid}：{detail}（合计 {info['total']} 轮；"
+                         f"当前阶段 {info['phase']}，本阶段已用 {info['rounds']} 轮）")
     debt = []
     if progress["debt_tasks"]:
         debt.append("已实现待审查：" + "、".join(progress["debt_tasks"]))
@@ -4217,6 +4538,7 @@ def cmd_status(args):
         result["unaccepted_nodes"] = progress["unaccepted"]
         result["review_debt"] = {"tasks": progress["debt_tasks"], "unopened": progress["unopened"]}
         result["pending_changes"] = progress["pending"]
+        result["node_rounds"] = progress["rounds"]      # 跨阶段轮次总账（T6/D-06）
         debt_lines = node_progress_lines(progress)
         if debt_lines:
             lines.append("")
@@ -4717,6 +5039,7 @@ def cmd_slice(args):
         result["unaccepted_nodes"] = progress["unaccepted"]
         result["review_debt"] = {"tasks": progress["debt_tasks"], "unopened": progress["unopened"]}
         result["pending_changes"] = progress["pending"]
+        result["node_rounds"] = progress["rounds"]      # 跨阶段轮次总账（T6/D-06）
         debt_lines = node_progress_lines(progress)
         if debt_lines:
             result["brief"] += ("\n\n## 审查节点状态（控制器核对用；不影响本任务范围）\n\n"
@@ -4947,6 +5270,27 @@ def review_node(args, root, slug, plan):
     同 ID＋不同请求 → 拒绝。
     """
     verdict = args.verdict
+    if verdict not in NODE_REVIEW_VERDICTS:
+        raise WorkflowError(
+            "review 必须给 `--verdict pass|fail`：节点整体结论决定成员任务是否映射 "
+            f"`{STATUS_COMPLETE}`（pass）还是保持 `{STATUS_IMPLEMENTED}`（fail）。"
+            "（封顶恢复的 `review --new-phase` 不带 `--verdict`——两种模式互斥。）"
+        )
+    mode = (args.recheck_mode or "").strip()
+    recheck_now = (args.recheck or "").strip()
+    if mode and mode not in RECHECK_MODES:
+        raise WorkflowError(
+            f"`--recheck-mode {args.recheck_mode}` 不支持：只认 " + " / ".join(RECHECK_MODES)
+            + f"（默认 {RECHECK_MODE_DEFAULT}）——复核方式随审查记录保存，"
+            "是「主控验收」与「独立定向复核」的区分依据。"
+        )
+    if mode and not recheck_now:
+        raise WorkflowError(
+            "`--recheck-mode` 只在定向复核（`--recheck <原审查记录的操作 ID>`）时有效"
+            "——普通 review 没有复核方式可言。"
+        )
+    # 默认复核方式：定向复核（未显式声明时按独立复核记，不按主控核对记）。
+    mode = mode or (RECHECK_MODE_DEFAULT if recheck_now else "")
     evidence = (args.evidence or "").strip()
     if not evidence:
         raise WorkflowError(
@@ -5060,10 +5404,14 @@ def review_node(args, root, slug, plan):
         raise WorkflowError(f"`--premises` 不合格：{problem}")
 
     version = node_version(plan, node)
-    phase = NODE_PHASE_FIRST
+    phase = lineage_current_phase(events, lineage)
+    cap = round_cap_problem(node, lineage, phase, events)
+    if cap:
+        raise WorkflowError(cap)
     # 轮次与派生同源（T3 审查 Low ②）：同谓词不再两处实现。
     # `rounds` ＝ 本条记入后该谱系的轮次（＝记入前的记录条数，T3 候选 5）；
-    # 谱系继承后轮次沿谱系根累计（跨节点 ID），不因拆分/改名重置（D-11）。
+    # 谱系继承后轮次沿谱系根累计（跨节点 ID），不因拆分/改名重置（D-11）；
+    # 新审查阶段（T6）从零重计，历史轮次留在总账里（D-06）。
     prior = node_review_count(events, lineage, phase)
     mapped = STATUS_COMPLETE if verdict == "pass" else STATUS_IMPLEMENTED
     items = owners
@@ -5079,6 +5427,10 @@ def review_node(args, root, slug, plan):
         "verdict": verdict,
         "premises": premises,
         "open_issues": [],
+        # 轮次归属与复核方式（T6 裁决 H）：round ＝ 本轮归属（写入前的记录条数，
+        # 首审 0）；recheck_mode 只在定向复核时有值（普通 review 为空）。
+        "round": prior,
+        "recheck_mode": mode if recheck_of else "",
         "operation_id": args.operation_id,
         "request": request,
         "entry": "review",
@@ -5091,6 +5443,8 @@ def review_node(args, root, slug, plan):
         "lineage": lineage,
         "phase": phase,
         "rounds": prior,
+        "round": prior,
+        "recheck_mode": mode if recheck_of else "",
         "verdict": verdict,
         "commits": args.commits,
         "evidence": evidence,
@@ -5105,9 +5459,9 @@ def review_node(args, root, slug, plan):
         "warnings": warnings,
     }
     label = "、".join(items)
-    tail = f"（谱系 {lineage}，第 {prior} 轮）"
+    tail = f"（谱系 {lineage}，阶段 {phase}，第 {prior} 轮）"
     if recheck_of:
-        tail += f"；定向复核原记录 {recheck_of}"
+        tail += f"；{mode}原记录 {recheck_of}"
     if verdict == "pass":
         text = (f"✓ 节点 {node.id} → pass：{label} 映射 {STATUS_COMPLETE}"
                 f"{tail}；审查记录已入事件流")
@@ -5129,6 +5483,243 @@ def review_node(args, root, slug, plan):
     return result, text
 
 
+def review_new_phase(args, root, slug, plan):
+    """封顶后的合法恢复：开启新审查阶段（T6；D-06/D-12，裁决 B–F/I）。
+
+    不是第三轮：两轮预算用尽后，只有在「根因、设计或验证方法至少一项有可核的实质
+    变化」并以**独立确认记录**为凭时，才开启新审查阶段——轮次在新阶段重新计两轮，
+    总账保留（D-06）。引擎只校验四项绑定，不判实质（实质是否成立由确认记录中的
+    审查者判断）：
+
+    ① 确认引用真实存在且属于该谱系：操作 ID 形态（白名单 `node_review`/
+       `impact_assessed`，所载阶段 == 当前阶段）或报告形态（`.workflow/<slug>/reports/`
+       下或仓内相对路径的真实文件——是否属该谱系由审查者判断，引擎不读内容）；
+    ② 一次性：确认记录未被此前任何 `review_phase` 引用过（不得换个操作 ID 重复
+       重置预算）；报告形态按（路径＋摘要）比对——同一路径内容变了就是新凭据；
+    ③ 所确认版本 `<A>..<B>`：A、B 均为真实提交、A 为 B 的祖先、B 在当前 HEAD 历史里，
+       且其后该谱系范围（已审文件集）无未纳入确认的新变更；
+    ④ 阶段衔接：新阶段号＝该谱系当前阶段＋1（引擎推导并写入事件）、
+       既往 `review_phase` 序列连续（1..k）。
+
+    写序＝先事件（`review_phase`）后状态：新阶段＝未验收，成员任务按事件重放写回
+    「已实现」（不退回待实现）。请求摘要含 basis/confirmation/confirmed-commit，
+    同操作 ID＋同请求 → 幂等重放原结果、不重复开启新阶段。
+    """
+    basis = (args.basis or "").strip()
+    confirmation = (args.confirmation or "").strip()
+    confirmed = (args.confirmed_commit or "").strip()
+
+    # 操作 ID 幂等先行（与 record/review/impact 同一协议）：重放不重新校验绑定、
+    # 不重复开启新阶段——重试身份必须能在状态变化后仍然返回原结果。
+    request = operation_request_digest({
+        "entry": "review-new-phase",
+        "node": args.node_id,
+        "new_phase": True,
+        "basis": basis,
+        "confirmation": confirmation,
+        "confirmed_commit": confirmed,
+    })
+    action, existing = resolve_operation(root, slug, args.operation_id, request,
+                                         "review --new-phase")
+    if action == "replay":
+        return replay_result(existing, args.operation_id)
+
+    require_plan_approval(root, slug, plan)   # 与 record/slice 同一道门，防绕过
+    ledger_check_owner(root, slug)
+
+    if not basis:
+        raise WorkflowError(
+            "`review --new-phase` 必须给 `--basis \"<实质变化>\"`：它承载①影响面重评"
+            "声明（触及任务范围、验收或设计判断时回填计划并重过受影响的审批门：方案"
+            "正文变化 → 方案门、只改计划 → 计划门）与②原问题清单连续追踪、编号接续。"
+            "实质变化是否成立由确认记录中的审查者判断，引擎只要求它非空。"
+        )
+    if not confirmation:
+        raise WorkflowError(
+            "`review --new-phase` 必须给 `--confirmation <记录引用>`：封顶恢复以**独立"
+            "确认记录**为凭——本工作流一条 `node_review`/`impact_assessed` 记录的操作 ID，"
+            f"或 `.workflow/{slug}/reports/` 下一份真实存在的报告（仓内相对路径亦可）。"
+        )
+    if not confirmed:
+        raise WorkflowError(
+            "`review --new-phase` 必须给 `--confirmed-commit <A>..<B>`：确认记录所载的"
+            "变更版本要随事件保存——没有它，「旧版本确认不得放行其后的新变更」无从校验。"
+        )
+    node = next((item for item in plan.nodes if item.id == args.node_id), None)
+    if node is None:
+        raise WorkflowError(
+            f"计划里没有审查节点 {args.node_id}。现有节点："
+            + ("、".join(item.id for item in plan.nodes) or "（一个都没有）")
+        )
+    owners = node.tasks
+    by_id = {task.id: task for task in plan.tasks}
+    unknown = [tid for tid in owners if tid not in by_id]
+    if unknown:
+        raise WorkflowError(
+            f"审查节点 {node.id} 的归属任务 {'、'.join(unknown)} 不在计划里——先修正计划。"
+        )
+
+    events = read_events(root, slug)
+    # 谱系（D-11）：新阶段承接既有谱系——从未送审的节点没有阶段可推进。
+    lineage = node_root_lineage(plan, events, node)
+    if lineage is None:
+        raise WorkflowError(
+            f"审查节点 {node.id} 尚无审查谱系（从未送审）——新审查阶段是**既有谱系**的"
+            "恢复路径，不是首审入口：先按普通 review 完成首审、用尽两轮预算后，才谈"
+            "封顶恢复。"
+        )
+
+    # ④ 阶段衔接：既往 `review_phase` 序列必须连续（1..k），新阶段号 = 当前阶段 + 1。
+    pairs = lineage_phase_pairs(events, lineage)
+    for offset, (previous, following) in enumerate(pairs):
+        expected = NODE_PHASE_FIRST + offset
+        if previous != expected or following != expected + 1:
+            raise WorkflowError(
+                f"谱系 {lineage} 的 `review_phase` 阶段序列不连续（第 {offset + 1} 次开启"
+                f"记的是 {previous} → {following}，期望 {expected} → {expected + 1}）"
+                "——事件重放的阶段序列不符，拒绝开启新阶段（先人工裁定或修复事件文件）。"
+            )
+    phase = NODE_PHASE_FIRST + len(pairs)
+    if lineage_current_phase(events, lineage) != phase:
+        raise WorkflowError(
+            f"谱系 {lineage} 的审查记录里出现了超出开启序列的阶段"
+            f"（记录推导 {lineage_current_phase(events, lineage)}，开启事件推导 {phase}）"
+            "——阶段衔接不符，拒绝开启新阶段（先人工裁定或修复事件文件）。"
+        )
+    new_phase = phase + 1
+
+    # ① 确认引用：先记录形态（操作 ID），再报告形态；两者都不命中即引用不存在。
+    prior = prior_confirmations(events, lineage)
+    record, problem = resolve_confirmation_record(events, confirmation, lineage)
+    if record is not None:
+        payload = {"形态": CONFIRMATION_RECORD, "值": confirmation}
+    else:
+        report = resolve_confirmation_report(root, slug, confirmation)
+        if report is not None:
+            payload = {"形态": CONFIRMATION_REPORT, "路径": report[0], "摘要": report[1]}
+        elif problem:
+            raise WorkflowError(f"确认引用不合格：{problem}")
+        else:
+            raise WorkflowError(
+                f"`--confirmation {confirmation}` 的记录/操作 ID 引用不存在：本工作流里"
+                f"没有这个操作 ID，`.workflow/{slug}/reports/` 下（或仓内相对路径指向的）"
+                "也没有这份报告——确认引用必须真实存在（引擎不做内容检查，但凭据本身"
+                "必须是可核的）。"
+            )
+    # ② 一次性：同一确认不得被两次开启引用（换新操作 ID 也不行）；报告形态按
+    # （路径＋摘要）比对——同一路径内容变了就是另一份凭据。
+    if confirmation_used(payload, prior):
+        raise WorkflowError(
+            f"`--confirmation {confirmation}` 已被此前的审查阶段用过（形态 {payload['形态']}）"
+            "——封顶恢复的确认是一次性凭据：不得换个操作 ID 重复使用同一份确认重置"
+            "预算（一次性）；确要再次恢复，须有新的独立确认。"
+        )
+    # ③ 确认所载阶段 == 当前阶段（记录形态；报告形态由审查者判断——引擎不读内容）。
+    if record is not None:
+        problem = confirmation_phase_problem(record, confirmation, phase)
+        if problem:
+            raise WorkflowError(f"确认引用不合格：{problem}")
+    # ④ 所确认版本：存在、衔接，且其后该谱系范围无未纳入确认的新变更。
+    base_sha, head_sha, problem = confirmed_version_binding(root, confirmed, lineage, events)
+    if problem:
+        raise WorkflowError(problem)
+
+    ledger = lineage_rounds_ledger(events, lineage)["phases"] + [
+        {"phase": new_phase, "rounds": 0}]
+    total_rounds = sum(item["rounds"] for item in ledger)
+    if payload["形态"] == CONFIRMATION_RECORD:
+        confirm_label = f"确认记录 {payload['值']}"
+    else:
+        confirm_label = f"确认报告 {payload['路径']}（摘要 {payload['摘要']}）"
+    resolved = f"{base_sha[:7]}..{head_sha[:7]}"
+    version_label = confirmed if confirmed.replace(" ", "") == resolved else f"{confirmed}（{resolved}）"
+    result = {
+        "slug": slug,
+        "node": node.id,
+        "lineage": lineage,
+        "previous_phase": phase,
+        "phase": new_phase,
+        "basis": basis,
+        "confirmation": payload,
+        "confirmed_version": {"commits": confirmed, "base": base_sha, "head": head_sha},
+        "rounds": 0,                       # 新阶段从首审级重新计
+        "ledger": ledger,                  # 总账（含历史阶段与合计）
+        "total_rounds": total_rounds,
+        "tasks": owners,
+        "mapped_status": STATUS_IMPLEMENTED,
+        "operation_id": args.operation_id,
+        "event": "",
+        "warnings": [],
+    }
+    text_lines = [
+        f"✓ 审查节点 {node.id} 开启新审查阶段（谱系 {lineage}，阶段 {phase} → {new_phase}）",
+        f"  实质变化（引擎不做文本检查，由确认记录中的审查者判断）：{basis}",
+        f"  确认依据：{confirm_label}；所确认版本：{version_label}",
+        "  新阶段从第 1 轮重新计（首审级）；总账保留："
+        + "；".join(f"阶段 {item['phase']} 用 {item['rounds']} 轮" for item in ledger)
+        + f"（合计 {total_rounds} 轮）",
+        f"  新阶段＝未验收：{'、'.join(owners)} 回到「{STATUS_IMPLEMENTED}」，"
+        "重新送审通过后才映射 complete；跨节点依赖在新阶段通过前不释放。",
+    ]
+    text = "\n".join(text_lines)
+    event = _event(slug, lifecycle(root, slug)["cycle"], EVENT_REVIEW_PHASE, {
+        "节点": node.id,
+        "谱系": lineage,
+        "前阶段": phase,
+        "新阶段": new_phase,
+        "basis": basis,
+        "确认": payload,
+        "已确认版本": {"commits": confirmed, "base": base_sha, "head": head_sha},
+        "operation_id": args.operation_id,
+        "request": request,
+        "entry": "review --new-phase",
+    })
+    result["event"] = event["id"]
+    event["data"]["receipt"] = {"result": result, "text": text}
+
+    # 先用「事件追加后」的视图算清投影，任何派生错误都在落盘之前暴露（避免事件
+    # 已写、状态写不下去的半成品态）。
+    derived = derived_states(plan, events + [event])
+    for tid in owners:
+        if by_id[tid].field_lines.get("状态") is None:
+            raise WorkflowError(f"{tid} 缺少『状态』字段行，无法回写。")
+
+    # 写入顺序固定：先 append 事件、再回写计划状态（D-04）；本操作不新增账本行。
+    append_events(root, slug, [event])
+    for tid in owners:
+        plan.lines[by_id[tid].field_lines["状态"]] = (
+            f"- **状态**：{derived.get(tid, STATUS_IMPLEMENTED)}")
+    _write_plan(plan)
+    return result, text
+
+
+def review_mode_problems(args):
+    """`review` 的模式互斥校验（T6 裁决 B）：普通参数与 `--new-phase` 不得混用。
+
+    返回问题列表（空＝合法）；在入口任何写入之前调用——两种模式混用会写出语义
+    不明的记录，宁可拒绝也不替调用方猜。
+    """
+    normal = [("--verdict", args.verdict), ("--commits", args.commits),
+              ("--lines", args.lines), ("--evidence", args.evidence),
+              ("--premises", args.premises), ("--recheck", args.recheck),
+              ("--recheck-mode", args.recheck_mode)]
+    restore = [("--basis", args.basis), ("--confirmation", args.confirmation),
+               ("--confirmed-commit", args.confirmed_commit)]
+    if args.new_phase:
+        mixed = [name for name, value in normal if value]
+        if mixed:
+            return [f"`review --new-phase` 与普通 review 参数互斥：本次同时给了 "
+                    f"{'、'.join(mixed)}。开启新审查阶段只带 `--basis`/`--confirmation`/"
+                    "`--confirmed-commit`/`--operation-id`；新阶段内的审查另起一次"
+                    "普通 review（或 `--recheck`）。"]
+        return []
+    extra = [name for name, value in restore if value]
+    if extra:
+        return [f"{'、'.join(extra)} 只在 `review --new-phase` 下有效——普通 review 不接受"
+                "封顶恢复参数（两种模式混用会产生歧义）。"]
+    return []
+
+
 def cmd_review(args):
     root = find_project_root()
     slug = resolve_slug(root, args.slug)
@@ -5139,14 +5730,19 @@ def cmd_review(args):
             f"本计划是格式 {plan.format_version}——`review` 只在格式 ≥4（审查节点制）生效："
             "格式 ≤3 的审查单位是任务，没有节点审查形态（也不该为它补一个空壳）。"
             "要把该工作流升级为节点审查，先把计划头部 `**格式**` 升到 4 并补齐 "
-            "`## 审查节点` 段；`--new-phase` 属后续任务，尚未提供。"
+            "`## 审查节点` 段；`--new-phase`（封顶恢复）同为格式 ≥4 的形态。"
         )
+    problems = review_mode_problems(args)
+    if problems:
+        raise WorkflowError(problems[0])
     # 入口统一在动作前做投影检查（already-closed / 归属检查之后、审批门之前）：
     # 落后先修复（留 projection_repair）、领先即拒绝——与 record/slice/close 同一协议。
     repair_projection(root, slug, "review")
     plan = load_plan(root, slug)   # 修复可能已回写状态行，重新取计划
     record_invalidations(root, slug, plan, "review")   # 调度前记录失效观察（T5）
     plan = load_plan(root, slug)
+    if args.new_phase:
+        return review_new_phase(args, root, slug, plan)
     return review_node(args, root, slug, plan)
 
 
@@ -5703,8 +6299,9 @@ def build_parser():
     s = sub.add_parser("review", help="记节点审查结论（格式 ≥4；pass 后成员任务映射 complete）")
     s.add_argument("slug", nargs="?")
     s.add_argument("node_id", help="审查节点 ID（形如 N1）")
-    s.add_argument("--verdict", required=True, choices=["pass", "fail"],
-                   help="节点整体结论：pass 映射成员任务 complete；fail 保持已实现")
+    s.add_argument("--verdict", choices=["pass", "fail"], default=None,
+                   help="节点整体结论：pass 映射成员任务 complete；fail 保持已实现"
+                        "（`--new-phase` 模式下不带本参数——两种模式互斥）")
     s.add_argument("--commits", default="", help="已审提交范围 <base7>..<head7>")
     s.add_argument("--lines", default="",
                    help="逐任务行：`T1: 结论＋依据；T2: …`（`；` 或换行分隔，须覆盖全部归属任务）")
@@ -5720,6 +6317,35 @@ def build_parser():
         default="",
         help="定向复核：所关联**原审查记录的操作 ID**（原记录关联）；本次复核自身的重试身份"
              "用 `--operation-id`，两者不同，且不同的操作 ID 永不去重",
+    )
+    s.add_argument(
+        "--recheck-mode",
+        default="",
+        help="复核方式：主控核对 / 定向复核（默认）；随事件保存（只在 --recheck 时有效）",
+    )
+    s.add_argument(
+        "--new-phase",
+        action="store_true",
+        help="封顶恢复：开启新审查阶段（两轮用尽后的唯一恢复路径；须带 --basis/"
+             "--confirmation/--confirmed-commit，与普通 review 参数互斥）",
+    )
+    s.add_argument(
+        "--basis",
+        default="",
+        help="新审查阶段的实质变化说明（非空必填）：承载影响面重评声明与原问题编号接续；"
+             "引擎不做文本检查——实质是否成立由确认记录中的审查者判断",
+    )
+    s.add_argument(
+        "--confirmation",
+        default="",
+        help="独立确认记录引用：本工作流一条 node_review/impact_assessed 记录的操作 ID，"
+             "或 `.workflow/<slug>/reports/` 下的报告（一次性；随事件保存路径与摘要）",
+    )
+    s.add_argument(
+        "--confirmed-commit",
+        default="",
+        help="所确认的变更版本 <A>..<B>：A、B 均为真实提交且 B 在当前 HEAD 历史里，"
+             "其后该谱系范围不得有未纳入确认的新变更",
     )
     s.add_argument(
         "--operation-id",
