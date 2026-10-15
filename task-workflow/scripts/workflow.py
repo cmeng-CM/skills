@@ -114,6 +114,9 @@ PLAN_FORMAT_CURRENT = PLAN_FORMAT_V3
 # ＋ 六项必填字段（归属任务 / 分组理由 / 审查职责 / 依赖节点 / 送审条件 / 兼任终审）
 # ＋ 一个可选字段（前身）。块内未知字段忽略（前向兼容）。
 NODE_SECTION = "审查节点"
+# 计划的全局约束一节（F1）：其规范化摘要随审查记录保存——只改这一节（无代码提交、
+# 无节点/任务声明变化）也会使已验收节点转「待重新确认」（版本/约束两大声明坐标）。
+GLOBAL_CONSTRAINTS_SECTION = "全局约束"
 NODE_HEADER = re.compile(r"^###\s+(N\d+)\s*(.*)$")
 NODE_FIELD = re.compile(r"^(?:-\s+)?\*\*(?P<key>[^*]+?)\*\*\s*[:：]\s*(?P<value>.*)$")
 NODE_REQUIRED_FIELDS = ("归属任务", "分组理由", "审查职责", "依赖节点", "送审条件", "兼任终审")
@@ -740,8 +743,9 @@ class Plan:
     def states(self):
         """返回 {task_id: STATE}，STATE ∈ DONE/BLOCKED/READY/RUNNING/IMPLEMENTED。
 
-        格式 ≥4 改走 `task_states()` 三态派生（D-09/T4）——`complete`→DONE；
-        所属节点的直接跨节点上游未验收→BLOCKED；有实现证据（待节点审查）→
+        格式 ≥4 改走 `task_states()` 三态派生（D-09/T4）——**DONE ＝ 有实现证据且
+        所属节点结论有效**（＝已验收；不读计划状态行字面值，M1：手改状态行不得
+        影响展示）；跨节点上游（传递闭包）未验收→BLOCKED；有实现证据（待节点审查）→
         IMPLEMENTED；其余（含 `pending`）→READY。组内依赖按「已实现」放行、
         不等待审查。格式 ≤3 逐字走旧路径（四态、旧判据，行为不变）。
         """
@@ -764,11 +768,12 @@ class Plan:
         facts = task_states(self)
         out = {}
         for t in self.tasks:
-            if t.status == STATUS_COMPLETE:
-                out[t.id] = "DONE"          # 已验收（节点通过后映射，T3）
-            elif facts[t.id]["blocked"]:
+            info = facts.get(t.id) or {}
+            if info.get("implemented") and info.get("node_valid"):
+                out[t.id] = "DONE"          # 已验收（节点通过后映射，T3；派生判定）
+            elif info.get("blocked"):
                 out[t.id] = "BLOCKED"
-            elif facts[t.id]["implemented"]:
+            elif info.get("implemented"):
                 out[t.id] = "IMPLEMENTED"   # 已实现、等待节点审查（不派发）
             else:
                 out[t.id] = "READY"
@@ -834,7 +839,9 @@ def wait_graph(plan):
       ① 任务依赖导出的跨节点边（任务 A 依赖任务 B、两者分属不同节点）；
       ② 显式声明的节点依赖边（`依赖节点` 字段）；
       ③ 终审边——恰有一个终审节点时：终审 → 每个其它节点（终审等待全部验收）。
-    判环、派发与就绪检查共用这一张图；格式 ≤3 的节点集为空，返回空图。
+    判环、派发与就绪检查共用这一张图；**跨节点就绪按传递闭包判定**（`wait_closure`，
+    I2）——链式图上「N2 已验收但更上游 N1 未验收」时，下游 N3 仍被阻断。格式 ≤3 的
+    节点集为空，返回空图。
     """
     graph = {node.id: set() for node in plan.nodes}
     owner = node_owner_map(plan)
@@ -859,6 +866,24 @@ def wait_graph(plan):
             if nid != finals[0]:
                 graph[finals[0]].add(nid)
     return graph
+
+
+def wait_closure(graph, node_id):
+    """从 `node_id` 沿等待图可达的全部节点（含多跳，不含自身）——「跨节点上游」的
+    传递闭包（I2）。
+
+    一跳只读直接边时，链式图上「上游未验收不复用」不成立：N1←N2←N3 里 N2 已验收、
+    N1 未验收，N3 仍会被放行。判环已由 `check` 挡（图无环），闭包可安全求取；
+    终审节点本来就等待全体（终审边），闭包语义与之一致。
+    """
+    seen, stack = set(), list(graph.get(node_id, ()))
+    while stack:
+        current = stack.pop()
+        if current in seen or current == node_id:
+            continue
+        seen.add(current)
+        stack.extend(graph.get(current, ()))
+    return seen
 
 
 def wait_cycles(graph):
@@ -943,6 +968,39 @@ def lineage_history(plan):
     for event in _events_for_plan(plan):
         _event_scope(event, ids, roots_of)
     return ids, roots_of
+
+
+def lineage_task_scope(plan):
+    """本工作流历史里「任务被哪些谱系审查过」：{任务 ID: {谱系根, …}}（I1 机械守卫）。
+
+    来源是 `node_review` 事件的逐任务行（`lines`）与结果 receipt 里的 `tasks`——
+    两者都随事件持久化。一个任务在事件里出现过的谱系＝它的历史审查归属：节点改名/
+    调整却不声明前身时，据此发现「同一批任务换节点 ID 另开新谱系、静默清零修复预算」
+    （D-11：换节点 ID、拆分或重启会话不能清空原问题及其修复历史）。
+    """
+    out = {}
+    for event in _events_for_plan(plan):
+        if event.get("type") != EVENT_NODE_REVIEW:
+            continue
+        data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        lineage = data.get("谱系")
+        if not isinstance(lineage, str) or not lineage.strip():
+            continue
+        tasks = set()
+        rows = data.get("lines")
+        if isinstance(rows, list):
+            for row in rows:
+                if isinstance(row, dict) and isinstance(row.get("task"), str):
+                    tasks.add(row["task"].strip())
+        receipt = data.get("receipt")
+        if isinstance(receipt, dict) and isinstance(receipt.get("result"), dict):
+            for tid in receipt["result"].get("tasks") or []:
+                if isinstance(tid, str):
+                    tasks.add(tid.strip())
+        for tid in tasks:
+            if tid:
+                out.setdefault(tid, set()).add(lineage)
+    return out
 
 
 def predecessor_scope(plan, exclude=None, history=None):
@@ -1147,8 +1205,10 @@ def _node_findings(plan, by_id):
 
     判据：每个任务恰属一个节点；节点块六项必填字段齐全、值合法；依赖节点与
     前身引用可解析（前身最多一个、不得引用在用节点、不得歧义——合并即拒绝）；
-    恰有一个终审节点且它不被任何节点等待；等待图（任务依赖导出 ∪ 显式声明 ∪
-    终审边）合并为同一张图后无环。校验只在格式 ≥4 生效（调用方负责分流）。
+    **未声明前身的节点，其归属任务不得已有别的谱系的审查历史**（I1：换节点 ID
+    必须声明前身承接谱系根，防静默重置修复预算）；恰有一个终审节点且它不被任何
+    节点等待；等待图（任务依赖导出 ∪ 显式声明 ∪ 终审边）合并为同一张图后无环。
+    校验只在格式 ≥4 生效（调用方负责分流）。
     """
     out = []
 
@@ -1183,6 +1243,7 @@ def _node_findings(plan, by_id):
             "归属、终审与等待图都会塌缩到同一节点上（节点 ID 是稳定身份）。",
         )
     history = lineage_history(plan)
+    task_scope = None
     finals = []
     for node in plan.nodes:
         problems = {}
@@ -1247,6 +1308,26 @@ def _node_findings(plan, by_id):
                     "ERROR",
                     f"审查节点 {node.id} 的前身 {ref} 在历史记录里映射到多个谱系根"
                     f"（{'、'.join(sorted(roots_of[ref]))}）——解析歧义，须人工裁定后重写。",
+                )
+        else:
+            # I1 机械守卫：**未声明前身**的节点，其归属任务不得带着别的谱系的
+            # `node_review` 历史——换节点 ID（改名/调整）必须声明前身承接谱系根，
+            # 否则新节点另开谱系、轮次与失效历史被静默清零（D-11 明文保证）。
+            if task_scope is None:
+                task_scope = lineage_task_scope(plan)
+            own_roots = set(history[1].get(node.id, ()))
+            stray = []
+            for tid in listed:
+                others = task_scope.get(tid, set()) - own_roots
+                if others:
+                    stray.append(f"{tid}（旧谱系 {'、'.join(sorted(others))}）")
+            if stray:
+                add(
+                    "ERROR",
+                    f"审查节点 {node.id} 未声明前身，但其归属任务已有别条谱系的审查历史："
+                    + "；".join(stray)
+                    + "——改名/调整产生的新节点必须声明『前身』继承谱系根"
+                    "（否则审查轮次与失效历史被静默清零，等于重置两轮修复预算）。",
                 )
 
     owners = {}
@@ -2223,6 +2304,20 @@ def _digest(value):
 
 # --------------------------------------------- 节点审查（格式 ≥4；T3：D-01/D-03/D-15/D-18）
 
+def global_constraints_digest(plan):
+    """计划 `## 全局约束` 一节文本规范化后的 sha256 前 16 位（F1）。
+
+    规范化＝沿段内成段方式取正文行（`_section_lines`：跳过空行与小标题），逐行
+    去尾部空白后按 `\\n` 拼接；**节缺失按空文本计算**——「没有全局约束」也是一个
+    稳定取值，节从无到有是一次真实变化。随审查记录保存（`全局约束摘要`）：声明类
+    变化（这一节改写）不依赖代码提交，直接使旧结论转「待重新确认」（与节点版本
+    同一类坐标，见 `node_state`）。
+    """
+    body = _section_lines(plan.lines, GLOBAL_CONSTRAINTS_SECTION)
+    normalized = "\n".join(line.rstrip() for line in body)
+    return hashlib.sha256(normalized.encode()).hexdigest()[:16]
+
+
 def node_version(plan, node):
     """节点版本：{节点块 ＋ 各归属任务块}声明字段规范化文本的 sha256 前 16 位（D-18）。
 
@@ -2489,22 +2584,54 @@ def confirmation_phase_problem(event, confirmation, phase):
             "（确认必须来自当前阶段的独立审查）。")
 
 
-def resolve_confirmation_report(root, slug, value):
-    """确认引用的报告形态（T6 裁决 C(b)）→ (仓内相对路径, 内容摘要) 或 None。
+def confirmation_order_problem(events, record, lineage, phase, confirmation):
+    """记录形态的**时序绑定**（I3）：确认记录必须晚于该谱系当前阶段的最后一条
+    `node_review`——防拿本阶段自己的审查记录（尤其最后一条）当「独立确认」，
+    换个操作 ID 就能循环重置两轮预算。报告形态是本阶段之外新写的凭据，不在此列
+    （其伪造面是已知限制，见报告候选决策）。
+    """
+    record_pos = last_pos = -1
+    for index, event in enumerate(events):
+        if event is record:
+            record_pos = index
+        if (event["type"] == EVENT_NODE_REVIEW
+                and event["data"].get("谱系") == lineage
+                and event["data"].get("审查阶段") == phase):
+            last_pos = index
+    if record_pos > last_pos:
+        return None
+    return (f"`--confirmation {confirmation}` 的事件序不晚于该谱系当前阶段（阶段 {phase}）"
+            f"的最后一条 `node_review`（第 {last_pos + 1} 条事件）——封顶恢复的确认必须"
+            "晚于本阶段最后一条审查记录：本阶段自己的审查记录不构成「独立确认」，"
+            "拿它（换操作 ID）开新阶段等于循环重置两轮预算，拒绝。"
+            "用晚于它的 `impact_assessed` 记录，或 `.workflow/<slug>/reports/` 下"
+            "新写的独立确认报告。")
 
-    只认真实存在的仓内文件：`.workflow/<slug>/reports/` 下（写简名即可）或仓内
-    相对路径指向的；绝对路径与仓外路径不接受。**引擎不读内容**——报告是否属于该
-    谱系、所载阶段是否衔接，由审查者判断（与「实质变化由审查者判断」同一口径）。
+
+def resolve_confirmation_report(root, slug, value):
+    """确认引用的报告形态（T6 裁决 C(b)；I3 收紧路径）→ (仓内相对路径, 内容摘要) 或 None。
+
+    只认 `.workflow/<slug>/reports/` 下真实存在的报告，三种写法都归一化到同一个
+    仓内相对路径：仓内相对路径（`.workflow/<slug>/reports/confirm.md`）、省略
+    `.workflow/<slug>/` 的相对路径（`reports/confirm.md`）、相对报告目录的名字
+    （`confirm.md`）。归一化后不在报告目录内的一律拒绝——`..` 逃逸、绝对路径、
+    兄弟目录、仓外路径都不接受（确认凭据必须落在工作流的报告目录里，别再宽到
+    「仓内任意文件」）。**引擎不读内容**——报告是否属于该谱系、所载阶段是否衔接，
+    由审查者判断（与「实质变化由审查者判断」同一口径）。
     """
     text = str(value or "").strip()
     if not text or text.startswith("/"):
         return None
-    candidates = [rel_path(text),
-                  rel_path(os.path.join(".workflow", slug, "reports", text)),
-                  rel_path(os.path.join(".workflow", slug, text))]
-    for rel in candidates:
-        if rel in (".", ""):
-            continue
+    normalized = os.path.normpath(rel_path(text)).replace("\\", "/")
+    if normalized.split("/", 1)[0] in ("..", "~"):
+        return None          # `..` 逃逸 / 家目录写法：直接拒绝，不靠归一化兜底
+    base = rel_path(os.path.join(".workflow", slug, "reports"))
+    candidates = [normalized, os.path.join(base, normalized),
+                  os.path.join(".workflow", slug, normalized)]
+    for raw in candidates:
+        rel = os.path.normpath(rel_path(raw)).replace("\\", "/")
+        if rel != base and not rel.startswith(base + "/"):
+            continue         # 归一化后不在报告目录内：不接受
         full = os.path.join(root, rel)
         if os.path.isfile(full):
             try:
@@ -2519,16 +2646,14 @@ def lineage_reviewed_paths(root, events, lineage):
     """该谱系已审文件集：其全部 `node_review` 记录已审范围的路径并集。
 
     「其后该谱系范围无未纳入确认的新变更」里的「范围」＝这些路径（D-06 第三项）；
-    范围之外的变更不因确认版本而受检（另有影响判断兜底）。
+    范围之外的变更不因确认版本而受检（另有影响判断兜底）。已审提交经 `_review_anchor`
+    取——有锚用锚（C1），与失效检测同一读法。
     """
     paths = set()
     for event in events:
         if event["type"] != EVENT_NODE_REVIEW or event["data"].get("谱系") != lineage:
             continue
-        base_sha, head_sha = _resolved_commits(root, event["data"].get("commits", ""))
-        recorded = event["data"].get("已审提交") or {}
-        base_sha = base_sha or recorded.get("base", "")
-        head_sha = head_sha or recorded.get("head", "")
+        base_sha, head_sha = _review_anchor(root, event)
         paths |= _reviewed_paths(root, base_sha, head_sha)
     return paths
 
@@ -2536,8 +2661,9 @@ def lineage_reviewed_paths(root, events, lineage):
 def confirmed_version_binding(root, raw, lineage, events):
     """`--confirmed-commit <A>..<B>` 的版本绑定（D-06 第三项，T6 裁决 D）。
 
-    A、B 均为真实提交、A 为 B 的祖先、B 在当前 HEAD 历史里；且 `git log B..HEAD
-    --name-only` 与该谱系已审文件集无交集——旧版本确认不得放行其后的新变更。
+    A、B 均为真实提交、A 为 B 的祖先、B 在当前 HEAD 历史里；该谱系至少有一条**非空**
+    已审范围（否则第三项恒真空转——I4），且 `git log B..HEAD --name-only` 与该谱系
+    已审文件集无交集——旧版本确认不得放行其后的新变更。
     返回 (base_sha, head_sha, 问题)；问题非空即拒绝（信息含「所确认版本」字样）。
     """
     text = str(raw or "").strip()
@@ -2568,6 +2694,16 @@ def confirmed_version_binding(root, raw, lineage, events):
             "所确认版本不合法：B 不在当前 HEAD 的历史里"
             "（确认的版本还没并入当前分支）。")
     reviewed = lineage_reviewed_paths(root, events, lineage)
+    if not reviewed:
+        # 已审范围为空时「其后该谱系范围无未纳入确认的新变更」恒真——第三项整体空转，
+        # 旧版本确认会放行其后的新变更（统一终审 I4）。要求该谱系至少有一条**非空**
+        # 已审范围：空范围（`HEAD..HEAD`）下的审查结论没有可判定的交付范围。
+        return None, None, (
+            "所确认版本无法校验：该谱系没有任何非空的已审范围（全部审查记录的已审提交"
+            "范围都为空）——「其后该谱系范围无未纳入确认的新变更」会整体空转，拒绝开启"
+            "新阶段。先用非空提交范围（`<base>..<head>`，base≠head）完成一次审查/复核，"
+            "让结论绑定一个可判定的交付范围；若已封顶且全部范围为空，该谱系没有可判定的"
+            "范围，须人工裁定后另开工作流——不得用空范围的确认绕过第三项。")
     after = {rel_path(line) for line
              in _git(root, "log", "--name-only", "--no-renames", "--pretty=format:",
                      f"{head_sha}..HEAD").splitlines() if line.strip()}
@@ -2739,12 +2875,34 @@ def _resolved_commits(root, commits):
     return out[0], out[1]
 
 
+def _review_anchor(root, record):
+    """审查记录的已审提交范围 `(base, head)`——**有锚就用锚**，锚缺失才回退重解析（C1）。
+
+    记录时（`review_node`）已把 `--commits` 解析成完整 sha 存入 `已审提交`：`HEAD` 是
+    会移动的引用，读路径若优先重新解析 `commits`，写进去的锚会被读取顺序抵消——
+    「已审范围上的新提交」与「范围外变化提交前后判定一致」都会整体失效。只有旧记录
+    （无锚）才回退重新解析。`invalidation_report` 与 `lineage_reviewed_paths` 同一来源。
+    """
+    recorded = record["data"].get("已审提交") or {}
+    base_sha = str(recorded.get("base") or "")
+    head_sha = str(recorded.get("head") or "")
+    if base_sha and head_sha:
+        return base_sha, head_sha
+    resolved_base, resolved_head = _resolved_commits(root, record["data"].get("commits", ""))
+    return base_sha or resolved_base, head_sha or resolved_head
+
+
 def _reviewed_paths(root, base_sha, head_sha):
-    """已审范围的文件路径集：`git diff --name-only base..head`（解析不到 → 空集）。"""
+    """已审范围的文件路径集：`git diff --name-only -z base..head`（解析不到 → 空集）。
+
+    `-z` 与 `_worktree_changes_since` 同一口径：含换行的路径是一个真实路径，而不是
+    被切两半的噪声路径——两侧集合必须同源可比（统一终审 §三-2 的换行文件名收口）。
+    """
     if not base_sha or not head_sha:
         return set()
-    out = _git(root, "diff", "--name-only", "--no-renames", base_sha, head_sha)
-    return {rel_path(line) for line in out.splitlines() if line.strip()}
+    out = subprocess.run(["git", "diff", "--name-only", "--no-renames", "-z",
+                          base_sha, head_sha], cwd=root, capture_output=True)
+    return {rel_path(os.fsdecode(item)) for item in out.stdout.split(b"\0") if item}
 
 
 def _worktree_changes_since(root, head_sha):
@@ -2818,13 +2976,15 @@ def invalidation_report(plan, events=None):
     """失效检测（T5 裁决 C；格式 ≥4 每次调度前计算）——按节点返回一份事实快照。
 
     只对**存在审查结论**的节点算（无结论可失）。每项：
-    - `lineage` / `phase` / `record` / `record_op` / `version`：最近一条审查结论
-      （`phase` 取该谱系的当前阶段；新阶段已开启但尚无本阶段结论时 `record` 为 None
-      ——当前阶段没有有效结论可谈，不得沿用旧阶段的记录）；
+    - `lineage` / `phase` / `record` / `record_op` / `version` / `constraints`：最近一条
+      审查结论（`phase` 取该谱系的当前阶段；新阶段已开启但尚无本阶段结论时 `record`
+      为 None——当前阶段没有有效结论可谈，不得沿用旧阶段的记录；`constraints` 是该
+      记录保存的全局约束摘要，F1）；
     - `invalidated`：晚于该结论的 `node_invalidated` 事件（原因＋触发证据）——
+      **按谱系根过滤**（M4：失效历史挂谱系根，改名后旧观察仍适用于新节点），
       已记录的失效在出现新的复核 `pass` 之前一直拦阻放行；
     - `self_change`：已审范围（`git diff --name-only base..head`）上出现新提交或
-      工作树变化（未提交/未跟踪，一视同仁）；
+      工作树变化（未提交/未跟踪，一视同仁）；已审范围取**记录时的锚**（C1）；
     - `premise`：已声明前提被触及（逐条重算摘要，提交与工作树一视同仁）；
     - `pending`：范围外变化（提交或工作树差异，含新增未跟踪文件）的待判断变化集，
       逐项 path＋内容摘要；`pending_digest` 是它的变化集摘要。
@@ -2849,24 +3009,26 @@ def invalidation_report(plan, events=None):
             # （未验收）；不得沿用旧阶段的记录（阶段口径见 D-18）。
             out[node.id] = {"node": node.id, "lineage": lineage, "phase": phase,
                             "record": None, "record_op": "", "version": "",
-                            "invalidated": [], "self_change": None, "premise": None,
-                            "pending": [], "pending_digest": ""}
+                            "constraints": "", "invalidated": [], "self_change": None,
+                            "premise": None, "pending": [], "pending_digest": ""}
             continue
         info = {"node": node.id, "lineage": lineage, "phase": phase, "record": record,
                 "record_op": record["data"].get("operation_id", ""),
                 "version": record["data"].get("节点版本", ""),
+                "constraints": record["data"].get("全局约束摘要", ""),
                 "invalidated": [], "self_change": None, "premise": None,
                 "pending": [], "pending_digest": ""}
         position = index["position"].get(record.get("id"), -1)
         for offset, event in enumerate(events):
+            # 失效按**谱系根**过滤（M4）：失效历史挂在谱系根上，改名/拆分后的新节点
+            # 仍要承接旧观察——只比节点 ID 会让改名节点看不见已记录的失效。
             if (event["type"] == EVENT_NODE_INVALIDATED
-                    and event["data"].get("谱系") == lineage
-                    and event["data"].get("节点") == node.id and offset > position):
+                    and event["data"].get("谱系") == lineage and offset > position):
                 info["invalidated"].append(event)
         if record["data"].get("verdict") == "pass":
-            base_sha, head_sha = _resolved_commits(root, record["data"].get("commits", ""))
-            info["head"] = head_sha or (record["data"].get("已审提交") or {}).get("head", "")
-            info["base"] = base_sha or (record["data"].get("已审提交") or {}).get("base", "")
+            # 已审范围取记录时的锚（C1）：`HEAD` 是会移动的引用，重新解析会让
+            # 「已审范围上的新提交」与「范围外变化提交前后一致」整体失效。
+            info["base"], info["head"] = _review_anchor(root, record)
             reviewed = _reviewed_paths(root, info["base"], info["head"])
             changes = _worktree_changes_since(root, info["head"])
             info["self_change"] = [item for item in changes if item["path"] in reviewed]
@@ -2928,9 +3090,12 @@ def node_state(plan, events, node, index=None, report=None):
       （缺阶段不减；新审查阶段开启后本阶段尚无结论同样如此）——后续 `fail` 阻止放行，
       不得回看更早的 `pass`；
     - `recheck`（待重新确认）：最近结论为 `pass`，但出现下列任一——① 已记录的
-      `node_invalidated`（晚于该结论）；② 节点版本与当前计划不符（声明/验收要求变化，
-      不依赖提交）；③ 已审范围上出现新提交或工作树变化；④ 已声明前提被触及；
-      ⑤ 影响判断为 `related`/`undecidable`。恢复＝其后再出现有效的复核 `pass`；
+      `node_invalidated`（晚于该结论，按谱系根过滤）；② 节点版本与当前计划不符
+      （声明/验收要求变化，不依赖提交）；②′ **全局约束摘要与当前计划不符**（F1：
+      `## 全局约束` 一节改写即声明类变化，判得出无关的快捷路径首版不做，一律转
+      待重新确认）；③ 已审范围上出现新提交或工作树变化；④ 已声明前提被触及；
+      ⑤ 影响判断为 `related`/`undecidable`。恢复＝其后再出现有效的复核 `pass`
+      （`--recheck` 通过即记下新的版本/约束摘要）；
     - `paused`（暂停放行）：存在**未判定**的范围外变化（提交或工作树差异）——
       经 `impact` 判「无关」即解除；绑定过期（审查记录更替、同路径内容变化）重新暂停；
     - `valid`（已验收）：以上均未命中。
@@ -2957,6 +3122,13 @@ def node_state(plan, events, node, index=None, report=None):
     if facts["version"] != node_version(plan, node):
         info["state"] = NODE_STATE_RECHECK
         info["reason"] = "节点版本已变（节点块或归属任务的声明字段变化）——重新批准计划不等于旧结论在新要求下成立"
+        return info
+    if facts.get("constraints", "") != global_constraints_digest(plan):
+        # F1：`## 全局约束` 一节是整体声明坐标之一——只改这一节（无提交、无节点/
+        # 任务声明变化）同样使旧结论转「待重新确认」（判得出无关的快捷路径首版不做）。
+        info["state"] = NODE_STATE_RECHECK
+        info["reason"] = ("全局约束变化（计划的 `## 全局约束` 一节与审查时不同）——"
+                          "定向复核确认结论在新约束下仍成立后恢复")
         return info
     if facts["self_change"]:
         info.update(state=NODE_STATE_RECHECK, reason="已审范围上出现新提交或工作树变化",
@@ -3275,6 +3447,9 @@ def parse_events(lines, slug):
                     raise ValueError("节点审查事件缺少节点、谱系、审查阶段或结论")
                 if not re.fullmatch(r"[a-f0-9]{16}", str(data.get("节点版本", ""))):
                     raise ValueError("节点审查事件缺少节点版本")
+                # F1：全局约束摘要必填（格式 4 尚无历史记录需迁移——受控试用前收口）。
+                if not re.fullmatch(r"[a-f0-9]{16}", str(data.get("全局约束摘要", ""))):
+                    raise ValueError("节点审查事件缺少全局约束摘要")
                 if (not isinstance(data.get("commits"), str)
                         or not isinstance(data.get("evidence"), str) or not data["evidence"].strip()):
                     raise ValueError("节点审查事件缺少已审提交范围或审查依据")
@@ -3683,8 +3858,8 @@ def task_states(plan, events=None):
     - `implemented`：该任务有 `implemented` 事件（实现是否完成，证据在 `record`）；
     - `node_valid`：所属审查节点的结论是否有效（口径见 `node_state`；失效判定源、
       版本坐标与恢复由 T5 收口——本函数只接线与调用，不自定义）；
-    - `blocked`：所属节点的**直接**跨节点上游（`wait_graph` 边上的被等待者，含
-      任务依赖导出边与显式声明边，D-21）中存在 `node_valid` 为假的节点。
+    - `blocked`：所属节点的**跨节点上游**（`wait_graph` 上可达的全部节点——传递闭包，
+      I2；含任务依赖导出边与显式声明边，D-21）中存在 `node_valid` 为假的节点。
       **组内依赖不看 node_valid**——同节点内按「已实现」放行（D-03）。
     上游未验收/失效只影响后两者与可派发性，**不改写任务状态行**：已实现的任务
     不因上游失效退回「待实现」（三态不得互相回退）。格式 ≤3 返回空字典。
@@ -3699,7 +3874,7 @@ def task_states(plan, events=None):
     owner = node_owner_map(plan)
     graph = wait_graph(plan)
     valid = {node.id: node_valid_state(plan, events, node, index, report) for node in plan.nodes}
-    blocked = {node.id: any(not valid.get(up, False) for up in graph.get(node.id, ()))
+    blocked = {node.id: any(not valid.get(up, False) for up in wait_closure(graph, node.id))
                for node in plan.nodes}
     return {task.id: {"implemented": task.id in implemented,
                       "node_valid": valid.get(owner.get(task.id), False),
@@ -3804,11 +3979,11 @@ def readiness_problems(plan, events, task, facts=None):
     """格式 ≥4 的派发就绪判据（T4 裁决 2）逐条原因；空列表＝可派发。
 
     就绪＝任务 `pending` ＋ 组内上游（同节点的任务依赖）全部已实现 ＋ 所属节点的
-    **直接**跨节点上游（`wait_graph` 边：任务依赖导出边 ∪ 显式声明的节点依赖边，
-    D-21）全部「已验收」——「待重新确认」与「暂停放行」都算未验收（T5：失效的
-    上游不放行下游）。组内依赖按「已实现」放行、不等待审查（D-03）——组内依赖
-    链不被跨节点规则阻塞，含组内依赖的节点能凑齐送审条件、不死锁。格式 ≤3 不调用
-    本函数（旧路径逐字不变）。
+    **跨节点上游**（`wait_graph` 上可达的全部节点——传递闭包，I2；任务依赖导出边 ∪
+    显式声明的节点依赖边，D-21）全部「已验收」——「待重新确认」与「暂停放行」都算
+    未验收（T5：失效的上游不放行下游；一跳只读直接边会让链式图上的阻断失效）。
+    组内依赖按「已实现」放行、不等待审查（D-03）——组内依赖链不被跨节点规则阻塞，
+    含组内依赖的节点能凑齐送审条件、不死锁。格式 ≤3 不调用本函数（旧路径逐字不变）。
     """
     facts = task_states(plan, events) if facts is None else facts
     by_id = {item.id: item for item in plan.tasks}
@@ -3832,7 +4007,7 @@ def readiness_problems(plan, events, task, facts=None):
                 f"{task.id} 的组内上游 {dep} 尚未实现（同节点内按「已实现」放行，不等待审查）"
             )
     if node_id is not None:
-        for up_id in sorted(wait_graph(plan).get(node_id, ())):
+        for up_id in sorted(wait_closure(wait_graph(plan), node_id)):
             up = node_by_id.get(up_id)
             if up is None:
                 continue
@@ -4577,8 +4752,10 @@ def cmd_gate(args):
 def next_v4(plan, slug):
     """格式 ≥4 的 `next`（T4 裁决 2/4）：就绪与展示都走三态，不另算一套。
 
-    就绪＝`pending` ＋ 组内上游已实现 ＋ 所属节点的直接跨节点上游已验收（D-03/D-21）；
-    已实现待审查的任务单独列出（不派发）；未验收节点与「审查债务」清单随展示给出。
+    就绪＝`pending` ＋ 组内上游已实现 ＋ 所属节点的跨节点上游（传递闭包）已验收
+    （D-03/D-21/I2）；已实现待审查的任务单独列出（不派发）；未验收节点与「审查债务」
+    清单随展示给出。已验收与「已实现待审查」都由三态派生（M1）——**不读计划状态行
+    字面值**：手改状态行不会让任务被当成已完成跳过。
     """
     events = plan.events
     facts = task_states(plan, events)
@@ -4586,13 +4763,14 @@ def next_v4(plan, slug):
     owner = node_owner_map(plan)
     ready, awaiting, blocked = [], [], []
     for task in plan.tasks:
-        if task.status == STATUS_COMPLETE:
-            continue
+        info = facts.get(task.id) or {}
+        if info.get("implemented") and info.get("node_valid"):
+            continue                      # 已验收（派生）：不派发、不计债务
         problems = readiness_problems(plan, events, task, facts)
-        if not problems:
-            ready.append(task)
-        elif task.status == STATUS_IMPLEMENTED:
+        if info.get("implemented"):
             awaiting.append({"id": task.id, "title": task.title})
+        elif not problems:
+            ready.append(task)
         else:
             blocked.append({"id": task.id, "title": task.title, "deps": task.deps,
                             "reasons": problems})
@@ -5420,6 +5598,9 @@ def review_node(args, root, slug, plan):
         "谱系": lineage,
         "审查阶段": phase,
         "节点版本": version,
+        # F1：全局约束一节的规范化摘要随结论保存——只改 `## 全局约束`（无提交、
+        # 无节点/任务声明变化）也会使本记录按声明类变化转「待重新确认」。
+        "全局约束摘要": global_constraints_digest(plan),
         "commits": args.commits,
         "已审提交": {"base": base_sha, "head": head_sha},
         "lines": rows,
@@ -5492,12 +5673,15 @@ def review_new_phase(args, root, slug, plan):
     审查者判断）：
 
     ① 确认引用真实存在且属于该谱系：操作 ID 形态（白名单 `node_review`/
-       `impact_assessed`，所载阶段 == 当前阶段）或报告形态（`.workflow/<slug>/reports/`
-       下或仓内相对路径的真实文件——是否属该谱系由审查者判断，引擎不读内容）；
+       `impact_assessed`，所载阶段 == 当前阶段，**且事件序晚于本阶段最后一条
+       `node_review`**——I3：本阶段自己的审查记录不是独立确认）或报告形态
+       （**必须在 `.workflow/<slug>/reports/` 内**的真实文件——归一化后拒绝 `..`
+       逃逸、绝对路径、兄弟目录与仓外路径；是否属该谱系由审查者判断，引擎不读内容）；
     ② 一次性：确认记录未被此前任何 `review_phase` 引用过（不得换个操作 ID 重复
        重置预算）；报告形态按（路径＋摘要）比对——同一路径内容变了就是新凭据；
     ③ 所确认版本 `<A>..<B>`：A、B 均为真实提交、A 为 B 的祖先、B 在当前 HEAD 历史里，
-       且其后该谱系范围（已审文件集）无未纳入确认的新变更；
+       且该谱系至少有一条非空已审范围（否则第三项空转——I4）、其后该谱系范围
+       （已审文件集）无未纳入确认的新变更；
     ④ 阶段衔接：新阶段号＝该谱系当前阶段＋1（引擎推导并写入事件）、
        既往 `review_phase` 序列连续（1..k）；
     ⑤ 已封顶：该谱系×当前阶段的 `round_count` 必须已用尽（≥ `FIX_ROUND_LIMIT`）
@@ -5635,6 +5819,11 @@ def review_new_phase(args, root, slug, plan):
         problem = confirmation_phase_problem(record, confirmation, phase)
         if problem:
             raise WorkflowError(f"确认引用不合格：{problem}")
+        # ③′ 时序绑定（I3）：确认必须晚于本阶段最后一条 `node_review`——本阶段自己的
+        # 审查记录不是独立确认，拿它循环开新阶段等于重置预算（一次性只防同一份凭据）。
+        problem = confirmation_order_problem(events, record, lineage, phase, confirmation)
+        if problem:
+            raise WorkflowError(f"确认引用不合格：{problem}")
     # ④ 所确认版本：存在、衔接，且其后该谱系范围无未纳入确认的新变更。
     base_sha, head_sha, problem = confirmed_version_binding(root, confirmed, lineage, events)
     if problem:
@@ -5766,7 +5955,8 @@ def cmd_impact(args):
     """格式 ≥4 的 `impact`：提交影响判断（D-22/T5 裁决 E）——核对一致才写入。
 
     校验顺序：操作 ID 幂等先行（同 ID＋同请求 → 重放原结果、不重新绑定；同 ID＋
-    不同请求 → 拒绝）→ 节点存在 → 存在当前待判断变化集（无 → 拒绝）→
+    不同请求 → 拒绝）→ 计划门（与 record/review/slice 同一入口协议，M5）→
+    节点存在 → 存在当前待判断变化集（无 → 拒绝）→
     `--expect-review` == 当前有效结论操作 ID → `--expect-changes` == 当前变化集摘要。
     任一不符 → 拒绝本次提交、保持阻塞并返回新快照（不得把判断绑定到主控未评估的
     内容——观察 H1 后内容变为 H2 时，针对 H1 的判断必须被拒）。一致 → 写
@@ -5803,6 +5993,10 @@ def cmd_impact(args):
     if action == "replay":
         # 幂等重放：不写事件、不改绑定、不重新判定；返回随事件持久化的原结果。
         return replay_result(existing, args.operation_id)
+
+    # 与 record/review/slice 同一道计划门（M5）：审批失效时不得提交判断
+    # （判断一旦写入就成为放行依据——门必须先于写入，且幂等重放仍先行）。
+    require_plan_approval(root, slug, plan)
 
     node = next((item for item in plan.nodes if item.id == args.node_id), None)
     if node is None:
