@@ -2254,10 +2254,11 @@ class WorkflowCLI(unittest.TestCase):
         self.assertIn("格式 3", message)
         self.assertIn("review", message)
         self.assertFalse((self.root / ".workflow/t3legacy/events.jsonl").exists())
-        # `--recheck`/`--new-phase` 属 T5/T6：不建空壳——参数不存在（argparse 直接拒绝）
+        # `--new-phase` 属 T6：不建空壳——参数不存在（argparse 直接拒绝）。
+        # `--recheck` 已由 T5 实现，同一入口仍按格式分流（格式 ≤3 拒绝，见上一条断言）。
         process = subprocess.run(
             [sys.executable, "-B", str(SCRIPT), "review", "t3legacy", "N1",
-             "--verdict", "pass", "--recheck", "rv-N1-1"],
+             "--verdict", "pass", "--new-phase", "fixture"],
             cwd=self.root, capture_output=True, text=True)
         self.assertEqual(process.returncode, 2, process.stdout + process.stderr)
         self.assertIn("unrecognized arguments", process.stderr)
@@ -2344,7 +2345,7 @@ class WorkflowCLI(unittest.TestCase):
         self.assertEqual(facts["T1"], {"implemented": True, "node_valid": False, "blocked": False})
         self.assertEqual(facts["T3"], {"implemented": False, "node_valid": False, "blocked": True})
         self.assertEqual(plan.states(), {"T1": "IMPLEMENTED", "T2": "READY", "T3": "BLOCKED"})
-        self.assertEqual(workflow.node_state(plan, plan.events, plan.nodes[0]),
+        self.assertEqual(workflow.node_state(plan, plan.events, plan.nodes[0])["state"],
                          workflow.NODE_STATE_INVALID)
 
         message = self.cli("slice", "t4a", "T3", expected=1)["error"]
@@ -2556,6 +2557,436 @@ class WorkflowCLI(unittest.TestCase):
         self.assertEqual(before.stdout, after.stdout)
         self.assertEqual(before.stderr, after.stderr)
         self.assertEqual(workflow.load_plan(str(self.root), "old").nodes, [])
+
+
+    # ------------------------------------------------ 失效、前提与去重（T5）
+
+    def t5_plan(self, slug="t5", nodes=None, tasks=None):
+        """N1（T1、T2）＋ N2（T3，依赖 N1，兼任终审）：跨节点下游当放行观察位。"""
+        if nodes is None:
+            nodes = (self.node_block("N1", "T1, T2")
+                     + self.node_block("N2", "T3", deps="N1", final="是"))
+        if tasks is None:
+            tasks = self.v4_tasks((("T1", "无"), ("T2", "无"), ("T3", "T1")))
+        self.make_v4_plan(slug=slug, nodes=nodes, tasks=tasks)
+        self.approve_v4(slug)
+
+    def write_file(self, relative, text):
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        return path
+
+    def commit_files(self, message, *paths):
+        for path in paths:
+            self.git("add", path)
+        self.git("-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid",
+                 "commit", "-qm", message)
+        return self.git("rev-parse", "--short", "HEAD")
+
+    def t5_review_n1(self, slug="t5", operation_id="rv-N1-1", **extra):
+        """造一个真实提交当已审范围；record T1/T2 后 review N1（默认 pass）。"""
+        base = self.git("rev-parse", "--short", "HEAD")
+        self.write_file("source.py", "def test_example():\n    return False\n")
+        head = self.commit_files("T1/T2: 实现改动", "source.py")
+        self.record_v4("T1", slug=slug, operation_id="rec-%s-1" % slug)
+        self.record_v4("T2", slug=slug, operation_id="rec-%s-2" % slug)
+        return self.review_v4("N1", slug=slug, commits="%s..%s" % (base, head),
+                              operation_id=operation_id, **extra)
+
+    def impact_v4(self, slug, node="N1", verdict="irrelevant", basis="fixture 依据",
+                  expect_review="rv-N1-1", expect_changes="", operation_id="imp-1",
+                  expected=0):
+        return self.cli("impact", slug, node, "--verdict", verdict, "--basis", basis,
+                        "--expect-review", expect_review, "--expect-changes", expect_changes,
+                        "--operation-id", operation_id, expected=expected)
+
+    def invalidated_events(self, slug="t5"):
+        return [event for event in self.events(slug) if event["type"] == "node_invalidated"]
+
+    def impact_events(self, slug="t5"):
+        return [event for event in self.events(slug) if event["type"] == "impact_assessed"]
+
+    def pending_of(self, slug, node="N1"):
+        return self.cli("status", slug)["pending_changes"].get(node)
+
+    def test_five_self_change_invalidates_then_recheck_restores(self):
+        """已审范围上出新提交 → 待重新确认、跨节点下游被拒；`--recheck` 通过 → 恢复。"""
+        self.t5_plan(slug="t5a")
+        first = self.t5_review_n1(slug="t5a")
+        self.cli("slice", "t5a", "T3")                 # 上游验收后跨节点放行
+        self.write_file("source.py", "def test_example():\n    return 'changed'\n")
+        self.commit_files("T1: 又改一处", "source.py")
+        message = self.cli("slice", "t5a", "T3", expected=1)["error"]
+        self.assertIn("N1 待重新确认", message)
+        self.assertIn("已审范围", message)              # 原因随状态给出
+        self.assertIn("跨节点依赖", message)
+        status = self.cli("status", "t5a")
+        self.assertEqual(status["node_states"]["N1"], workflow.NODE_STATE_RECHECK)
+        self.assertIn("N1", status["unaccepted_nodes"])
+        self.assertIn("待重新确认", self.cli_text("status", "t5a"))
+        # 调度入口把失效观察落盘（审计痕迹；展示入口只派生、不写事件）
+        records = self.invalidated_events("t5a")
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["data"]["原因"], workflow.INVALIDATION_SELF)
+        self.assertEqual(records[0]["data"]["谱系"], first["lineage"])
+        self.assertEqual(records[0]["data"]["所否定结论"], "rv-N1-1")
+        self.assertTrue(any(item["path"] == "source.py"
+                            for item in records[0]["data"]["触发证据"]))
+        # 同范围没有新提交时不再重复写失效记录（幂等）
+        self.cli("slice", "t5a", "T3", expected=1)
+        self.assertEqual(len(self.invalidated_events("t5a")), 1)
+        # 定向复核通过 → 回到有效（新记录为准，阶段与轮次不变）
+        second = self.review_v4("N1", slug="t5a", operation_id="rv-N1-2",
+                                recheck="rv-N1-1")
+        self.assertEqual(second["phase"], 1)
+        self.assertEqual(second["rounds"], 1)
+        self.assertEqual(second["recheck_of"], "rv-N1-1")
+        self.assertEqual(len(self.node_review_events("t5a")), 2)
+        self.assertEqual(self.cli("status", "t5a")["node_states"]["N1"],
+                         workflow.NODE_STATE_VALID)
+        self.cli("slice", "t5a", "T3")
+
+    def test_five_pass_fail_pass_regression_blocks_until_recheck(self):
+        """pass → fail（不放行）→ recheck pass 恢复：不回看更早的 pass。"""
+        self.t5_plan(slug="t5f2")
+        self.t5_review_n1(slug="t5f2")
+        self.cli("slice", "t5f2", "T3")
+        self.review_v4("N1", slug="t5f2", verdict="fail", operation_id="rv-N1-2",
+                       lines=self.review_lines(("T1", "缺边界用例"), ("T2", "同 T1")))
+        message = self.cli("slice", "t5f2", "T3", expected=1)["error"]
+        self.assertIn("N1 未验收", message)
+        self.assertEqual(self.cli("status", "t5f2")["node_states"]["N1"],
+                         workflow.NODE_STATE_INVALID)
+        # fail 的失效记录拦阻：即便早先有 pass 也不放行；复核 pass 才恢复
+        self.review_v4("N1", slug="t5f2", operation_id="rv-N1-3", recheck="rv-N1-1")
+        self.assertEqual(self.cli("status", "t5f2")["node_states"]["N1"],
+                         workflow.NODE_STATE_VALID)
+        self.cli("slice", "t5f2", "T3")
+        self.assertEqual([task.status for task in
+                          workflow.load_plan(str(self.root), "t5f2").tasks],
+                         ["complete", "complete", "pending"])
+
+    def test_five_worktree_change_without_commit_invalidates(self):
+        """不新增提交、只改已审接口（工作树变化）→ 待重新确认、依赖节点派发被拒。"""
+        self.t5_plan(slug="t5w")
+        self.t5_review_n1(slug="t5w")
+        self.cli("slice", "t5w", "T3")
+        self.write_file("source.py", "def test_example():\n    return 'worktree'\n")
+        message = self.cli("slice", "t5w", "T3", expected=1)["error"]
+        self.assertIn("N1 待重新确认", message)
+        self.assertIn("工作树变化", message)
+        records = self.invalidated_events("t5w")
+        self.assertEqual(records[-1]["data"]["原因"], workflow.INVALIDATION_SELF)
+        self.assertIn("source.py", [item["path"] for item in records[-1]["data"]["触发证据"]])
+
+    def test_five_out_of_scope_change_pauses_until_judged_and_reuses_across_commit(self):
+        """范围外变化（提交与工作树同一口径）：先暂停放行，判「无关」后按内容复用。"""
+        self.t5_plan(slug="t5c")
+        self.t5_review_n1(slug="t5c")
+        self.cli("slice", "t5c", "T3")
+        # 范围外的新文件（未提交）→ 暂停放行，展示 impact 的预期值
+        self.write_file("notes.txt", "note-1\n")
+        status = self.cli("status", "t5c")
+        self.assertEqual(status["node_states"]["N1"], workflow.NODE_STATE_PAUSED)
+        self.assertIn("N1", status["unaccepted_nodes"])
+        pending = self.pending_of("t5c")
+        self.assertEqual(pending["review"], "rv-N1-1")
+        self.assertEqual([item["path"] for item in pending["changes"]], ["notes.txt"])
+        digest = pending["digest"]
+        self.assertRegex(digest, r"^[a-f0-9]{16}$")
+        shown = self.cli_text("status", "t5c")
+        self.assertIn("待影响判断", shown)
+        self.assertIn("notes.txt", shown)
+        self.assertIn(digest, shown)              # 逐项 path＋内容摘要＋变化集摘要
+        message = self.cli("slice", "t5c", "T3", expected=1)["error"]
+        self.assertIn("暂停放行", message)
+        self.assertIn("notes.txt", message)
+        message = self.cli("verify", "t5c", expected=1)["error"]
+        self.assertIn("暂停放行", message)
+        self.assertIn("impact", message)
+        # 同一内容提交 → 摘要不变：判定可复用（不以未提交豁免）
+        self.commit_files("chore: notes", "notes.txt")
+        self.assertEqual(self.pending_of("t5c")["digest"], digest)
+        hmm = self.impact_v4("t5c", expect_changes=digest, expected=0)
+        self.assertEqual(hmm["state_after"], workflow.NODE_STATE_VALID)
+        self.assertIsNone(hmm["invalidated"])
+        self.assertEqual(hmm["changes"], [{"path": "notes.txt", "摘要": pending["changes"][0]["摘要"]}])
+        self.cli("slice", "t5c", "T3")
+        # 范围外提交判「无关」不触发 node_invalidated；同 ID 重试返回原结果、不重新绑定
+        self.assertEqual(self.invalidated_events("t5c"), [])
+        replay = self.impact_v4("t5c", expect_changes=digest)
+        self.assert_replay_matches(replay, hmm)
+        self.assertEqual(len(self.impact_events("t5c")), 1)
+        self.assertEqual(self.cli("status", "t5c")["node_states"]["N1"],
+                         workflow.NODE_STATE_VALID)
+        # 重启（重放事件重算）后相同绑定直接复用，不重复阻塞
+        self.assertEqual(len([event for event in self.events("t5c")
+                              if event["type"] == "impact_assessed"]), 1)
+
+    def test_five_same_path_content_change_expires_binding(self):
+        """同路径内容变化使绑定过期；观察 H1 后内容变 H2 再提交针对 H1 的判断必被拒。"""
+        self.t5_plan(slug="t5d")
+        self.t5_review_n1(slug="t5d")
+        self.write_file("conf.py", "SWITCH = 0  # 仅注释\n")
+        first = self.pending_of("t5d")
+        self.impact_v4("t5d", basis="只加了注释，不影响任何结论", expect_changes=first["digest"])
+        self.assertEqual(self.cli("status", "t5d")["node_states"]["N1"],
+                         workflow.NODE_STATE_VALID)
+        # 同路径内容变化（开关真改了）→ 旧判定失效、重新阻塞
+        self.write_file("conf.py", "SWITCH = 1  # 改开关\n")
+        status = self.cli("status", "t5d")
+        self.assertEqual(status["node_states"]["N1"], workflow.NODE_STATE_PAUSED)
+        second = self.pending_of("t5d")
+        self.assertNotEqual(second["digest"], first["digest"])
+        self.assertEqual(second["changes"][0]["path"], "conf.py")
+        # 针对旧快照 H1 的判断 → 被拒、返回新快照、保持阻塞
+        message = self.impact_v4("t5d", basis="按旧快照", expect_changes=first["digest"],
+                                 operation_id="imp-2", expected=1)["error"]
+        self.assertIn("不符", message)
+        self.assertIn(second["digest"], message)
+        self.assertIn("conf.py", message)
+        self.assertEqual(self.cli("status", "t5d")["node_states"]["N1"],
+                         workflow.NODE_STATE_PAUSED)
+        self.assertEqual(len(self.impact_events("t5d")), 1)   # 被拒的提交没有写入任何事件
+        # 按新快照判「相关」→ 转待重新确认（写 node_invalidated，原因 impact:related）
+        result = self.impact_v4("t5d", verdict="related", basis="开关默认值被改，结论需重判",
+                                expect_changes=second["digest"], operation_id="imp-3")
+        self.assertEqual(result["state_after"], workflow.NODE_STATE_RECHECK)
+        self.assertIsNotNone(result["invalidated"])
+        self.assertEqual(self.invalidated_events("t5d")[-1]["data"]["原因"],
+                         workflow.INVALIDATION_IMPACT["related"])
+        message = self.cli("slice", "t5d", "T3", expected=1)["error"]
+        self.assertIn("待重新确认", message)
+
+    def test_five_record_change_after_conclusion_makes_it_stale(self):
+        """审查记录更替后旧绑定过期；未知节点、无待判断变化与缺操作 ID 都被拒。"""
+        self.t5_plan(slug="t5n")
+        self.t5_review_n1(slug="t5n")
+        # 无待判断变化时 impact 被拒（「无关」不是常规推进步骤）
+        message = self.impact_v4("t5n", expect_changes="x", expected=1)["error"]
+        self.assertIn("没有待判断的范围外变化", message)
+        self.assertEqual(self.impact_events("t5n"), [])
+        # 缺 --operation-id 被拒（impact 与 --recheck 同一协议）
+        args = ["impact", "t5n", "N1", "--verdict", "irrelevant", "--basis", "b",
+                "--expect-review", "rv-N1-1", "--expect-changes", "x"]
+        self.assertIn("--operation-id", self.cli(*args, expected=1)["error"])
+        self.assertIn("--operation-id",
+                      self.review_v4("N1", slug="t5n", recheck="rv-N1-1", operation_id="",
+                                     expected=1)["error"])
+        message = self.cli("impact", "t5n", "N9", "--verdict", "irrelevant", "--basis", "b",
+                           "--expect-review", "x", "--expect-changes", "y",
+                           "--operation-id", "imp-9", expected=1)["error"]
+        self.assertIn("没有审查节点 N9", message)
+        # 范围外变化出现 → 暂停；随后审查记录更替（新 pass 记录）→ 旧预期值失效
+        self.write_file("notes.txt", "h1\n")
+        stale = self.pending_of("t5n")
+        self.review_v4("N1", slug="t5n", operation_id="rv-N1-2")
+        message = self.impact_v4("t5n", expect_review="rv-N1-1",
+                                 expect_changes=stale["digest"], operation_id="imp-1",
+                                 expected=1)["error"]
+        self.assertIn("--expect-review", message)
+        self.assertIn("rv-N1-2", message)      # 返回新快照（新结论操作 ID）
+        self.assertEqual(self.cli("status", "t5n")["node_states"]["N1"],
+                         workflow.NODE_STATE_PAUSED)
+
+    def test_five_premises_recorded_and_change_requires_recheck(self):
+        """前提清单随结论保存；前提被触及（提交或工作树）→ 待重新确认；recheck 后新记录保留。"""
+        self.t5_plan(slug="t5p")
+        self.write_file("conf/app.toml", "SWITCH = 0\n")
+        self.write_file("lib/shared.py", "def shared():\n    return 1\n")
+        base = self.git("rev-parse", "--short", "HEAD")
+        self.write_file("source.py", "def test_example():\n    return False\n")
+        head = self.commit_files("T1/T2: 实现", "source.py")
+        self.record_v4("T1", slug="t5p", operation_id="rec-t5p-1")
+        self.record_v4("T2", slug="t5p", operation_id="rec-t5p-2")
+        result = self.review_v4("N1", slug="t5p", commits="%s..%s" % (base, head),
+                                operation_id="rv-N1-1",
+                                premises="配置: conf/app.toml; 共享实现: lib/shared.py")
+        entries = result["premises"]
+        self.assertEqual([entry["类型"] for entry in entries], ["配置", "共享实现"])
+        self.assertEqual(entries[0]["引用"], ["conf/app.toml"])
+        self.assertRegex(entries[0]["摘要"], r"^[a-f0-9]{16}$")
+        self.assertEqual(entries[0]["基线提交"], self.git("rev-parse", "HEAD"))
+        self.assertEqual(self.node_review_events("t5p")[0]["data"]["premises"], entries)
+        # 声明前提本身不暂停：未动过的前提不触发失效
+        self.assertEqual(self.pending_of("t5p"), None)
+        self.assertEqual(self.cli("status", "t5p")["node_states"]["N1"],
+                         workflow.NODE_STATE_VALID)
+        self.cli("slice", "t5p", "T3")
+        # 前提（配置）在未提交的工作树上被改 → 待重新确认、下游被拒
+        self.write_file("conf/app.toml", "SWITCH = 1\n")
+        message = self.cli("slice", "t5p", "T3", expected=1)["error"]
+        self.assertIn("N1 待重新确认", message)
+        self.assertIn("前提", message)
+        records = self.invalidated_events("t5p")
+        self.assertEqual(records[-1]["data"]["原因"], workflow.INVALIDATION_PREMISE)
+        self.assertIn("conf/app.toml",
+                      [item["path"] for item in records[-1]["data"]["触发证据"]])
+        # 前提变化后 recheck 通过 → 生成新记录（旧记录保留）、轮次沿谱系 +1
+        self.commit_files("conf: 开关改到 1", "conf/app.toml")
+        second = self.review_v4("N1", slug="t5p", operation_id="rv-N1-2", recheck="rv-N1-1",
+                                premises="配置: conf/app.toml; 共享实现: lib/shared.py")
+        self.assertEqual(second["rounds"], 1)
+        records = self.node_review_events("t5p")
+        self.assertEqual([event["data"]["operation_id"] for event in records],
+                         ["rv-N1-1", "rv-N1-2"])
+        self.assertEqual(records[1]["data"]["recheck_of"], "rv-N1-1")
+        self.assertEqual(self.cli("status", "t5p")["node_states"]["N1"],
+                         workflow.NODE_STATE_VALID)
+        self.cli("slice", "t5p", "T3")
+
+    def test_five_premises_shape_rejected_on_bad_input(self):
+        """前提清单校验：路径不存在、类型不支持、写法不是 `<类型>: <引用>` 都直接拒绝。"""
+        self.t5_plan(slug="t5q")
+        self.record_v4("T1", slug="t5q", operation_id="rec-t5q-1")
+        self.record_v4("T2", slug="t5q", operation_id="rec-t5q-2")
+        cases = [
+            ("契约锚点: missing.txt", "路径不存在"),
+            ("契约锚点", "不是 `<类型>: <路径"),
+            ("未知类型: source.py", "不支持"),
+            ("契约锚点: ", "没有列出引用路径"),
+        ]
+        for raw, needle in cases:
+            with self.subTest(premises=raw):
+                message = self.review_v4("N1", slug="t5q", premises=raw, expected=1)["error"]
+                self.assertIn(needle, message)
+                self.assertIn("--premises", message)
+        self.assertEqual(self.node_review_events("t5q"), [])
+        # 目录递归展开成文件列表（按相对路径排序）——条目即引用集合，摘要覆盖全部文件
+        self.write_file("conf/b.toml", "B = 1\n")
+        self.write_file("conf/a.toml", "A = 1\n")
+        result = self.review_v4("N1", slug="t5q", operation_id="rv-N1-1",
+                                premises="配置: conf")
+        self.assertEqual(result["premises"][0]["引用"], ["conf/a.toml", "conf/b.toml"])
+        digest = result["premises"][0]["摘要"]
+        self.assertEqual(workflow.change_set_digest([
+            ("conf/a.toml", workflow._file_content_digest(str(self.root), "conf/a.toml")),
+            ("conf/b.toml", workflow._file_content_digest(str(self.root), "conf/b.toml")),
+        ]), digest)
+
+    def test_five_declared_requirement_change_stales_without_commit(self):
+        """只改某任务验收要求（节点块与代码不变）并重批计划 → 该节点转待重新确认。"""
+        self.t5_plan(slug="t5r")
+        self.t5_review_n1(slug="t5r")
+        self.cli("slice", "t5r", "T3")
+        before = workflow.load_plan(str(self.root), "t5r")
+        version = workflow.node_version(before, before.nodes[0])
+        self.plan("t5r").write_text(self.plan("t5r").read_text()
+                                    .replace("- **验收**：结果正确",
+                                             "- **验收**：结果正确，且空输入也要有明确行为", 1))
+        self.cli("approve", "t5r", "计划", "--by", "fixture 重新确认新验收要求")
+        message = self.cli("slice", "t5r", "T3", expected=1)["error"]
+        self.assertIn("N1 待重新确认", message)
+        self.assertIn("节点版本", message)
+        after = workflow.load_plan(str(self.root), "t5r")
+        self.assertNotEqual(workflow.node_version(after, after.nodes[0]), version)
+        self.assertEqual(self.cli("status", "t5r")["node_states"]["N1"],
+                         workflow.NODE_STATE_RECHECK)
+
+    def test_five_split_children_inherit_lineage_and_keep_rounds(self):
+        """拆分（前身来自历史记录）：子节点各自继承同一谱系根，轮次沿根累计不重置。"""
+        tasks = self.v4_tasks((("T1", "无"), ("T2", "无")))
+        self.make_v4_plan(slug="t5s", nodes=self.node_block("N1", "T1, T2", final="是"),
+                          tasks=tasks)
+        self.approve_v4("t5s")
+        base = self.git("rev-parse", "--short", "HEAD")
+        self.write_file("source.py", "def test_example():\n    return False\n")
+        head = self.commit_files("T1/T2: 实现", "source.py")
+        self.record_v4("T1", slug="t5s", operation_id="rec-t5s-1")
+        self.record_v4("T2", slug="t5s", operation_id="rec-t5s-2")
+        first = self.review_v4("N1", slug="t5s", commits="%s..%s" % (base, head),
+                               operation_id="rv-N1-1")
+        # 拆分：N1 从计划里移除，N3（T1）与 N4（T2）各自以 N1 为唯一前身
+        nodes = (self.node_block("N3", "T1", pred="N1")
+                 + self.node_block("N4", "T2", pred="N1", final="是"))
+        self.make_v4_plan(slug="t5s", nodes=nodes, tasks=tasks)
+        self.approve_v4("t5s")
+        self.assertEqual(self.cli("check", "t5s")["errors"], [])   # 合法拆分（前身来自历史记录）
+        # 继承同一谱系根；旧结论版本与子节点不符 → 待重新确认（不依赖提交）
+        self.assertEqual(self.cli("status", "t5s")["node_states"]["N3"],
+                         workflow.NODE_STATE_RECHECK)
+        second = self.review_v4("N3", slug="t5s", operation_id="rv-N3-1",
+                                lines=self.review_lines(("T1", "拆分后仅覆盖 T1，依据同前")))
+        self.assertEqual(second["lineage"], first["lineage"])
+        self.assertEqual(second["rounds"], 1)                      # 轮次沿谱系根累计
+        self.assertEqual(second["phase"], 1)
+        third = self.review_v4("N4", slug="t5s", operation_id="rv-N4-1",
+                               lines=self.review_lines(("T2", "拆分后仅覆盖 T2，依据同前")))
+        self.assertEqual(third["lineage"], first["lineage"])       # 共享前身 → 同一根
+        self.assertEqual(workflow.round_count(self.events("t5s"), first["lineage"]), 2)
+        self.assertEqual(self.cli("status", "t5s")["node_states"]["N4"],
+                         workflow.NODE_STATE_VALID)
+
+    def test_five_undecidable_and_impact_binding_persisted(self):
+        """判「无关」的依据与绑定随事件持久化；判「判不出」→ 转待重新确认。"""
+        self.t5_plan(slug="t5u")
+        self.t5_review_n1(slug="t5u")
+        self.write_file("notes.txt", "h1\n")
+        pending = self.pending_of("t5u")
+        result = self.impact_v4("t5u", basis="看不出与任何交付物的关系",
+                                expect_changes=pending["digest"])
+        self.assertEqual(result["verdict"], "irrelevant")
+        data = self.impact_events("t5u")[0]["data"]
+        self.assertEqual(data["basis"], "看不出与任何交付物的关系")
+        self.assertEqual(data["审查记录"], "rv-N1-1")
+        self.assertEqual(data["变化集摘要"], pending["digest"])
+        self.assertEqual(data["变化集"],
+                         [{"path": "notes.txt", "摘要": pending["changes"][0]["摘要"]}])
+        self.assertEqual(data["节点版本"], result["node_version"])
+        self.assertEqual(data["审查阶段"], 1)
+        self.assertEqual(self.cli("status", "t5u")["node_states"]["N1"],
+                         workflow.NODE_STATE_VALID)
+        # 同 ID ＋ 不同请求 → 拒绝（同一操作身份不得承担两次不同判断）
+        message = self.impact_v4("t5u", basis="换了依据", expect_changes=pending["digest"],
+                                 operation_id="imp-1", expected=1)["error"]
+        self.assertIn("已用于另一次操作", message)
+        self.assertEqual(len(self.impact_events("t5u")), 1)
+        # 同一路径内容再变 → 旧判定不适用（重新暂停）；判「判不出」→ 转待重新确认
+        self.write_file("notes.txt", "h2\n")
+        second = self.pending_of("t5u")
+        self.assertNotEqual(second["digest"], pending["digest"])
+        result = self.impact_v4("t5u", verdict="undecidable", basis="影响面无法判定",
+                                expect_changes=second["digest"], operation_id="imp-2")
+        self.assertEqual(result["state_after"], workflow.NODE_STATE_RECHECK)
+        self.assertEqual(self.invalidated_events("t5u")[-1]["data"]["原因"],
+                         workflow.INVALIDATION_IMPACT["undecidable"])
+        message = self.cli("slice", "t5u", "T3", expected=1)["error"]
+        self.assertIn("待重新确认", message)
+
+    def test_five_recheck_never_deduped_and_interrupt_replays(self):
+        """同范围同结论的两次复核都保存；事件落盘后中断 → 携原 ID 重试恢复投影与原结果。"""
+        self.t5_plan(slug="t5o")
+        self.t5_review_n1(slug="t5o")
+        # `--recheck` 指向不存在的操作 / 非审查记录 → 拒绝
+        message = self.review_v4("N1", slug="t5o", recheck="rv-nope",
+                                 operation_id="rv-N1-2", expected=1)["error"]
+        self.assertIn("不存在", message)
+        message = self.review_v4("N1", slug="t5o", recheck="rec-t5o-1",
+                                 operation_id="rv-N1-2", expected=1)["error"]
+        self.assertIn("不是节点审查记录", message)
+        # 不同操作 ID 永不去重：同一范围与结论的复核各存一条（轮次照常累计）
+        second = self.review_v4("N1", slug="t5o", recheck="rv-N1-1", operation_id="rv-N1-2")
+        third_text = self.review_v4("N1", slug="t5o", recheck="rv-N1-1",
+                                    operation_id="rv-N1-3", text=True)
+        self.assertEqual(len(self.node_review_events("t5o")), 3)
+        self.assertEqual(len([event for event in self.node_review_events("t5o")
+                              if event["data"].get("recheck_of") == "rv-N1-1"]), 2)
+        self.assertEqual(workflow.round_count(self.events("t5o"), second["lineage"]), 2)
+        # 事件落盘后返回前中断：状态未回写 → 携原 ID 重试：恢复投影、返回原结果、轮次与阶段不变
+        self.rollback_complete("t5o")
+        replay_text = self.review_v4("N1", slug="t5o", recheck="rv-N1-1",
+                                     operation_id="rv-N1-3", text=True)
+        self.assertTrue(replay_text.startswith(third_text), replay_text)
+        self.assertIn("幂等重放", replay_text)
+        self.assertEqual(len(self.node_review_events("t5o")), 3)
+        self.assertEqual([task.status for task in
+                          workflow.load_plan(str(self.root), "t5o").tasks],
+                         ["complete", "complete", "pending"])
+        repairs = self.repair_events("t5o")
+        self.assertEqual(len(repairs), 1)
+        self.assertEqual(repairs[0]["data"]["entry"], "review")
+        self.assertEqual(workflow.round_count(self.events("t5o"), second["lineage"]), 2)
 
 
 if __name__ == "__main__":

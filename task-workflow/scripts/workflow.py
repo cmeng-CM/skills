@@ -143,14 +143,29 @@ HISTORY_PREDECESSOR_KEYS = ("前身", "predecessor")
 NODE_PHASE_FIRST = 1
 NODE_RUN_FIELDS = ("状态",)
 NODE_REVIEW_VERDICTS = ("pass", "fail")
-# 节点结论状态（T4 接线口径）：`valid`＝已验收（结论有效）、`invalid`＝未验收；
-# `recheck`（待重新确认）由 T5 的失效与恢复规则产生——T4 只预留状态与措辞、
-# 不发明触发。判据只在 `node_state()` 一处实现（T5 只换该函数）。
+# 节点结论状态（D-18 统一口径；T5 收口失效来源与恢复）：`valid`＝已验收（结论有效）、
+# `invalid`＝未验收（无记录或最近一条非 pass）、`recheck`＝待重新确认（版本变化或
+# 失效三条命中，须定向复核）、`paused`＝暂停放行（存在未判定影响的范围外变化，
+# 判「无关」即解除）。判据只在 `node_state()` 一处实现，各入口共用。
 NODE_STATE_VALID = "valid"
 NODE_STATE_INVALID = "invalid"
 NODE_STATE_RECHECK = "recheck"
+NODE_STATE_PAUSED = "paused"
 NODE_STATE_TEXT = {NODE_STATE_VALID: "已验收", NODE_STATE_INVALID: "未验收",
-                   NODE_STATE_RECHECK: "待重新确认"}
+                   NODE_STATE_RECHECK: "待重新确认",
+                   NODE_STATE_PAUSED: "暂停放行（待影响判断）"}
+
+# 前提清单（D-07/T5 裁决 A）：`review --premises` 逐条声明结论依赖的前提。
+PREMISE_TYPES = ("契约锚点", "共享实现", "配置")
+PREMISE_ENTRY_KEYS = ("类型", "引用", "摘要", "基线提交")
+# 失效原因（node_invalidated 事件）：self/premise 由检测写，impact:* 随影响判断写。
+INVALIDATION_SELF = "self-change"
+INVALIDATION_PREMISE = "premise-touched"
+INVALIDATION_IMPACT = {"related": "impact:related", "undecidable": "impact:undecidable"}
+INVALIDATION_REASONS = (INVALIDATION_SELF, INVALIDATION_PREMISE,
+                        INVALIDATION_IMPACT["related"], INVALIDATION_IMPACT["undecidable"])
+# 影响判断（D-22/T5 裁决 E）：`impact` 命令的判词。
+IMPACT_VERDICTS = ("irrelevant", "related", "undecidable")
 
 # 设计文档：与状态控制分开的独立产物，必须落在项目仓库里（.workflow/ 自忽略）
 DESIGN_DOC_KEY = "设计文档"
@@ -419,6 +434,8 @@ class Plan:
         self.verify_command = ""
         self._events = None         # 格式 ≥4：事件流的惰性缓存（见 `events`）
         self._event_loader = None   # 由 load_plan 注入；check 只做容错的历史读取
+        self._root = None           # 由 load_plan 注入：失效检测的 git 读取基准目录
+        self._invalidation_cache = None   # (events, 报告) 同一次调用内的失效检测缓存
         self._parse()
 
     @property
@@ -777,6 +794,7 @@ def load_plan(root, slug):
         # 格式 ≥4：三态调度的输入是事件流（D-04 事件是权威记录）——加载器随计划
         # 注入，首次访问才读（见 `Plan.events`），各入口共用同一份读法。
         plan._event_loader = lambda: read_events(root, slug)
+        plan._root = root   # 失效检测读 git（已审范围 / 工作树变化）的项目根
     return plan
 
 
@@ -2010,13 +2028,17 @@ def _hash_file(h, path):
 # ---------------------------------------------------------------- 结构化证据（旧账本只读兼容）
 
 # 格式 ≥4 新增的事件类型（D-04）：`implemented` 承载两态记账与操作 ID 协议，
-# `node_review` 承载节点审查结论（T3），`projection_repair` 记录投影自动修复。
-# 事件名字面量一律走这三个常量。
+# `node_review` 承载节点审查结论（T3），`projection_repair` 记录投影自动修复，
+# `node_invalidated` 记录结论失效（T5），`impact_assessed` 记录影响判断（T5，D-22）。
+# 事件名字面量一律走这些常量。
 EVENT_IMPLEMENTED = "implemented"
 EVENT_NODE_REVIEW = "node_review"
+EVENT_NODE_INVALIDATED = "node_invalidated"
+EVENT_IMPACT_ASSESSED = "impact_assessed"
 PROJECTION_REPAIR = "projection_repair"
 EVENT_TYPES = {"start", "verify", "manual", "waiver", "evidence", "command_retired", "close", "reopen",
-               EVENT_IMPLEMENTED, EVENT_NODE_REVIEW, PROJECTION_REPAIR}
+               EVENT_IMPLEMENTED, EVENT_NODE_REVIEW, EVENT_NODE_INVALIDATED, EVENT_IMPACT_ASSESSED,
+               PROJECTION_REPAIR}
 VIEW_MARKER = "<!-- workflow-events-view -->"
 
 
@@ -2236,6 +2258,73 @@ def new_node_lineage(slug, node):
     return f"{node.id}-{_digest({'workflow': slug, 'node': node.id})[:8]}"
 
 
+def predecessor_root(plan, events, ref, seen=None):
+    """前身引用 → 谱系根（运行时解析：当前计划文本 ∪ 本工作流历史记录）。
+
+    解析顺序（T5 裁决 H；与 `check` 侧同一套来源）：
+    ① `ref` 本身就是历史记录里的谱系根；
+    ② `ref` 是已有 `node_review` 记录的节点 ID → 取它的谱系根；
+    ③ `ref` 是当前计划文本里某节点的 ID（链式：该节点自己也有前身）→ 沿链继续。
+    解析到多个谱系根 → 歧义，拒绝；解析不到 → None（调用方拒绝，`check` 应已挡）。
+    """
+    seen = set() if seen is None else seen
+    if ref in seen:
+        return None
+    seen.add(ref)
+    roots = set()
+    for event in events:
+        if event["type"] != EVENT_NODE_REVIEW:
+            continue
+        data = event["data"]
+        if data.get("谱系") == ref:
+            roots.add(ref)
+        if data.get("节点") == ref:
+            roots.add(data["谱系"])
+    if len(roots) > 1:
+        raise WorkflowError(
+            f"前身 {ref} 在历史记录里映射到多个谱系根（{'、'.join(sorted(roots))}）——"
+            "解析歧义，拒绝继承；先人工裁定要在哪条谱系上继续。"
+        )
+    if roots:
+        return roots.pop()
+    for other in plan.nodes:
+        if other.id != ref and ref in other.predecessors:
+            return predecessor_root(plan, events, other.id, seen)
+    return None
+
+
+def _lineage_history_of(events):
+    """已解析事件流里的 ID 集合与谱系映射（`predecessor_scope` 的 history 入参）。"""
+    ids, roots_of = set(), {}
+    for event in events:
+        _event_scope(event, ids, roots_of)
+    return ids, roots_of
+
+
+def node_root_lineage(plan, events, node):
+    """该节点当前的谱系根：自有记录优先，其次按『前身』继承（最多一个前身，D-11）。
+
+    拆分/改名/调整产生的新节点继承前身谱系（多个子节点共享同一前身即共享同一根，
+    不构成合并）；前身已在计划文本或历史记录中但尚无谱系（从未送审）→ 无从继承，
+    首审新开一条。引用完全解析不到 → 拒绝（不得静默新开，那会清空历史与修复预算）。
+    """
+    own = node_lineage(events, node.id)
+    if own:
+        return own
+    history = _lineage_history_of(events)
+    for ref in node.predecessors:
+        root = predecessor_root(plan, events, ref)
+        if root is not None:
+            return root
+        if ref not in predecessor_scope(plan, node.id, history):
+            raise WorkflowError(
+                f"审查节点 {node.id} 的前身 {ref} 解析不到——前身须存在于当前计划文本"
+                "或本工作流的历史记录（审查记录与事件）中；`check` 应已拦下这条，"
+                "若计划文本合法请报告（运行时不新开谱系，否则历史与修复预算会被清空）。"
+            )
+    return None
+
+
 def node_review_count(events, lineage, phase=NODE_PHASE_FIRST):
     """同【谱系 × 审查阶段】的 `node_review` 记录条数——轮次谓词的**单一实现**。
 
@@ -2269,48 +2358,417 @@ def node_review_index(events):
     - `nodes_with_records`：有任一 `node_review` 记录的节点 ID 集合（审查债务用）；
     - `latest`：{(谱系, 审查阶段): 结论}，同【谱系 × 阶段】取最近一条（后写覆盖
       先写）——「不得各自取最近一次 pass」的统一口径（D-18）。比较谓词只此一处
-      实现（T3 审查 Low ②：`review` 的轮次计数与本派生不再各写一份）。
+      实现（T3 审查 Low ②：`review` 的轮次计数与本派生不再各写一份）；
+    - `latest_event`：{(谱系, 阶段): 事件}（同上取最近一条），T5 的版本/操作 ID/
+      已审范围都从这条记录读；
+    - `position`：{事件 ID: 事件序号}，失效记录「是否晚于某条结论」按事件序判定。
     """
-    lineage, latest, recorded = {}, {}, set()
-    for event in events:
+    lineage, latest, latest_event, recorded, position = {}, {}, {}, set(), {}
+    for index, event in enumerate(events):
+        position[event.get("id")] = index
         if event["type"] != EVENT_NODE_REVIEW:
             continue
         data = event["data"]
         lineage[data["节点"]] = data["谱系"]
         latest[(data["谱系"], data["审查阶段"])] = data["verdict"]
+        latest_event[(data["谱系"], data["审查阶段"])] = event
         recorded.add(data["节点"])
-    return {"lineage": lineage, "latest": latest, "nodes_with_records": recorded}
+    return {"lineage": lineage, "latest": latest, "latest_event": latest_event,
+            "nodes_with_records": recorded, "position": position}
 
 
-def node_state(plan, events, node, index=None):
-    """节点结论状态（T4 接线口径；T5 收口失效来源与恢复，只换本函数实现）。
+def plan_root(plan):
+    """计划所属项目根（失效检测读 git 的基准目录；load_plan 注入，测试可缺省推导）。"""
+    if getattr(plan, "_root", None):
+        return plan._root
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(plan.path))))
 
-    当前【谱系 × 当前审查阶段】下最近一条 `node_review` 结论为 `pass` →
-    `NODE_STATE_VALID`；尚无谱系（从未送审）或最近一条不是 `pass` → `invalid`。
-    节点版本坐标（声明变化即旧结论失放行资格）、前提与失效三条、范围外变化的
-    兜底判断，以及「待重新确认」（`NODE_STATE_RECHECK`）的触发与恢复都属 T5——
-    T4 只接线与调用、不自定义口径（`plan` 参数留给 T5 计算节点版本，签名不再变）。
+
+# --------------------------------------------- 前提、变化集与失效检测（T5：D-07/D-22）
+
+def rel_path(text):
+    """路径归一：`\\` → `/`、去前导 `./`、去尾部 `/`（比较与展示都走它）。"""
+    out = str(text).strip().replace("\\", "/")
+    while out.startswith("./"):
+        out = out[2:]
+    return out.rstrip("/") or "."
+
+
+def _content_digest(data):
+    """内容摘要：sha256 前 16 位（D-15 的口径，前提与变化集共用）。"""
+    return hashlib.sha256(data).hexdigest()[:16]
+
+
+def _file_content_digest(root, rel):
+    """工作树里某个相对路径的当前内容摘要；不存在返回 None（调用方记 deleted）。"""
+    full = os.path.join(root, rel)
+    if not os.path.isfile(full):
+        return None
+    try:
+        with open(full, "rb") as fh:
+            return _content_digest(fh.read())
+    except OSError:
+        return None
+
+
+def change_set_digest(items):
+    """变化集摘要：逐项 `path＋摘要` 按 path 排序拼接后 sha256 前 16 位。
+
+    `items` 是 [(相对路径, 摘要字符串)]（删除的条目用 `deleted`）；前提摘要与
+    范围外变化集的摘要都走这一个 helper（T5 裁决 D：摘要按内容计算）。
+    """
+    lines = sorted(f"{rel_path(path)}\0{digest}" for path, digest in items)
+    return _content_digest("\n".join(lines).encode())
+
+
+def premise_files(root, references):
+    """前提引用 → 展开后的相对文件列表（目录递归取全部文件，按相对路径排序）。"""
+    out = set()
+    for ref in references:
+        norm = rel_path(ref)
+        full = os.path.join(root, norm)
+        if os.path.isdir(full):
+            for directory, dirs, files in os.walk(full):
+                dirs[:] = sorted(dirs)
+                for name in sorted(files):
+                    path = os.path.join(directory, name)
+                    out.add(rel_path(os.path.relpath(path, root)))
+        else:
+            out.add(norm)
+    return sorted(out)
+
+
+def premise_digest(root, files):
+    """前提摘要：对引用下全部文件按 path 排序、逐项内容摘要拼接后取 sha256 前 16 位。
+
+    与「变化集摘要」共用 `change_set_digest`；文件不存在按 `deleted` 记
+    （前提被删除必须改变摘要，而不是静默缩小范围）。
+    """
+    return change_set_digest([(rel, _file_content_digest(root, rel) or "deleted")
+                              for rel in sorted(set(files))])
+
+
+def parse_premises(root, raw, baseline):
+    """解析 `--premises "<类型>: <路径[,路径…]>; <类型>: <路径>"` → (条目列表, 问题)。
+
+    类型 ∈ {契约锚点, 共享实现, 配置}；每条引用路径必须存在（目录递归展开成
+    文件列表，按相对路径排序）；条目＝{类型, 引用[], 摘要, 基线提交}，摘要在
+    展开后的文件上计算（对引用下全部文件按 path 排序拼接后 sha256 前 16 位）。
+    未给（空串）→ 空清单；给了但解析不出或路径不存在 → 拒绝（不静默降级为空）。
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return [], None
+    entries = []
+    for chunk in re.split(r"[;；]", raw):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        kind, sep, paths_raw = chunk.partition(":")
+        if not sep:
+            kind, sep, paths_raw = chunk.partition("：")
+        kind = kind.strip()
+        if not sep or not kind:
+            return [], (f"前提条目 '{chunk}' 不是 `<类型>: <路径[,路径…]>` 形式——"
+                        f"类型只能是 {'、'.join(PREMISE_TYPES)}。")
+        if kind not in PREMISE_TYPES:
+            return [], (f"前提条目 '{chunk}' 的类型 '{kind}' 不支持——"
+                        f"类型只能是 {'、'.join(PREMISE_TYPES)}。")
+        refs = [rel_path(part) for part in re.split(r"[,，、]", paths_raw) if part.strip()]
+        if not refs:
+            return [], f"前提条目 '{chunk}' 没有列出引用路径（文件或目录）。"
+        missing = [ref for ref in refs if not os.path.exists(os.path.join(root, ref))]
+        if missing:
+            return [], (f"前提条目 '{chunk}' 引用的路径不存在：{'、'.join(missing)}——"
+                        "前提引用必须指向工作树里真实存在的文件或目录（写错路径等于没有前提）。")
+        files = premise_files(root, refs)
+        entries.append({"类型": kind, "引用": files,
+                        "摘要": premise_digest(root, files), "基线提交": baseline})
+    if not entries:
+        return [], f"`--premises` 没解析出任何前提条目：{raw}"
+    return entries, None
+
+
+def _resolved_commits(root, commits):
+    """`<base>..<head>` → (base_sha, head_sha)；解析不到的分量按空串返回。
+
+    `--commits` 里的 `HEAD` 是**会移动的引用**：审查记录必须绑定审查当时的提交，
+    否则「已审范围之上是否出现新提交」无从判断。因此记录时解析成完整 sha。
+    """
+    raw = (commits or "").strip()
+    if ".." not in raw:
+        return "", ""
+    base, _, head = raw.partition("..")
+    out = []
+    for token in (base.strip(), head.strip()):
+        sha = _git(root, "rev-parse", "--verify", "--quiet", f"{token}^{{commit}}").strip() if token else ""
+        out.append(sha)
+    return out[0], out[1]
+
+
+def _reviewed_paths(root, base_sha, head_sha):
+    """已审范围的文件路径集：`git diff --name-only base..head`（解析不到 → 空集）。"""
+    if not base_sha or not head_sha:
+        return set()
+    out = _git(root, "diff", "--name-only", "--no-renames", base_sha, head_sha)
+    return {rel_path(line) for line in out.splitlines() if line.strip()}
+
+
+def _worktree_changes_since(root, head_sha):
+    """自 head_sha 起的变化（提交与工作树一视同仁）→ [{path, 摘要}]，按 path 排序。
+
+    一次 `git diff --name-status <head>` 同时覆盖「head 之后的新提交」与「未提交的
+    工作树差异」，再补上未跟踪文件；内容摘要取**当前工作树内容**——同一内容提交
+    前后摘要一致，影响判断因此可复用（不以未提交豁免，T5 裁决 C/D）。
+    `.workflow/`（工作流自身状态）不参与检测，与整树指纹的排除口径一致。
+    """
+    if not head_sha or not _git_ok(root, "rev-parse", "--verify", "--quiet", f"{head_sha}^{{commit}}"):
+        return []
+    status = {}
+    out = subprocess.run(["git", "diff", "--name-status", "--no-renames", "-z", head_sha],
+                         cwd=root, capture_output=True)
+    fields = [os.fsdecode(item) for item in out.stdout.split(b"\0") if item]
+    for index in range(0, len(fields) - 1, 2):
+        code, path = fields[index], fields[index + 1]
+        status[rel_path(path)] = code[:1]
+    out = subprocess.run(["git", "ls-files", "--others", "--exclude-standard", "-z"],
+                         cwd=root, capture_output=True)
+    for name in out.stdout.split(b"\0"):
+        if name:
+            status.setdefault(rel_path(os.fsdecode(name)), "?")
+    changes = []
+    for path in sorted(status):
+        if path == ".workflow" or path.startswith(".workflow/"):
+            continue
+        digest = "deleted" if status[path] == "D" else (_file_content_digest(root, path) or "deleted")
+        changes.append({"path": path, "摘要": digest})
+    return changes
+
+
+def premise_touch(root, entry):
+    """前提条目是否被触及，返回 (触达与否, 证据条目) 或 (False, None)。"""
+    files = list(entry.get("引用") or [])
+    now = premise_digest(root, files)
+    if now == entry.get("摘要"):
+        return False, None
+    changed = []
+    for rel in files:
+        digest = _file_content_digest(root, rel) or "deleted"
+        changed.append((rel, digest))
+    return True, {"类型": entry.get("类型", ""), "引用": files,
+                  "原摘要": entry.get("摘要", ""), "现摘要": now,
+                  "逐项": [{"path": path, "摘要": digest} for path, digest in changed]}
+
+
+def node_effective_lineage(plan, events, node, index=None):
+    """节点当前的谱系根（自有记录优先，其次继承前身）——读路径容错版。
+
+    与 `node_root_lineage` 同一判据，但解析歧义/引用不可解析时返回 None（不抛）：
+    展示与派生路径（status/next）不得因为一条坏声明就整体报错——写路径
+    （`review`）仍然严格拒绝。
     """
     index = node_review_index(events) if index is None else index
-    lineage = index["lineage"].get(node.id)
-    if lineage is None:
-        return NODE_STATE_INVALID
-    if index["latest"].get((lineage, NODE_PHASE_FIRST)) == "pass":
-        return NODE_STATE_VALID
-    return NODE_STATE_INVALID
+    own = index["lineage"].get(node.id)
+    if own:
+        return own
+    for ref in node.predecessors:
+        try:
+            root = predecessor_root(plan, events, ref)
+        except WorkflowError:
+            return None
+        if root:
+            return root
+    return None
 
 
-def node_valid_state(plan, events, node, index=None):
+def invalidation_report(plan, events=None):
+    """失效检测（T5 裁决 C；格式 ≥4 每次调度前计算）——按节点返回一份事实快照。
+
+    只对**存在审查结论**的节点算（无结论可失）。每项：
+    - `lineage` / `phase` / `record` / `record_op` / `version`：最近一条审查结论；
+    - `invalidated`：晚于该结论的 `node_invalidated` 事件（原因＋触发证据）——
+      已记录的失效在出现新的复核 `pass` 之前一直拦阻放行；
+    - `self_change`：已审范围（`git diff --name-only base..head`）上出现新提交或
+      工作树变化（未提交/未跟踪，一视同仁）；
+    - `premise`：已声明前提被触及（逐条重算摘要，提交与工作树一视同仁）；
+    - `pending`：范围外变化（提交或工作树差异，含新增未跟踪文件）的待判断变化集，
+      逐项 path＋内容摘要；`pending_digest` 是它的变化集摘要。
+    """
+    out = {}
+    if not plan.is_v4:
+        return out
+    events = plan.events if events is None else events
+    cached = getattr(plan, "_invalidation_cache", None)
+    if cached is not None and cached[0] is events:
+        return cached[1]
+    root = plan_root(plan)
+    index = node_review_index(events)
+    for node in plan.nodes:
+        lineage = node_effective_lineage(plan, events, node, index)
+        if lineage is None:
+            continue
+        phases = [phase for (lin, phase) in index["latest"] if lin == lineage]
+        phase = max(phases)
+        record = index["latest_event"][(lineage, phase)]
+        info = {"node": node.id, "lineage": lineage, "phase": phase, "record": record,
+                "record_op": record["data"].get("operation_id", ""),
+                "version": record["data"].get("节点版本", ""),
+                "invalidated": [], "self_change": None, "premise": None,
+                "pending": [], "pending_digest": ""}
+        position = index["position"].get(record.get("id"), -1)
+        for offset, event in enumerate(events):
+            if (event["type"] == EVENT_NODE_INVALIDATED
+                    and event["data"].get("谱系") == lineage
+                    and event["data"].get("节点") == node.id and offset > position):
+                info["invalidated"].append(event)
+        if record["data"].get("verdict") == "pass":
+            base_sha, head_sha = _resolved_commits(root, record["data"].get("commits", ""))
+            info["head"] = head_sha or (record["data"].get("已审提交") or {}).get("head", "")
+            info["base"] = base_sha or (record["data"].get("已审提交") or {}).get("base", "")
+            reviewed = _reviewed_paths(root, info["base"], info["head"])
+            changes = _worktree_changes_since(root, info["head"])
+            info["self_change"] = [item for item in changes if item["path"] in reviewed]
+            premise_paths, touches = set(), []
+            for entry in record["data"].get("premises") or []:
+                if not isinstance(entry, dict):
+                    continue
+                premise_paths.update(entry.get("引用") or [])
+                touched, evidence = premise_touch(root, entry)
+                if touched:
+                    touches.append(evidence)
+            info["premise"] = touches
+            info["pending"] = [item for item in changes
+                               if item["path"] not in reviewed and item["path"] not in premise_paths]
+            info["pending_digest"] = change_set_digest(
+                [(item["path"], item["摘要"]) for item in info["pending"]])
+        out[node.id] = info
+    plan._invalidation_cache = (events, out)
+    return out
+
+
+def impact_binding(events, node_id):
+    """该节点当前绑定有效的影响判断（D-22）——最近一条 `impact_assessed`；无则 None。"""
+    found = None
+    for event in events:
+        if (event["type"] == EVENT_IMPACT_ASSESSED
+                and event["data"].get("节点") == node_id):
+            found = event
+    return found
+
+
+def binding_matches(event, facts):
+    """影响判断的绑定是否仍然有效：审查记录 ＋ 节点版本 ＋ 阶段 ＋ 变化集摘要全等。
+
+    任一项不符即绑定过期（审查记录更替、声明换版本、同路径内容变化）。重启后按
+    事件重放重算这两侧——相同绑定直接复用，不重复提问（T5 裁决 F）。
+    """
+    data = event["data"]
+    return (data.get("审查记录") == facts["record_op"]
+            and data.get("节点版本") == facts["version"]
+            and data.get("审查阶段") == facts["phase"]
+            and data.get("变化集摘要") == facts["pending_digest"])
+
+
+def pending_lines(snapshot, indent="  "):
+    """范围外待判断变化的展示（预期值：结论操作 ID＋逐项 path＋内容摘要＋变化集摘要）。"""
+    lines = [f"{indent}被评估结论 {snapshot['review'] or '（无操作 ID）'}；"
+             f"变化集摘要 {snapshot['digest']}"]
+    for item in snapshot["changes"]:
+        lines.append(f"{indent}  - {item['path']}（内容摘要 {item['摘要']}）")
+    return lines
+
+
+def node_state(plan, events, node, index=None, report=None):
+    """节点结论状态（D-18 统一口径；T5 收口失效来源与恢复）——各入口只经这一个判据。
+
+    返回 `{状态词, 原因, 触发证据, 预期值…}`，状态词 ∈ {valid, invalid, recheck, paused}：
+    - `invalid`（未验收）：无审查记录，或【谱系 × 当前阶段】下最近一条结论不是 `pass`
+      （缺阶段不减）——后续 `fail` 阻止放行，不得回看更早的 `pass`；
+    - `recheck`（待重新确认）：最近结论为 `pass`，但出现下列任一——① 已记录的
+      `node_invalidated`（晚于该结论）；② 节点版本与当前计划不符（声明/验收要求变化，
+      不依赖提交）；③ 已审范围上出现新提交或工作树变化；④ 已声明前提被触及；
+      ⑤ 影响判断为 `related`/`undecidable`。恢复＝其后再出现有效的复核 `pass`；
+    - `paused`（暂停放行）：存在**未判定**的范围外变化（提交或工作树差异）——
+      经 `impact` 判「无关」即解除；绑定过期（审查记录更替、同路径内容变化）重新暂停；
+    - `valid`（已验收）：以上均未命中。
+    """
+    if index is None or report is None:
+        index = node_review_index(events) if index is None else index
+        report = invalidation_report(plan, events) if report is None else report
+    info = {"state": NODE_STATE_INVALID, "reason": None, "evidence": [],
+            "pending": None, "expect_review": None, "expect_changes": None}
+    facts = report.get(node.id)
+    if facts is None:
+        info["reason"] = "尚无审查记录（未送审）"
+        return info
+    record = facts["record"]
+    if record["data"].get("verdict") != "pass":
+        info["reason"] = f"最近一条审查结论为 {record['data'].get('verdict')}（不得回看更早的 pass）"
+        return info
+    if facts["version"] != node_version(plan, node):
+        info["state"] = NODE_STATE_RECHECK
+        info["reason"] = "节点版本已变（节点块或归属任务的声明字段变化）——重新批准计划不等于旧结论在新要求下成立"
+        return info
+    if facts["self_change"]:
+        info.update(state=NODE_STATE_RECHECK, reason="已审范围上出现新提交或工作树变化",
+                    evidence=list(facts["self_change"]))
+        return info
+    if facts["premise"]:
+        evidence = []
+        for touch in facts["premise"]:
+            evidence.append({"path": touch["引用"][0] if touch["引用"] else "（空）",
+                             "摘要": touch["现摘要"]})
+            evidence.extend(touch["逐项"])
+        info.update(state=NODE_STATE_RECHECK, reason="已声明前提被触及",
+                    evidence=evidence)
+        return info
+    if facts["pending"]:
+        judgement = impact_binding(events, node.id)
+        if judgement is None or not binding_matches(judgement, facts):
+            info["state"] = NODE_STATE_PAUSED
+            info["reason"] = "存在未判定影响的范围外变化（提交或工作树差异）"
+            info["pending"] = {"review": facts["record_op"], "changes": list(facts["pending"]),
+                               "digest": facts["pending_digest"]}
+            info["expect_review"] = facts["record_op"]
+            info["expect_changes"] = facts["pending_digest"]
+            return info
+        if judgement["data"].get("verdict") != "irrelevant":
+            info.update(state=NODE_STATE_RECHECK,
+                        reason=f"影响判断为 {judgement['data'].get('verdict')}",
+                        evidence=list(judgement["data"].get("变化集") or []))
+            return info
+    if facts["invalidated"]:
+        # 已记录的失效（晚于最近一条 pass）拦阻放行，直到其后再出现有效的复核 pass：
+        # 现场原因已消失（如改动被回退）也不自动恢复——恢复路径是定向复核。
+        last = facts["invalidated"][-1]
+        info.update(state=NODE_STATE_RECHECK, reason=f"已记录失效：{last['data'].get('原因', '')}",
+                    evidence=list(last["data"].get("触发证据") or []))
+        return info
+    info["state"] = NODE_STATE_VALID
+    info["reason"] = None
+    return info
+
+
+def node_valid_state(plan, events, node, index=None, report=None):
     """节点结论是否有效（`node_state` 的布尔视图）——各入口只经这一个判据。"""
-    return node_state(plan, events, node, index) == NODE_STATE_VALID
+    return node_state(plan, events, node, index, report)["state"] == NODE_STATE_VALID
 
 
 def node_state_line(plan, node, state, facts):
-    """节点状态的展示行：节点 ID ＋ 状态 ＋ 已实现成员（派发/收尾消息带它）。"""
+    """节点状态的展示行：节点 ID ＋ 状态 ＋ 已实现成员（派发/收尾消息带它）。
+
+    `state` 可以是 `node_state` 返回的状态词或整条状态记录；带原因时一并显示
+    （「待重新确认」必须能看出为什么，否则定向复核无从下手）。
+    """
+    if isinstance(state, dict):
+        word, reason = state["state"], state.get("reason")
+    else:
+        word, reason = state, None
     members = [task.id for task in plan.tasks
                if task.id in node.tasks and facts.get(task.id, {}).get("implemented")]
     detail = f"（已实现成员：{'、'.join(members)}）" if members else ""
-    return f"{node.id} {NODE_STATE_TEXT[state]}{detail}"
+    why = f"（原因：{reason}）" if reason and word != NODE_STATE_VALID else ""
+    return f"{node.id} {NODE_STATE_TEXT[word]}{detail}{why}"
 
 
 REVIEW_LINE_START = re.compile(r"(?:^|[\n；;])\s*(T\d+)\s*[:：]")
@@ -2560,7 +3018,7 @@ def parse_events(lines, slug):
                     raise ValueError("已实现事件缺少账本行")
             if kind == EVENT_NODE_REVIEW:
                 # 节点审查记录：节点、谱系、阶段、节点版本、已审范围、逐任务行、结论、
-                # 前提与未关闭问题占位（前提语义随 T5）、请求摘要与 receipt 缺一不可。
+                # 前提清单、未关闭问题、请求摘要与 receipt 缺一不可。
                 if (not isinstance(data.get("节点"), str) or not data["节点"].strip()
                         or not isinstance(data.get("谱系"), str) or not data["谱系"].strip()
                         or type(data.get("审查阶段")) is not int or data["审查阶段"] < 1
@@ -2577,9 +3035,26 @@ def parse_events(lines, slug):
                     raise ValueError("节点审查事件缺少入口或请求摘要")
                 if operation_id_problem(data.get("operation_id")) is not None:
                     raise ValueError("节点审查事件的操作 ID 无效")
-                if (not isinstance(data.get("premises"), list) or not all(
-                        isinstance(item, str) and item.strip() for item in data["premises"])):
-                    raise ValueError("节点审查事件缺少前提占位")
+                if "recheck_of" in data and (not isinstance(data["recheck_of"], str)
+                                             or not data["recheck_of"].strip()):
+                    raise ValueError("节点审查事件的 recheck_of 无效")
+                if "已审提交" in data and (not isinstance(data["已审提交"], dict)
+                                          or any(not isinstance(data["已审提交"].get(k), str)
+                                                 for k in ("base", "head"))):
+                    raise ValueError("节点审查事件的已审提交无效")
+                if not isinstance(data.get("premises"), list):
+                    raise ValueError("节点审查事件缺少前提清单")
+                for entry in data["premises"]:
+                    # T3 的占位形态（非空字符串）与 T5 的规范条目都读得回来。
+                    if isinstance(entry, str) and entry.strip():
+                        continue
+                    if (not isinstance(entry, dict) or set(entry) != set(PREMISE_ENTRY_KEYS)
+                            or entry.get("类型") not in PREMISE_TYPES
+                            or not isinstance(entry.get("引用"), list) or not entry["引用"]
+                            or any(not isinstance(ref, str) or not ref.strip() for ref in entry["引用"])
+                            or not re.fullmatch(r"[a-f0-9]{16}", str(entry.get("摘要", "")))
+                            or not isinstance(entry.get("基线提交"), str)):
+                        raise ValueError("节点审查事件的前提条目不是规范形态")
                 if (not isinstance(data.get("open_issues"), list) or not all(
                         isinstance(item, str) and item.strip() for item in data["open_issues"])):
                     raise ValueError("节点审查事件缺少未关闭问题占位")
@@ -2597,6 +3072,52 @@ def parse_events(lines, slug):
                 if (not isinstance(receipt, dict) or not isinstance(receipt.get("result"), dict)
                         or not isinstance(receipt.get("text"), str)):
                     raise ValueError("节点审查事件缺少结果 receipt")
+            if kind == EVENT_NODE_INVALIDATED:
+                # 失效记录：节点、谱系、原因、触发证据（path＋摘要）与触发入口。
+                if (not isinstance(data.get("节点"), str) or not data["节点"].strip()
+                        or not isinstance(data.get("谱系"), str) or not data["谱系"].strip()
+                        or data.get("原因") not in INVALIDATION_REASONS
+                        or not isinstance(data.get("entry"), str) or not data["entry"].strip()
+                        or not isinstance(data.get("所否定结论"), str)):
+                    raise ValueError("失效事件缺少节点、谱系、原因或触发入口")
+                evidence = data.get("触发证据")
+                if not isinstance(evidence, list) or not evidence:
+                    raise ValueError("失效事件缺少触发证据")
+                for item in evidence:
+                    if (not isinstance(item, dict) or not isinstance(item.get("path"), str)
+                            or not item["path"].strip()
+                            or not isinstance(item.get("摘要"), str) or not item["摘要"].strip()):
+                        raise ValueError("失效事件的触发证据缺少 path 或摘要")
+            if kind == EVENT_IMPACT_ASSESSED:
+                # 影响判断（D-22）：绑定（审查记录＋节点版本＋阶段＋变化集）＋判定＋依据。
+                if (not isinstance(data.get("节点"), str) or not data["节点"].strip()
+                        or not isinstance(data.get("谱系"), str) or not data["谱系"].strip()
+                        or data.get("verdict") not in IMPACT_VERDICTS
+                        or not isinstance(data.get("basis"), str) or not data["basis"].strip()
+                        or not isinstance(data.get("审查记录"), str)
+                        or type(data.get("审查阶段")) is not int or data["审查阶段"] < 1):
+                    raise ValueError("影响判断事件缺少节点、谱系、结论或依据")
+                if (not re.fullmatch(r"[a-f0-9]{16}", str(data.get("节点版本", "")))
+                        or not re.fullmatch(r"[a-f0-9]{16}", str(data.get("变化集摘要", "")))):
+                    raise ValueError("影响判断事件缺少节点版本或变化集摘要")
+                changes = data.get("变化集")
+                if not isinstance(changes, list) or not changes:
+                    raise ValueError("影响判断事件缺少变化集")
+                for item in changes:
+                    if (not isinstance(item, dict) or not isinstance(item.get("path"), str)
+                            or not item["path"].strip()
+                            or not isinstance(item.get("摘要"), str) or not item["摘要"].strip()):
+                        raise ValueError("影响判断事件的变化集缺少 path 或摘要")
+                if (not isinstance(data.get("entry"), str) or not data["entry"].strip()
+                        or not isinstance(data.get("request"), str)
+                        or not re.fullmatch(r"[a-f0-9]{64}", data["request"])):
+                    raise ValueError("影响判断事件缺少入口或请求摘要")
+                if operation_id_problem(data.get("operation_id")) is not None:
+                    raise ValueError("影响判断事件的操作 ID 无效")
+                receipt = data.get("receipt")
+                if (not isinstance(receipt, dict) or not isinstance(receipt.get("result"), dict)
+                        or not isinstance(receipt.get("text"), str)):
+                    raise ValueError("影响判断事件缺少结果 receipt")
             if kind == PROJECTION_REPAIR:
                 repairs = data.get("repairs")
                 if (not isinstance(data.get("entry"), str) or not data["entry"].strip()
@@ -2775,9 +3296,10 @@ def derived_states(plan, events):
     known = {task.id for task in plan.tasks}
     implemented = implemented_tasks(plan, events)
     index = node_review_index(events)
+    report = invalidation_report(plan, events)
     passed = set()
     for node in plan.nodes:
-        if node_valid_state(plan, events, node, index):
+        if node_valid_state(plan, events, node, index, report):
             passed.update(tid for tid in node.tasks if tid in known)
     out = {}
     for task in plan.tasks:
@@ -2870,10 +3392,11 @@ def task_states(plan, events=None):
         return {}
     events = plan.events if events is None else events
     index = node_review_index(events)
+    report = invalidation_report(plan, events)
     implemented = implemented_tasks(plan, events)
     owner = node_owner_map(plan)
     graph = wait_graph(plan)
-    valid = {node.id: node_valid_state(plan, events, node, index) for node in plan.nodes}
+    valid = {node.id: node_valid_state(plan, events, node, index, report) for node in plan.nodes}
     blocked = {node.id: any(not valid.get(up, False) for up in graph.get(node.id, ()))
                for node in plan.nodes}
     return {task.id: {"implemented": task.id in implemented,
@@ -2886,28 +3409,34 @@ def node_progress(plan, events=None, facts=None):
     """节点级就绪视图（格式 ≥4；next/slice/status/close/verify 共用一份计算）。
 
     返回：
-    - `states`：{节点 ID: 节点结论状态}（口径见 `node_state`）；
+    - `states`：{节点 ID: 节点结论状态词}（口径见 `node_state`）；
+    - `details`：{节点 ID: 状态记录}（含原因、触发证据与 `impact` 的预期值）；
+    - `pending`：{节点 ID: 待判断变化集快照}（暂停放行的节点才有）；
     - `members`：{节点 ID: [已实现的成员任务 ID]}；
     - `unaccepted`：有已实现成员、结论不是「已验收」的节点（close/verify 的就绪门
-      看它；「待重新确认」由 T5 经 `node_state` 进入同一集合与同一校验点）；
-    - `debt_tasks`：审查债务之「已实现但未完成节点审查的任务」（T4 裁决 4）——
-      T4 口径下等价于「所在节点没有 pass 记录」；
+      看它；「待重新确认」与「暂停放行」经同一 `node_state` 进入同一集合与同一校验点）；
+    - `debt_tasks`：审查债务之「已实现但未完成节点审查的任务」；
     - `unopened`：审查债务之「尚未开启审查的节点」——有已实现成员但尚无任何
       `node_review` 记录。
     """
-    empty = {"states": {}, "members": {}, "unaccepted": [], "debt_tasks": [], "unopened": []}
+    empty = {"states": {}, "details": {}, "pending": {}, "members": {},
+             "unaccepted": [], "debt_tasks": [], "unopened": []}
     if not plan.is_v4:
         return empty
     events = plan.events if events is None else events
     facts = task_states(plan, events) if facts is None else facts
     index = node_review_index(events)
+    report = invalidation_report(plan, events)
     owner = node_owner_map(plan)
-    states = {node.id: node_state(plan, events, node, index) for node in plan.nodes}
+    details = {node.id: node_state(plan, events, node, index, report) for node in plan.nodes}
+    states = {nid: info["state"] for nid, info in details.items()}
     members = {node.id: [task.id for task in plan.tasks
                          if task.id in node.tasks and facts[task.id]["implemented"]]
                for node in plan.nodes}
     return {
         "states": states,
+        "details": details,
+        "pending": {nid: info["pending"] for nid, info in details.items() if info["pending"]},
         "members": members,
         "unaccepted": [node.id for node in plan.nodes
                        if members[node.id] and states[node.id] != NODE_STATE_VALID],
@@ -2920,13 +3449,25 @@ def node_progress(plan, events=None, facts=None):
 
 
 def node_progress_lines(progress):
-    """未验收节点与「审查债务」的展示行（无内容返回空列表；next/status/slice 共用）。"""
+    """未验收节点、待判定变化与「审查债务」的展示行（next/status/slice 共用）。
+
+    待重新确认必须带原因（定向复核要知道为什么）；暂停放行必须带 `impact` 的
+    预期值（被评估结论操作 ID＋逐项 path＋内容摘要＋变化集摘要，D-22）。
+    """
     lines = []
     if progress["unaccepted"]:
         lines.append("未验收节点（跨节点依赖等待它们）：")
         for nid in progress["unaccepted"]:
             members = "、".join(progress["members"][nid])
-            lines.append(f"  {nid} {NODE_STATE_TEXT[progress['states'][nid]]}（已实现成员：{members}）")
+            info = progress["details"].get(nid, {})
+            why = f"，原因：{info['reason']}" if info.get("reason") else ""
+            lines.append(f"  {nid} {NODE_STATE_TEXT[progress['states'][nid]]}"
+                         f"（已实现成员：{members}{why}）")
+    if progress["pending"]:
+        lines.append("待影响判断（暂停放行；判定提交：impact <slug> <节点>）：")
+        for nid in sorted(progress["pending"]):
+            lines.append(f"  {nid}：")
+            lines.extend(pending_lines(progress["pending"][nid], indent="    "))
     debt = []
     if progress["debt_tasks"]:
         debt.append("已实现待审查：" + "、".join(progress["debt_tasks"]))
@@ -2943,14 +3484,17 @@ def readiness_problems(plan, events, task, facts=None):
 
     就绪＝任务 `pending` ＋ 组内上游（同节点的任务依赖）全部已实现 ＋ 所属节点的
     **直接**跨节点上游（`wait_graph` 边：任务依赖导出边 ∪ 显式声明的节点依赖边，
-    D-21）全部「已验收」。组内依赖按「已实现」放行、不等待审查（D-03）——组内依赖
-    链不被跨节点规则阻塞，含组内依赖的节点能凑齐送审条件、不死锁；跨节点依赖等待
-    上游节点整体已验收。格式 ≤3 不调用本函数（旧路径逐字不变）。
+    D-21）全部「已验收」——「待重新确认」与「暂停放行」都算未验收（T5：失效的
+    上游不放行下游）。组内依赖按「已实现」放行、不等待审查（D-03）——组内依赖
+    链不被跨节点规则阻塞，含组内依赖的节点能凑齐送审条件、不死锁。格式 ≤3 不调用
+    本函数（旧路径逐字不变）。
     """
     facts = task_states(plan, events) if facts is None else facts
     by_id = {item.id: item for item in plan.tasks}
     node_by_id = {node.id: node for node in plan.nodes}
     owner = node_owner_map(plan)
+    index = node_review_index(events)
+    report = invalidation_report(plan, events)
     problems = []
     if task.status != STATUS_PENDING:
         detail = {STATUS_IMPLEMENTED: "已实现、等待节点审查",
@@ -2971,11 +3515,16 @@ def readiness_problems(plan, events, task, facts=None):
             up = node_by_id.get(up_id)
             if up is None:
                 continue
-            state = node_state(plan, events, up)
-            if state != NODE_STATE_VALID:
+            state = node_state(plan, events, up, index, report)
+            if state["state"] != NODE_STATE_VALID:
+                extra = ""
+                if state.get("pending"):
+                    extra = ("；待判断变化（impact 的预期值）：" + "、".join(
+                        f"{item['path']}（{item['摘要']}）" for item in state["pending"]["changes"])
+                        + f"；变化集摘要 {state['pending']['digest']}")
                 problems.append(
                     f"{task.id} 所属节点 {node_id} 跨节点等待 {node_state_line(plan, up, state, facts)}"
-                    "——跨节点依赖（含仅显式声明的节点依赖）须等待上游节点已验收"
+                    f"{extra}——跨节点依赖（含仅显式声明的节点依赖）须等待上游节点已验收"
                 )
     return problems
 
@@ -2983,24 +3532,82 @@ def readiness_problems(plan, events, task, facts=None):
 def require_node_acceptance(plan, events=None, entry="收尾"):
     """格式 ≥4 的最终验证/收尾就绪门（T4 裁决 5）：存在未验收节点即不放行。
 
-    只加校验：不改验收指纹、计划指纹与既有收尾要求。「待重新确认」（T5）经
-    `node_state` 进入同一集合与同一校验点，不另开旁路。格式 ≤3 直接返回——旧路径
-    逐字不变（调用方无需按格式分流，本函数自己判）。
+    只加校验：不改验收指纹、计划指纹与既有收尾要求。「待重新确认」与「暂停放行」
+    （T5）经 `node_state` 进入同一集合与同一校验点，不另开旁路——评审记录还必须
+    绑定当前节点版本（声明变化即不得放行）。格式 ≤3 直接返回——旧路径逐字不变
+    （调用方无需按格式分流，本函数自己判）。
     """
     if not plan.is_v4:
         return
     progress = node_progress(plan, events)
     if not progress["unaccepted"]:
         return
-    detail = "\n".join(
-        f"  - {nid} {NODE_STATE_TEXT[progress['states'][nid]]}"
-        f"（已实现成员：{'、'.join(progress['members'][nid])}）"
-        for nid in progress["unaccepted"])
+    def describe(nid):
+        info = progress["details"].get(nid, {})
+        why = f"；原因：{info['reason']}" if info.get("reason") else ""
+        return (f"  - {nid} {NODE_STATE_TEXT[progress['states'][nid]]}"
+                f"（已实现成员：{'、'.join(progress['members'][nid])}{why}）")
+    detail = "\n".join(describe(nid) for nid in progress["unaccepted"])
+    hint = ("\n（成员任务在节点通过后才映射 complete；先送审、通过后重试本命令。）")
+    if progress["pending"]:
+        hint += ("\n待影响判断的节点先提交 `impact <slug> <节点> --verdict … --expect-review … "
+                 "--expect-changes … --operation-id <id>`：")
+        for nid in sorted(progress["pending"]):
+            hint += "\n" + "\n".join(pending_lines(progress["pending"][nid], indent="    "))
     raise WorkflowError(
         f"{entry} 拒绝：存在未验收的审查节点——节点是格式 4 的验收单位，"
-        "上游节点通过 `review` 之前不得进入最终验证与收尾：\n" + detail
-        + "\n（成员任务在节点通过后才映射 complete；先送审、通过后重试本命令。）"
+        "上游节点通过 `review` 之前不得进入最终验证与收尾：\n" + detail + hint
     )
+
+
+def record_invalidations(root, slug, plan, entry):
+    """把本次调度观察到的失效落盘（`node_invalidated`，T5 裁决 C/I）——返回条数。
+
+    失效判定本身是**派生的**（各入口每次调度前重算，展示入口不写事件）；这里只把
+    「已审范围/已声明前提被触及」这一观察记成事件，作为审计痕迹与「不重复提问」的
+    依据。同一节点、同一原因、同一触发证据已记录过 → 不再重复写（幂等）。范围外
+    变化的判定走 `impact` 命令，不在这里写。
+    """
+    if not plan.is_v4:
+        return 0
+    events = read_events(root, slug)
+    report = invalidation_report(plan, events)
+    cycle = lifecycle(root, slug)["cycle"]
+    new = []
+    for node in plan.nodes:
+        facts = report.get(node.id)
+        if not facts:
+            continue
+        cause = None
+        if facts["self_change"]:
+            cause = (INVALIDATION_SELF, facts["self_change"],
+                     "已审范围上出现新提交或工作树变化（未提交/未跟踪一视同仁）")
+        elif facts["premise"]:
+            evidence = []
+            for touch in facts["premise"]:
+                evidence.append({"path": touch["引用"][0] if touch["引用"] else "（空）",
+                                 "摘要": touch["现摘要"]})
+                evidence.extend(touch["逐项"])
+            cause = (INVALIDATION_PREMISE, evidence, "已声明前提被触及")
+        if cause is None:
+            continue
+        reason, evidence, _why = cause
+        key = _digest([reason, sorted((item["path"], item["摘要"]) for item in evidence)])
+        if any(_digest([event["data"].get("原因"), sorted(
+                    (item["path"], item["摘要"]) for item in event["data"].get("触发证据") or [])]) == key
+               for event in facts["invalidated"]):
+            continue
+        new.append(_event(slug, cycle, EVENT_NODE_INVALIDATED, {
+            "节点": node.id,
+            "谱系": facts["lineage"],
+            "原因": reason,
+            "触发证据": evidence,
+            "所否定结论": facts["record_op"],
+            "entry": entry,
+        }))
+    if new:
+        append_events(root, slug, new)
+    return len(new)
 
 
 def _coverage_items(plan):
@@ -3604,11 +4211,12 @@ def cmd_status(args):
         dep = f"  ← {', '.join(t['deps'])}" if t["deps"] else ""
         lines.append(f"  {mark} {t['id']} {t['title']}  ({t['state']}){dep}")
     if plan.is_v4:
-        # 格式 ≥4：未验收节点 / 待重新确认 / 审查债务清单（T4 裁决 4）。
+        # 格式 ≥4：未验收节点 / 待重新确认 / 待判断变化 / 审查债务清单（T4 裁决 4，T5 补预期值）。
         progress = node_progress(plan, plan.events)
         result["node_states"] = progress["states"]
         result["unaccepted_nodes"] = progress["unaccepted"]
         result["review_debt"] = {"tasks": progress["debt_tasks"], "unopened": progress["unopened"]}
+        result["pending_changes"] = progress["pending"]
         debt_lines = node_progress_lines(progress)
         if debt_lines:
             lines.append("")
@@ -3699,6 +4307,7 @@ def next_v4(plan, slug):
         "node_states": progress["states"],
         "unaccepted_nodes": progress["unaccepted"],
         "review_debt": {"tasks": progress["debt_tasks"], "unopened": progress["unopened"]},
+        "pending_changes": progress["pending"],
     }
     lines = []
     if not ready:
@@ -3983,6 +4592,8 @@ def cmd_slice(args):
         # 入口统一在动作前做投影检查：落后先修复（留 projection_repair）、领先即拒绝。
         repair_projection(root, slug, "slice")
         plan = load_plan(root, slug)   # 修复可能已回写状态行，重新取计划
+        record_invalidations(root, slug, plan, "slice")   # 调度前记录失效观察（T5）
+        plan = load_plan(root, slug)
     require_plan_approval(root, slug, plan)   # 执行门：方案与计划都须已审批
 
     ids = list(args.task_id)
@@ -4100,11 +4711,12 @@ def cmd_slice(args):
         "brief": "\n".join(header),
     }
     if plan.is_v4:
-        # 未验收节点 / 待重新确认 / 审查债务随展示给出（T4 裁决 4）。
+        # 未验收节点 / 待重新确认 / 待判断变化 / 审查债务随展示给出（T4 裁决 4；T5 补预期值）。
         progress = node_progress(plan, plan.events)
         result["node_states"] = progress["states"]
         result["unaccepted_nodes"] = progress["unaccepted"]
         result["review_debt"] = {"tasks": progress["debt_tasks"], "unopened": progress["unopened"]}
+        result["pending_changes"] = progress["pending"]
         debt_lines = node_progress_lines(progress)
         if debt_lines:
             result["brief"] += ("\n\n## 审查节点状态（控制器核对用；不影响本任务范围）\n\n"
@@ -4371,8 +4983,9 @@ def review_node(args, root, slug, plan):
             f"`--lines` 不合格：{problem}。逐任务一行结论，每行都要写清依据："
             "`--lines \"T1: 验收依据/结论；T2: 验收依据/结论\"`。"
         )
+    recheck_of = (args.recheck or "").strip()
 
-    # 请求身份：节点 + 结论 + 已审范围 + 逐任务行（任务序不敏感）+ 证据。
+    # 请求身份：节点 + 结论 + 已审范围 + 逐任务行（任务序不敏感）+ 证据 + 定向复核关联。
     request = operation_request_digest({
         "entry": "review",
         "node": node.id,
@@ -4380,6 +4993,7 @@ def review_node(args, root, slug, plan):
         "commits": args.commits,
         "evidence": evidence,
         "lines": sorted([row["task"], row["conclusion"]] for row in rows),
+        "recheck_of": recheck_of,
     })
     action, existing = resolve_operation(root, slug, args.operation_id, request, "review")
     if action == "replay":
@@ -4400,6 +5014,30 @@ def review_node(args, root, slug, plan):
             "（必要验证与未解决事项的核对由审查者负责，引擎只闸这一条机械条件）。"
         )
 
+    # 谱系（D-11）：自有记录优先；拆分类新节点按『前身』继承（最多一个前身）。
+    lineage = node_root_lineage(plan, events, node)
+    if recheck_of:
+        original = find_operation(events, recheck_of)
+        if original is None:
+            raise WorkflowError(
+                f"`--recheck {recheck_of}` 指向的原审查记录不存在——`--recheck` 的值是"
+                "所关联**原审查记录的操作 ID**（不是本次复核的 `--operation-id`）。"
+            )
+        if original["type"] != EVENT_NODE_REVIEW:
+            raise WorkflowError(
+                f"`--recheck {recheck_of}` 指向的是 {original['type']} 操作，不是节点审查记录——"
+                "定向复核只能关联审查结论。"
+            )
+        if lineage is None or original["data"].get("谱系") != lineage:
+            raise WorkflowError(
+                f"`--recheck {recheck_of}` 的原审查记录属谱系 "
+                f"{original['data'].get('谱系')}，与节点 {node.id} 的当前谱系 "
+                f"{lineage or '（尚无）'} 不一致——定向复核必须落在同一谱系上"
+                "（不同谱系的结论不能互相承接）。"
+            )
+    if lineage is None:
+        lineage = new_node_lineage(slug, node)
+
     problems = _check_commit_range(
         root, args.commits, plan, True,
         "节点内任务都没有产生提交（base 与 head 指向同一个提交），已审范围为空——"
@@ -4413,11 +5051,19 @@ def review_node(args, root, slug, plan):
         )
     warnings = [message for level, message in problems if level == "WARNING"]
 
+    # 已审提交解析成完整 sha：`HEAD` 是会移动的引用，结论必须绑定审查当时的提交，
+    # 否则「已审范围之上是否出现新提交」无从判断（失效检测读它）。
+    base_sha, head_sha = _resolved_commits(root, args.commits)
+    baseline = head_sha or (args.commits or "").strip().split("..")[-1].strip()
+    premises, problem = parse_premises(root, args.premises or "", baseline)
+    if problem:
+        raise WorkflowError(f"`--premises` 不合格：{problem}")
+
     version = node_version(plan, node)
-    lineage = node_lineage(events, node.id) or new_node_lineage(slug, node)
     phase = NODE_PHASE_FIRST
     # 轮次与派生同源（T3 审查 Low ②）：同谓词不再两处实现。
-    # `rounds` ＝ 本条记入后该谱系的轮次（＝记入前的记录条数，T3 候选 5）。
+    # `rounds` ＝ 本条记入后该谱系的轮次（＝记入前的记录条数，T3 候选 5）；
+    # 谱系继承后轮次沿谱系根累计（跨节点 ID），不因拆分/改名重置（D-11）。
     prior = node_review_count(events, lineage, phase)
     mapped = STATUS_COMPLETE if verdict == "pass" else STATUS_IMPLEMENTED
     items = owners
@@ -4427,15 +5073,18 @@ def review_node(args, root, slug, plan):
         "审查阶段": phase,
         "节点版本": version,
         "commits": args.commits,
+        "已审提交": {"base": base_sha, "head": head_sha},
         "lines": rows,
         "evidence": evidence,
         "verdict": verdict,
-        "premises": [],
+        "premises": premises,
         "open_issues": [],
         "operation_id": args.operation_id,
         "request": request,
         "entry": "review",
     })
+    if recheck_of:
+        event["data"]["recheck_of"] = recheck_of
     result = {
         "slug": slug,
         "node": node.id,
@@ -4450,18 +5099,21 @@ def review_node(args, root, slug, plan):
         "mapped_status": mapped,
         "operation_id": args.operation_id,
         "event": event["id"],
-        "premises": [],
+        "premises": premises,
         "open_issues": [],
+        "recheck_of": recheck_of,
         "warnings": warnings,
     }
     label = "、".join(items)
+    tail = f"（谱系 {lineage}，第 {prior} 轮）"
+    if recheck_of:
+        tail += f"；定向复核原记录 {recheck_of}"
     if verdict == "pass":
         text = (f"✓ 节点 {node.id} → pass：{label} 映射 {STATUS_COMPLETE}"
-                f"（谱系 {lineage}，第 {prior} 轮）；审查记录已入事件流")
+                f"{tail}；审查记录已入事件流")
     else:
         text = (f"✗ 节点 {node.id} → fail：{label} 保持 {STATUS_IMPLEMENTED}"
-                f"（谱系 {lineage}，第 {prior} 轮）；节点未通过，跨节点依赖不释放；"
-                "修复后送复审")
+                f"{tail}；节点未通过，跨节点依赖不释放；修复后送复审")
     if warnings:
         text = "⚠ " + "\n⚠ ".join(warnings) + "\n" + text
     event["data"]["receipt"] = {"result": result, "text": text}
@@ -4487,13 +5139,163 @@ def cmd_review(args):
             f"本计划是格式 {plan.format_version}——`review` 只在格式 ≥4（审查节点制）生效："
             "格式 ≤3 的审查单位是任务，没有节点审查形态（也不该为它补一个空壳）。"
             "要把该工作流升级为节点审查，先把计划头部 `**格式**` 升到 4 并补齐 "
-            "`## 审查节点` 段；`--recheck`/`--new-phase` 属后续任务，尚未提供。"
+            "`## 审查节点` 段；`--new-phase` 属后续任务，尚未提供。"
         )
     # 入口统一在动作前做投影检查（already-closed / 归属检查之后、审批门之前）：
     # 落后先修复（留 projection_repair）、领先即拒绝——与 record/slice/close 同一协议。
     repair_projection(root, slug, "review")
     plan = load_plan(root, slug)   # 修复可能已回写状态行，重新取计划
+    record_invalidations(root, slug, plan, "review")   # 调度前记录失效观察（T5）
+    plan = load_plan(root, slug)
     return review_node(args, root, slug, plan)
+
+
+def cmd_impact(args):
+    """格式 ≥4 的 `impact`：提交影响判断（D-22/T5 裁决 E）——核对一致才写入。
+
+    校验顺序：操作 ID 幂等先行（同 ID＋同请求 → 重放原结果、不重新绑定；同 ID＋
+    不同请求 → 拒绝）→ 节点存在 → 存在当前待判断变化集（无 → 拒绝）→
+    `--expect-review` == 当前有效结论操作 ID → `--expect-changes` == 当前变化集摘要。
+    任一不符 → 拒绝本次提交、保持阻塞并返回新快照（不得把判断绑定到主控未评估的
+    内容——观察 H1 后内容变为 H2 时，针对 H1 的判断必须被拒）。一致 → 写
+    `impact_assessed`（绑定：被评估审查记录 ＋ 节点版本 ＋ 阶段 ＋ 逐项 path＋
+    内容摘要 ＋ 变化集摘要 ＋ 判定 ＋ 依据）：「无关」→ 机械暂停解除（再按其余
+    条件算节点状态）；「相关」/「判不出（undecidable）」→ 另写 `node_invalidated`
+    （原因 impact:related / impact:undecidable）转「待重新确认」。相同绑定重启后
+    直接复用（重放事件即可识别），不重复提问。
+    """
+    root = find_project_root()
+    slug = resolve_slug(root, args.slug)
+    require_active(root, slug)
+    plan = load_plan(root, slug)
+    if not plan.is_v4:
+        raise WorkflowError(
+            f"本计划是格式 {plan.format_version}——`impact` 只在格式 ≥4（审查节点制）生效："
+            "格式 ≤3 的审查单位是任务，没有「节点结论失效与影响判断」这套语义。"
+        )
+    repair_projection(root, slug, "impact")
+    plan = load_plan(root, slug)
+
+    basis = (args.basis or "").strip()
+    # 操作 ID 幂等先行（裁决 E 的校验顺序）：同 ID＋同请求 → 重放原结果、不重新绑定；
+    # 同 ID＋不同请求 → 拒绝。请求摘要按传入的节点 ID 算，重放不依赖节点当前是否还在。
+    request = operation_request_digest({
+        "entry": "impact",
+        "node": args.node_id,
+        "verdict": args.verdict,
+        "basis": basis,
+        "expect_review": args.expect_review,
+        "expect_changes": args.expect_changes,
+    })
+    action, existing = resolve_operation(root, slug, args.operation_id, request, "impact")
+    if action == "replay":
+        # 幂等重放：不写事件、不改绑定、不重新判定；返回随事件持久化的原结果。
+        return replay_result(existing, args.operation_id)
+
+    node = next((item for item in plan.nodes if item.id == args.node_id), None)
+    if node is None:
+        raise WorkflowError(
+            f"计划里没有审查节点 {args.node_id}。现有节点："
+            + ("、".join(item.id for item in plan.nodes) or "（一个都没有）")
+        )
+    if not basis:
+        raise WorkflowError(
+            "impact 必须给 `--basis \"<依据>\"`：判断凭什么成立要留在事件里，"
+            "否则「无关」只是一句话，事后无法核对。"
+        )
+
+    events = read_events(root, slug)
+    report = invalidation_report(plan, events)
+    facts = report.get(node.id)
+    pending = list(facts["pending"]) if facts else []
+    if not pending:
+        raise WorkflowError(
+            f"节点 {node.id} 当前没有待判断的范围外变化——`impact` 只在存在待判断变化集时"
+            "提交（「无关」是给已发生的变化做的判断，不是常规推进步骤）。"
+            + (f"\n节点当前状态：{NODE_STATE_TEXT[node_state(plan, events, node, report=report)['state']]}"
+               if facts else "")
+        )
+
+    def snapshot():
+        lines = [f"节点 {node.id} 的当前快照：",
+                 f"  被评估结论（--expect-review）：{facts['record_op'] or '（无操作 ID）'}",
+                 f"  变化集摘要（--expect-changes）：{facts['pending_digest']}"]
+        for item in pending:
+            lines.append(f"  - {item['path']}（内容摘要 {item['摘要']}）")
+        lines.append("（新快照也可从 `status` 的 `pending_changes` 读取；"
+                     "判断只对内容生效——同路径内容再次变化即重新暂停。）")
+        return "\n".join(lines)
+
+    if args.expect_review != facts["record_op"]:
+        raise WorkflowError(
+            f"影响判断未提交（保持阻塞）：`--expect-review` 与当前有效结论不符"
+            f"（提交的是 {args.expect_review or '（空）'}）——判断必须绑定主控实际评估过"
+            "的那条审查结论；审查记录更替会使旧判断过期。\n" + snapshot()
+        )
+    if args.expect_changes != facts["pending_digest"]:
+        raise WorkflowError(
+            f"影响判断未提交（保持阻塞）：`--expect-changes` 与当前待判断变化集不符"
+            f"（提交的是 {args.expect_changes or '（空）'}）——内容摘要已变（或判断针对的是"
+            "旧快照）；按新快照重新评估后再提交。\n" + snapshot()
+        )
+
+    cycle = lifecycle(root, slug)["cycle"]
+    event = _event(slug, cycle, EVENT_IMPACT_ASSESSED, {
+        "节点": node.id,
+        "谱系": facts["lineage"],
+        "审查阶段": facts["phase"],
+        "节点版本": facts["version"],
+        "审查记录": facts["record_op"],
+        "变化集": pending,
+        "变化集摘要": facts["pending_digest"],
+        "verdict": args.verdict,
+        "basis": basis,
+        "operation_id": args.operation_id,
+        "request": request,
+        "entry": "impact",
+    })
+    batch = [event]
+    if args.verdict != "irrelevant":
+        invalidated = _event(slug, cycle, EVENT_NODE_INVALIDATED, {
+            "节点": node.id,
+            "谱系": facts["lineage"],
+            "原因": INVALIDATION_IMPACT[args.verdict],
+            "触发证据": pending,
+            "所否定结论": facts["record_op"],
+            "entry": "impact",
+        })
+        batch.insert(0, invalidated)
+    result = {
+        "slug": slug,
+        "node": node.id,
+        "verdict": args.verdict,
+        "basis": basis,
+        "lineage": facts["lineage"],
+        "phase": facts["phase"],
+        "node_version": facts["version"],
+        "expect_review": facts["record_op"],
+        "expect_changes": facts["pending_digest"],
+        "changes": pending,
+        "operation_id": args.operation_id,
+        "event": event["id"],
+        "invalidated": batch[0]["id"] if len(batch) > 1 else None,
+        "state_after": None,
+        "warnings": [],
+    }
+    if args.verdict == "irrelevant":
+        text = (f"✓ 节点 {node.id} 影响判断 → 无关（依据：{basis}）；"
+                "机械暂停解除，节点结论可恢复有效（其余失效条件另行判定）")
+    else:
+        text = (f"✗ 节点 {node.id} 影响判断 → {args.verdict}（依据：{basis}）；"
+                f"已记失效（{INVALIDATION_IMPACT[args.verdict]}），转「待重新确认」并定向复核")
+    # 写入后状态：按「事件 ＋ 本次写入」重放推导，随 receipt 持久化（幂等重放同值）。
+    result["state_after"] = node_state(plan, events + batch, node)["state"]
+    text += f"；节点状态：{NODE_STATE_TEXT[result['state_after']]}"
+    event["data"]["receipt"] = {"result": result, "text": text}
+
+    # 先事件后状态：影响判断只写事件（无计划投影、无账本行——与 review 同）。
+    append_events(root, slug, batch)
+    return result, text
 
 
 def cmd_record(args):
@@ -4506,6 +5308,8 @@ def cmd_record(args):
         # `review` 按同一入口协议接入（见 cmd_review）——不得各入口各自判断状态。
         repair_projection(root, slug, "record")
         plan = load_plan(root, slug)   # 修复可能已回写状态行，重新取计划
+        record_invalidations(root, slug, plan, "record")   # 调度前记录失效观察（T5）
+        plan = load_plan(root, slug)
         return record_implemented(args, root, slug, plan)
     if (args.evidence or "").strip() or (args.operation_id or "").strip():
         # 新参数只服务格式 ≥4 的两态记账：旧格式上静默忽略会让误用被放过
@@ -4725,6 +5529,9 @@ def cmd_verify(args):
     slug = resolve_slug(root, args.slug)
     state = require_active(root, slug)
     plan = load_plan(root, slug)
+    if plan.is_v4:
+        record_invalidations(root, slug, plan, "verify")   # 调度前记录失效观察（T5）
+        plan = load_plan(root, slug)
     # 就绪校验（T4 裁决 5）：存在未验收节点/未处理待重新确认 → 拒绝——验证与收尾
     # 都不能绕过节点验收（格式 ≤3 时本函数直接返回，旧路径逐字不变）。
     require_node_acceptance(plan, plan.events, "验证（verify）")
@@ -4780,6 +5587,8 @@ def cmd_close(args):
         # 会拒绝向关闭周期写事件，先写会污染权威文件）。
         repair_projection(root, slug, "close")
         plan = load_plan(root, slug)   # 修复可能已回写状态行，重新取计划
+        record_invalidations(root, slug, plan, "close")   # 调度前记录失效观察（T5）
+        plan = load_plan(root, slug)
         # 就绪校验（T4 裁决 5）：未验收节点不放行——节点级理由比「未完成任务」更能指路。
         require_node_acceptance(plan, plan.events, "收尾（close）")
     incomplete = [t.id for t in plan.tasks if t.status != "complete"]
@@ -4901,12 +5710,42 @@ def build_parser():
                    help="逐任务行：`T1: 结论＋依据；T2: …`（`；` 或换行分隔，须覆盖全部归属任务）")
     s.add_argument("--evidence", default="", help="审查依据：读到的改动与上下文、复用的验证/证据引用")
     s.add_argument(
+        "--premises",
+        default="",
+        help='结论依赖的前提清单：`"契约锚点: <路径>; 配置: <路径[,路径…]>"`'
+             "（类型 ∈ 契约锚点/共享实现/配置；目录递归展开；随结论保存摘要与基线提交）",
+    )
+    s.add_argument(
+        "--recheck",
+        default="",
+        help="定向复核：所关联**原审查记录的操作 ID**（原记录关联）；本次复核自身的重试身份"
+             "用 `--operation-id`，两者不同，且不同的操作 ID 永不去重",
+    )
+    s.add_argument(
         "--operation-id",
         default="",
         help="必填：本次记账操作的稳定 ID；首次执行前生成并保存，重试复用",
     )
     _add_json(s)
     s.set_defaults(func=cmd_review)
+
+    s = sub.add_parser("impact", help="提交节点影响判断（格式 ≥4；判定范围外变化对结论的影响）")
+    s.add_argument("slug", nargs="?")
+    s.add_argument("node_id", help="审查节点 ID（形如 N1）")
+    s.add_argument("--verdict", required=True, choices=list(IMPACT_VERDICTS),
+                   help="irrelevant＝无关（解除暂停）；related/undecidable＝相关/判不出（转待重新确认）")
+    s.add_argument("--basis", default="", help="判断依据：凭什么认定该变化与结论无关/相关")
+    s.add_argument("--expect-review", default="",
+                   help="回传 `status` 展示的预期值：被评估结论的操作 ID")
+    s.add_argument("--expect-changes", default="",
+                   help="回传 `status` 展示的预期值：当前待判断变化集摘要")
+    s.add_argument(
+        "--operation-id",
+        default="",
+        help="必填：本次记账操作的稳定 ID；首次执行前生成并保存，重试复用",
+    )
+    _add_json(s)
+    s.set_defaults(func=cmd_impact)
 
     s = sub.add_parser("close", help="收尾记账（有未验证内容时拒绝）")
     s.add_argument("slug", nargs="?")
