@@ -1962,6 +1962,21 @@ def serialize_events(events):
                    for event in events)
 
 
+def event_lines(text):
+    """事件文本 → 行列表：**只按 `\\n` 切**——与读侧（逐文件行）同一套行切分。
+
+    `str.splitlines()` 还会在 U+2028/U+2029 等 Unicode 行边界断开，用它做写入前
+    自校验会把读侧能正常读回的事件（如 evidence 里含 U+2028）误判为「尾行不完整」；
+    写侧接受的必须被读侧接受，所以两侧共用这一个切分。保留行尾换行，末尾无换行的
+    残行交由 `parse_events` 按「事件尾行不完整」拒绝。
+    """
+    parts = text.split("\n")
+    lines = [part + "\n" for part in parts[:-1]]
+    if parts[-1]:
+        lines.append(parts[-1])
+    return lines
+
+
 def validate_event_batch(existing, new, slug):
     """写入前自校验：已有事件＋待写事件必须能通过 `read_events` 的同一套结构校验。
 
@@ -1969,7 +1984,7 @@ def validate_event_batch(existing, new, slug):
     因此在落盘前先按读者的判据跑一遍——写后会被自己读校验拒绝的形态不得落盘。
     """
     try:
-        parse_events(serialize_events(list(existing) + list(new)).splitlines(keepends=True), slug)
+        parse_events(event_lines(serialize_events(list(existing) + list(new))), slug)
     except (ValueError, TypeError) as exc:
         raise WorkflowError(
             f"本次要写入的事件未通过结构自校验，已中止（未落盘）：{exc}。"
@@ -2163,7 +2178,7 @@ def read_events(root, slug):
         return []
     try:
         with open(path, encoding="utf-8") as fh:
-            return parse_events(fh, slug)
+            return parse_events(event_lines(fh.read()), slug)
     except (OSError, UnicodeError, ValueError, TypeError) as exc:
         raise WorkflowError(f"结构化证据损坏，无法确认，禁止回退旧 PASS：{path}（{exc}）") from exc
 
@@ -2173,6 +2188,7 @@ def parse_events(lines, slug):
 
     单独摘出来是为了让写入前自校验（`validate_event_batch`）复用同一套判据——
     append 之前先按读者的规则验一遍，避免引擎把自己的权威文件写出「读不了」的形态。
+    行切分与读侧同源（`event_lines`），两侧对同一文本的接受集合一致。
     """
     events, seen, cycle, closed = [], set(), 1, False
     for line_no, line in enumerate(lines, 1):

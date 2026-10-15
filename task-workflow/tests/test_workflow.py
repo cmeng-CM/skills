@@ -67,7 +67,10 @@ class WorkflowCLI(unittest.TestCase):
 
     def events(self, slug="probe"):
         path = self.root / ".workflow" / slug / "events.jsonl"
-        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+        if not path.exists():
+            return []
+        # 与引擎同源的行切分：只按 \n 切（splitlines 还会在 U+2028/U+2029 断开）。
+        return [json.loads(line) for line in path.read_text().split("\n") if line]
 
     def confirm(self, *items, slug="probe", command="confirm", expected=0, **extra):
         checklist = self.cli("acceptance", slug)["checklist"]
@@ -1718,6 +1721,26 @@ class WorkflowCLI(unittest.TestCase):
         self.assertIn("已实现事件缺少任务清单", str(caught.exception))
         with self.assertRaises(workflow.WorkflowError):
             workflow.validate_event_batch([], [], "v4")   # 空集合读校验同样拒绝
+
+    def test_two_state_event_line_split_matches_reader(self):
+        """N-1：写侧与读侧同一行切分——evidence 含 U+2028/U+2029 不被自校验误拦。"""
+        self.make_v4_plan(slug="t2u", nodes=self.node_block("N1", "T1, T2", final="是"))
+        self.approve_v4("t2u")
+        evidence = "跑 `true`：退出码 0\u2028失败信号自查无\u2029第二段"
+        result = self.record_v4("T1", slug="t2u", evidence=evidence)
+        self.assertEqual(result["evidence"], evidence)
+        records = self.implemented_events("t2u")
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["data"]["evidence"], evidence)
+        self.assertEqual(records[0]["data"]["receipt"]["result"]["evidence"], evidence)
+        # 写侧接受的必须被读侧接受：read_events 读回同一序列且内容一致
+        self.assertEqual([event["type"] for event in workflow.read_events(str(self.root), "t2u")],
+                         ["start", "implemented"])
+        # 行切分同源：写侧自校验对同一文本得出的行数与读侧一致（不因 U+2028 多切）
+        text = workflow.serialize_events(self.events("t2u"))
+        self.assertEqual(len(list(workflow.event_lines(text))), len(self.events("t2u")))
+        # 同请求重放仍幂等（evidence 逐字参与请求身份）
+        self.assert_replay_matches(self.record_v4("T1", slug="t2u", evidence=evidence), result)
 
     def test_two_state_legacy_plan_rejects_v4_only_parameters(self):
         """M2：格式 ≤3 上给 --evidence/--operation-id 必须明确拒绝，不得静默忽略。"""
