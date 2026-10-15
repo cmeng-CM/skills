@@ -9,7 +9,8 @@
     workflow.py status  [slug]
     workflow.py next    [slug]
     workflow.py slice   [slug] <task-id>
-    workflow.py record  [slug] <task-id> --commits <range> --verdict <clean|issues>
+    workflow.py record  [slug] <task-id> --commits <range> --verdict <clean|issues>   （格式 ≤3）
+    workflow.py record  [slug] <task-id> --commits <range> --evidence "<验收与结果>" --operation-id <id>  （格式 ≥4，两态记账）
     workflow.py check   [slug]
     workflow.py approve [slug] <方案|计划> --by "<用户的原话>"
     workflow.py gate    [slug] --reason "<升级原因>"
@@ -86,6 +87,7 @@ VALID_STATUS = ["pending", "in_progress", "complete", "blocked"]
 VALID_STATUS_V4 = ["pending", "implemented", "complete"]
 STATUS_PENDING = "pending"
 STATUS_IMPLEMENTED = "implemented"
+STATUS_COMPLETE = "complete"
 
 # 计划格式版本。逐档只加不删，老档按老规则跑完：
 #   2 起：任务新增『做法』『预期』两个字段；方案新增『背景与目标』节。
@@ -1941,13 +1943,38 @@ def _hash_file(h, path):
 
 # ---------------------------------------------------------------- 结构化证据（旧账本只读兼容）
 
+# 格式 ≥4 新增的事件类型（D-04）：`implemented` 承载两态记账与操作 ID 协议，
+# `projection_repair` 记录投影自动修复。事件名字面量一律走这两个常量。
+EVENT_IMPLEMENTED = "implemented"
+PROJECTION_REPAIR = "projection_repair"
 EVENT_TYPES = {"start", "verify", "manual", "waiver", "evidence", "command_retired", "close", "reopen",
-               "implemented", "projection_repair"}
+               EVENT_IMPLEMENTED, PROJECTION_REPAIR}
 VIEW_MARKER = "<!-- workflow-events-view -->"
 
 
 def events_path(root, slug):
     return os.path.join(workflow_root(root), slug, "events.jsonl")
+
+
+def serialize_events(events):
+    """事件列表 → JSONL 文本（写入与写入前自校验共用同一序列化）。"""
+    return "".join(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n"
+                   for event in events)
+
+
+def validate_event_batch(existing, new, slug):
+    """写入前自校验：已有事件＋待写事件必须能通过 `read_events` 的同一套结构校验。
+
+    事件是权威记录：写坏它没有自救入口（只能手工编辑文件，且所有入口都会拒绝继续）。
+    因此在落盘前先按读者的判据跑一遍——写后会被自己读校验拒绝的形态不得落盘。
+    """
+    try:
+        parse_events(serialize_events(list(existing) + list(new)).splitlines(keepends=True), slug)
+    except (ValueError, TypeError) as exc:
+        raise WorkflowError(
+            f"本次要写入的事件未通过结构自校验，已中止（未落盘）：{exc}。"
+            "这是引擎缺陷（写出的形态自己读不了），请报告；不要手工编辑 events.jsonl。"
+        ) from exc
 
 
 # --------------------------------------------- 记账操作的身份协议（格式 ≥4；D-08）
@@ -1968,11 +1995,12 @@ def operation_id_problem(operation_id):
 
 
 def operation_request_digest(payload):
-    """请求摘要：相同请求判据（tasks 集合 + commits + evidence）的规范化摘要。"""
-    return hashlib.sha256(
-        json.dumps(payload, ensure_ascii=False, sort_keys=True,
-                   separators=(",", ":")).encode()
-    ).hexdigest()
+    """请求摘要：相同请求判据（tasks 集合 + commits + evidence）的规范化摘要。
+
+    规范化方式与既有 `_digest` 同一实现（`hashlib` 域内唯一的规范化序列化），
+    这里只把它命名成协议里的概念，便于 T3/T5/T6 复用同一判据。
+    """
+    return _digest(payload)
 
 
 def find_operation(events, operation_id):
@@ -2021,6 +2049,40 @@ def operation_receipt(event):
             f"记账事件 {event['id']} 的 receipt 不完整，无法幂等重放原结果。"
         )
     return receipt["result"], receipt["text"]
+
+
+def replay_result(event, operation_id):
+    """幂等重放的返回：原 receipt ＋ 一条「历史回放」提示。
+
+    同一份成功文案会掩盖「这次只是历史回放、当前计划可能已重新审批」；提示进
+    `warnings` 与显示文案，原 result 的其余字段逐字保留（不写事件、不改计划）。
+    """
+    result, text = operation_receipt(event)
+    hint = (f"本次为幂等重放（原操作 {operation_id}，事件 {event['id']}）："
+            "返回原结果，未写事件、未改计划、未改账本")
+    return {**result, "warnings": list(result.get("warnings", [])) + [hint]}, text + "\n↺ " + hint
+
+
+def restore_ledger_rows(root, slug, event):
+    """幂等重放的账本补齐：事件里持久化了本操作将写入的账本行，缺则补、有则跳过。
+
+    真实中断（事件已落盘、计划状态与账本行未回写）后携原 ID 重试时，账本行必须补回，
+    否则账本与权威记录（事件）不一致。行文本（含时间戳）取自事件，重建不依赖当前
+    时间与参数，因此重复重放不会重复追加。计划状态的恢复由入口的投影检查负责。
+    """
+    rows = event["data"].get("ledger") or []
+    if not rows:
+        return
+    path = ledger_path(root, slug)
+    if not os.path.isfile(path):
+        raise WorkflowError(f"账本不存在：{path}")
+    with open(path, encoding="utf-8") as fh:
+        present = set(fh.read().splitlines())
+    for item in rows:
+        if item["row"] in present:
+            continue
+        ledger_append(root, slug, item["section"], item["row"])
+        present.add(item["row"])
 
 
 def _digest(value):
@@ -2099,162 +2161,179 @@ def read_events(root, slug):
     path = events_path(root, slug)
     if not os.path.exists(path):
         return []
-    events, seen, cycle, closed = [], set(), 1, False
     try:
         with open(path, encoding="utf-8") as fh:
-            for line_no, line in enumerate(fh, 1):
-                if not line.endswith("\n"):
-                    raise ValueError("事件尾行不完整")
-                event = json.loads(line)
-                if not isinstance(event, dict):
-                    raise ValueError("事件必须是对象")
-                for key in ("id", "type", "time", "workflow"):
-                    if not isinstance(event.get(key), str) or not event[key]:
-                        raise ValueError(f"缺少 {key}")
-                datetime.fromisoformat(event["time"])
-                if (event.get("schema") != 1 or type(event.get("cycle")) is not int
-                        or event["type"] not in EVENT_TYPES or event["workflow"] != slug
-                        or event["id"] in seen or not isinstance(event.get("data"), dict)):
-                    raise ValueError("事件身份或结构无效")
-                kind, data = event["type"], event["data"]
-                if not events:
-                    if kind != "start" or event["cycle"] != 1 or type(data.get("legacy_closed")) is not bool:
-                        raise ValueError("缺少有效 start 事件")
-                    closed = data["legacy_closed"]
-                    if closed:
-                        snapshot = data.get("legacy_close")
-                        if (not isinstance(snapshot, dict) or not snapshot.get("closed_at")
-                                or type(snapshot.get("tasks")) is not int or snapshot["tasks"] <= 0):
-                            raise ValueError("旧 close 快照不完整")
-                elif kind == "start":
-                    raise ValueError("重复 start")
-                elif kind == "reopen":
-                    if not closed or event["cycle"] != cycle + 1:
-                        raise ValueError("重开周期不连续或原周期未关闭")
-                    cycle += 1
-                    closed = False
-                    for key in ("reason", "by", "work", "task"):
-                        if not isinstance(data.get(key), str) or not data[key].strip():
-                            raise ValueError(f"reopen 缺少 {key}")
-                else:
-                    if event["cycle"] != cycle or closed:
-                        raise ValueError("关闭周期仍写入证据或周期不符")
-                    if kind in ("verify", "manual", "waiver", "evidence", "command_retired"):
-                        for key in ("fingerprint", "acceptance"):
-                            if not isinstance(data.get(key), str) or not re.fullmatch(r"[a-f0-9]{64}", data[key]):
-                                raise ValueError(f"缺少有效 {key}")
-                    if kind == "verify":
-                        if (type(data.get("exit_code")) is not int or not isinstance(data.get("command"), str)
-                                or not data["command"].strip() or type(data.get("stable")) is not bool
-                                or not isinstance(data.get("receipt"), str)
-                                or not isinstance(data.get("receipt_hash"), str)):
-                            raise ValueError("验证事件不完整")
-                        after = data.get("after")
-                        if (not isinstance(after, dict) or set(after) != {"fingerprint", "acceptance"}
-                                or any(not isinstance(v, str) or not re.fullmatch(r"[a-f0-9]{64}", v) for v in after.values())
-                                or data["stable"] != all(after[k] == data[k] for k in after)
-                                or not re.fullmatch(r"[a-f0-9]{64}", data["receipt_hash"])):
-                            raise ValueError("验证前后绑定无效")
-                        artifacts = data.get("artifacts")
-                        if not isinstance(artifacts, dict) or any(not isinstance(refs, list) for refs in artifacts.values()):
-                            raise ValueError("验证缺少逐项证据摘要")
-                        for refs in artifacts.values():
-                            for ref in refs:
-                                if (not isinstance(ref, dict) or not isinstance(ref.get("path"), str)
-                                        or not isinstance(ref.get("hash"), str)
-                                        or not re.fullmatch(r"[a-f0-9]{64}", ref["hash"])):
-                                    raise ValueError("验证证据摘要无效")
-                    if kind in ("manual", "waiver", "evidence"):
-                        for key in ("item", "source"):
-                            if not isinstance(data.get(key), str) or not data[key].strip():
-                                raise ValueError(f"逐项记录缺少 {key}")
-                    if kind == "manual" and (data.get("status") not in ("passed", "rejected") or not isinstance(data.get("by"), str) or not data["by"].strip()):
-                        raise ValueError("人工结论无效")
-                    if kind == "waiver" and any(not isinstance(data.get(k), str) or not data[k].strip() for k in ("reason", "by")):
-                        raise ValueError("豁免缺少依据")
-                    if kind == "evidence":
-                        if (data.get("verification") not in seen or not isinstance(data.get("references"), list)
-                                or not data["references"]):
-                            raise ValueError("补证缺少既有验证或引用")
-                        for ref in data["references"]:
-                            if (not isinstance(ref, dict) or not isinstance(ref.get("path"), str) or not ref["path"]
-                                    or not isinstance(ref.get("hash"), str) or not re.fullmatch(r"[a-f0-9]{64}", ref["hash"])):
-                                raise ValueError("补证引用无效")
-                        source = next(e for e in events if e["id"] == data["verification"])
-                        if (source["type"] != "verify" or source["cycle"] != cycle
-                                or source["data"]["exit_code"] != 0 or not source["data"]["stable"]
-                                or any(source["data"][key] != data[key] for key in ("fingerprint", "acceptance"))
-                                or any(e["type"] == "verify" for e in events[events.index(source) + 1:])):
-                            raise ValueError("补证越过失败/不同版本或绑定了非验证记录")
-                    if kind == "command_retired":
-                        prior = [e for e in events if e["type"] == "verify" and e["cycle"] == cycle]
-                        if (not prior or data.get("verification") != prior[-1]["id"]
-                                or data.get("previous") != _verification_summary(prior[-1])
-                                or data.get("replacement_command") != ""
-                                or data.get("checklist") != _digest({k: data[k] for k in ("fingerprint", "acceptance")})
-                                or any(not isinstance(data.get(k), str) or not data[k].strip()
-                                       for k in ("by", "source", "reason"))):
-                            raise ValueError("撤销旧命令要求缺少最新验证、新旧绑定或具体授权")
-                    if kind == "implemented":
-                        tasks = data.get("tasks")
-                        if (not isinstance(tasks, list) or not tasks
-                                or any(not isinstance(tid, str) or not tid.strip() for tid in tasks)
-                                or len(set(tasks)) != len(tasks)):
-                            raise ValueError("已实现事件缺少任务清单")
-                        if (not isinstance(data.get("evidence"), str) or not data["evidence"].strip()
-                                or not isinstance(data.get("entry"), str) or not data["entry"].strip()
-                                or not isinstance(data.get("commits"), str)
-                                or not isinstance(data.get("request"), str)
-                                or not re.fullmatch(r"[a-f0-9]{64}", data["request"])):
-                            raise ValueError("已实现事件缺少证据或请求摘要")
-                        if operation_id_problem(data.get("operation_id")) is not None:
-                            raise ValueError("已实现事件的操作 ID 无效")
-                        receipt = data.get("receipt")
-                        if (not isinstance(receipt, dict) or not isinstance(receipt.get("result"), dict)
-                                or not isinstance(receipt.get("text"), str)):
-                            raise ValueError("已实现事件缺少结果 receipt")
-                    if kind == "projection_repair":
-                        repairs = data.get("repairs")
-                        if (not isinstance(data.get("entry"), str) or not data["entry"].strip()
-                                or not isinstance(repairs, list) or not repairs):
-                            raise ValueError("投影修复事件缺少触发入口或修复清单")
-                        for item in repairs:
-                            if (not isinstance(item, dict)
-                                    or any(not isinstance(item.get(key), str) or not item[key].strip()
-                                           for key in ("task", "from", "to"))):
-                                raise ValueError("投影修复事件缺少逐任务 from→to")
-                    if kind == "close":
-                        snapshot = data.get("snapshot")
-                        if (not isinstance(snapshot, dict) or not data.get("closed_at")
-                                or snapshot.get("passed") is not True
-                                or snapshot.get("cycle") != cycle or type(data.get("tasks")) is not int
-                                or data["tasks"] <= 0 or not isinstance(data.get("next_step"), str)
-                                or any(snapshot.get(k) != [] for k in ("blockers", "pending", "gaps", "unknown"))
-                                or not isinstance(snapshot.get("coverage"), list)
-                                or any(not isinstance(snapshot.get(k), str) or not re.fullmatch(r"[a-f0-9]{64}", snapshot[k]) for k in ("fingerprint", "acceptance"))):
-                            raise ValueError("close 缺少结论快照")
-                        if snapshot.get("command_status") == "retired":
-                            retirement = next((e for e in events if e["id"] == snapshot.get("command_retirement")), None)
-                            prior = [e for e in events if e["type"] == "verify" and e["cycle"] == cycle]
-                            if (not retirement or retirement["type"] != "command_retired"
-                                    or retirement["cycle"] != cycle or not prior
-                                    or retirement["data"]["verification"] != prior[-1]["id"]
-                                    or snapshot.get("retired_verification") != retirement["data"]["previous"]
-                                    or any(snapshot[k] != retirement["data"][k] for k in ("fingerprint", "acceptance"))
-                                    or snapshot.get("command_passed") is not None
-                                    or snapshot.get("command_required") is not False
-                                    or snapshot.get("command_exit_code") is not None
-                                    or snapshot.get("verification") is not None):
-                                raise ValueError("close 的旧命令撤销快照无效")
-                        elif snapshot.get("command_passed") is not True:
-                            raise ValueError("close 缺少成功命令或显式撤销结论")
-                        closed = True
-                seen.add(event["id"])
-                events.append(event)
-        if not events:
-            raise ValueError("events.jsonl 为空")
+            return parse_events(fh, slug)
     except (OSError, UnicodeError, ValueError, TypeError) as exc:
         raise WorkflowError(f"结构化证据损坏，无法确认，禁止回退旧 PASS：{path}（{exc}）") from exc
+
+
+def parse_events(lines, slug):
+    """对事件行跑结构校验；返回事件列表（坏行即抛 ValueError）。
+
+    单独摘出来是为了让写入前自校验（`validate_event_batch`）复用同一套判据——
+    append 之前先按读者的规则验一遍，避免引擎把自己的权威文件写出「读不了」的形态。
+    """
+    events, seen, cycle, closed = [], set(), 1, False
+    for line_no, line in enumerate(lines, 1):
+        if not line.endswith("\n"):
+            raise ValueError("事件尾行不完整")
+        event = json.loads(line)
+        if not isinstance(event, dict):
+            raise ValueError("事件必须是对象")
+        for key in ("id", "type", "time", "workflow"):
+            if not isinstance(event.get(key), str) or not event[key]:
+                raise ValueError(f"缺少 {key}")
+        datetime.fromisoformat(event["time"])
+        if (event.get("schema") != 1 or type(event.get("cycle")) is not int
+                or event["type"] not in EVENT_TYPES or event["workflow"] != slug
+                or event["id"] in seen or not isinstance(event.get("data"), dict)):
+            raise ValueError("事件身份或结构无效")
+        kind, data = event["type"], event["data"]
+        if not events:
+            if kind != "start" or event["cycle"] != 1 or type(data.get("legacy_closed")) is not bool:
+                raise ValueError("缺少有效 start 事件")
+            closed = data["legacy_closed"]
+            if closed:
+                snapshot = data.get("legacy_close")
+                if (not isinstance(snapshot, dict) or not snapshot.get("closed_at")
+                        or type(snapshot.get("tasks")) is not int or snapshot["tasks"] <= 0):
+                    raise ValueError("旧 close 快照不完整")
+        elif kind == "start":
+            raise ValueError("重复 start")
+        elif kind == "reopen":
+            if not closed or event["cycle"] != cycle + 1:
+                raise ValueError("重开周期不连续或原周期未关闭")
+            cycle += 1
+            closed = False
+            for key in ("reason", "by", "work", "task"):
+                if not isinstance(data.get(key), str) or not data[key].strip():
+                    raise ValueError(f"reopen 缺少 {key}")
+        else:
+            if event["cycle"] != cycle or closed:
+                raise ValueError("关闭周期仍写入证据或周期不符")
+            if kind in ("verify", "manual", "waiver", "evidence", "command_retired"):
+                for key in ("fingerprint", "acceptance"):
+                    if not isinstance(data.get(key), str) or not re.fullmatch(r"[a-f0-9]{64}", data[key]):
+                        raise ValueError(f"缺少有效 {key}")
+            if kind == "verify":
+                if (type(data.get("exit_code")) is not int or not isinstance(data.get("command"), str)
+                        or not data["command"].strip() or type(data.get("stable")) is not bool
+                        or not isinstance(data.get("receipt"), str)
+                        or not isinstance(data.get("receipt_hash"), str)):
+                    raise ValueError("验证事件不完整")
+                after = data.get("after")
+                if (not isinstance(after, dict) or set(after) != {"fingerprint", "acceptance"}
+                        or any(not isinstance(v, str) or not re.fullmatch(r"[a-f0-9]{64}", v) for v in after.values())
+                        or data["stable"] != all(after[k] == data[k] for k in after)
+                        or not re.fullmatch(r"[a-f0-9]{64}", data["receipt_hash"])):
+                    raise ValueError("验证前后绑定无效")
+                artifacts = data.get("artifacts")
+                if not isinstance(artifacts, dict) or any(not isinstance(refs, list) for refs in artifacts.values()):
+                    raise ValueError("验证缺少逐项证据摘要")
+                for refs in artifacts.values():
+                    for ref in refs:
+                        if (not isinstance(ref, dict) or not isinstance(ref.get("path"), str)
+                                or not isinstance(ref.get("hash"), str)
+                                or not re.fullmatch(r"[a-f0-9]{64}", ref["hash"])):
+                            raise ValueError("验证证据摘要无效")
+            if kind in ("manual", "waiver", "evidence"):
+                for key in ("item", "source"):
+                    if not isinstance(data.get(key), str) or not data[key].strip():
+                        raise ValueError(f"逐项记录缺少 {key}")
+            if kind == "manual" and (data.get("status") not in ("passed", "rejected") or not isinstance(data.get("by"), str) or not data["by"].strip()):
+                raise ValueError("人工结论无效")
+            if kind == "waiver" and any(not isinstance(data.get(k), str) or not data[k].strip() for k in ("reason", "by")):
+                raise ValueError("豁免缺少依据")
+            if kind == "evidence":
+                if (data.get("verification") not in seen or not isinstance(data.get("references"), list)
+                        or not data["references"]):
+                    raise ValueError("补证缺少既有验证或引用")
+                for ref in data["references"]:
+                    if (not isinstance(ref, dict) or not isinstance(ref.get("path"), str) or not ref["path"]
+                            or not isinstance(ref.get("hash"), str) or not re.fullmatch(r"[a-f0-9]{64}", ref["hash"])):
+                        raise ValueError("补证引用无效")
+                source = next(e for e in events if e["id"] == data["verification"])
+                if (source["type"] != "verify" or source["cycle"] != cycle
+                        or source["data"]["exit_code"] != 0 or not source["data"]["stable"]
+                        or any(source["data"][key] != data[key] for key in ("fingerprint", "acceptance"))
+                        or any(e["type"] == "verify" for e in events[events.index(source) + 1:])):
+                    raise ValueError("补证越过失败/不同版本或绑定了非验证记录")
+            if kind == "command_retired":
+                prior = [e for e in events if e["type"] == "verify" and e["cycle"] == cycle]
+                if (not prior or data.get("verification") != prior[-1]["id"]
+                        or data.get("previous") != _verification_summary(prior[-1])
+                        or data.get("replacement_command") != ""
+                        or data.get("checklist") != _digest({k: data[k] for k in ("fingerprint", "acceptance")})
+                        or any(not isinstance(data.get(k), str) or not data[k].strip()
+                               for k in ("by", "source", "reason"))):
+                    raise ValueError("撤销旧命令要求缺少最新验证、新旧绑定或具体授权")
+            if kind == EVENT_IMPLEMENTED:
+                tasks = data.get("tasks")
+                if (not isinstance(tasks, list) or not tasks
+                        or any(not isinstance(tid, str) or not tid.strip() for tid in tasks)
+                        or len(set(tasks)) != len(tasks)):
+                    raise ValueError("已实现事件缺少任务清单")
+                if (not isinstance(data.get("evidence"), str) or not data["evidence"].strip()
+                        or not isinstance(data.get("entry"), str) or not data["entry"].strip()
+                        or not isinstance(data.get("commits"), str)
+                        or not isinstance(data.get("request"), str)
+                        or not re.fullmatch(r"[a-f0-9]{64}", data["request"])):
+                    raise ValueError("已实现事件缺少证据或请求摘要")
+                if operation_id_problem(data.get("operation_id")) is not None:
+                    raise ValueError("已实现事件的操作 ID 无效")
+                receipt = data.get("receipt")
+                if (not isinstance(receipt, dict) or not isinstance(receipt.get("result"), dict)
+                        or not isinstance(receipt.get("text"), str)):
+                    raise ValueError("已实现事件缺少结果 receipt")
+                # 账本行随事件持久化：中断后重放据此补齐账本（缺则补、有则跳过）。
+                ledger_rows = data.get("ledger")
+                if (not isinstance(ledger_rows, list) or not ledger_rows
+                        or any(not isinstance(item, dict)
+                               or any(not isinstance(item.get(key), str) or not item[key].strip()
+                                      for key in ("section", "row"))
+                               for item in ledger_rows)):
+                    raise ValueError("已实现事件缺少账本行")
+            if kind == PROJECTION_REPAIR:
+                repairs = data.get("repairs")
+                if (not isinstance(data.get("entry"), str) or not data["entry"].strip()
+                        or not isinstance(repairs, list) or not repairs):
+                    raise ValueError("投影修复事件缺少触发入口或修复清单")
+                for item in repairs:
+                    if (not isinstance(item, dict)
+                            or any(not isinstance(item.get(key), str) or not item[key].strip()
+                                   for key in ("task", "from", "to"))):
+                        raise ValueError("投影修复事件缺少逐任务 from→to")
+            if kind == "close":
+                snapshot = data.get("snapshot")
+                if (not isinstance(snapshot, dict) or not data.get("closed_at")
+                        or snapshot.get("passed") is not True
+                        or snapshot.get("cycle") != cycle or type(data.get("tasks")) is not int
+                        or data["tasks"] <= 0 or not isinstance(data.get("next_step"), str)
+                        or any(snapshot.get(k) != [] for k in ("blockers", "pending", "gaps", "unknown"))
+                        or not isinstance(snapshot.get("coverage"), list)
+                        or any(not isinstance(snapshot.get(k), str) or not re.fullmatch(r"[a-f0-9]{64}", snapshot[k]) for k in ("fingerprint", "acceptance"))):
+                    raise ValueError("close 缺少结论快照")
+                if snapshot.get("command_status") == "retired":
+                    retirement = next((e for e in events if e["id"] == snapshot.get("command_retirement")), None)
+                    prior = [e for e in events if e["type"] == "verify" and e["cycle"] == cycle]
+                    if (not retirement or retirement["type"] != "command_retired"
+                            or retirement["cycle"] != cycle or not prior
+                            or retirement["data"]["verification"] != prior[-1]["id"]
+                            or snapshot.get("retired_verification") != retirement["data"]["previous"]
+                            or any(snapshot[k] != retirement["data"][k] for k in ("fingerprint", "acceptance"))
+                            or snapshot.get("command_passed") is not None
+                            or snapshot.get("command_required") is not False
+                            or snapshot.get("command_exit_code") is not None
+                            or snapshot.get("verification") is not None):
+                        raise ValueError("close 的旧命令撤销快照无效")
+                elif snapshot.get("command_passed") is not True:
+                    raise ValueError("close 缺少成功命令或显式撤销结论")
+                closed = True
+        seen.add(event["id"])
+        events.append(event)
+    if not events:
+        raise ValueError("events.jsonl 为空")
     return events
 
 
@@ -2334,9 +2413,11 @@ def append_events(root, slug, new):
         legacy = _legacy_lifecycle(root, slug)
         start = _event(slug, 1, "start", {"legacy_closed": legacy["closed"], "legacy_close": legacy["close"]})
         new = [start] + new
+    # 写入前自校验：事件是权威记录，写坏它没有自救入口——先按读者的规则验一遍。
+    validate_event_batch(old, new, slug)
     # 单控制器写入；一批逐项确认在同一次 append 中保存，读者拒绝任何残缺尾行。
     with open(events_path(root, slug), "a", encoding="utf-8") as fh:
-        fh.write("".join(json.dumps(e, ensure_ascii=False, sort_keys=True) + "\n" for e in new))
+        fh.write(serialize_events(new))
         fh.flush()
         os.fsync(fh.fileno())
     sync_event_view(root, slug)
@@ -2346,8 +2427,10 @@ def append_events(root, slug, new):
 
 # 任务状态的推导序：pending < implemented < complete。投影落后于推导 → 自动修复；
 # 投影领先（计划写了实现态却没有对应事件）→ 拒绝，不按计划状态静默回退。
-_STATUS_ORDER = {STATUS_PENDING: 0, STATUS_IMPLEMENTED: 1, "complete": 2}
-PROJECTION_REPAIR = "projection_repair"
+_STATUS_ORDER = {STATUS_PENDING: 0, STATUS_IMPLEMENTED: 1, STATUS_COMPLETE: 2}
+# 当前引擎能由事件推导出的状态（T2 两档）。`complete` 的推导来源＝节点审查通过后
+# 映射，随 T3 引入；在那之前它出现在计划里属「无法推导」，不是「投影领先」。
+DERIVED_STATUSES_V4 = (STATUS_PENDING, STATUS_IMPLEMENTED)
 
 
 def derived_states(plan, events):
@@ -2360,10 +2443,12 @@ def derived_states(plan, events):
     known = {task.id for task in plan.tasks}
     implemented = set()
     for event in events:
-        if event["type"] != "implemented":
+        if event["type"] != EVENT_IMPLEMENTED:
             continue
         for tid in event["data"]["tasks"]:
             if tid not in known:
+                # T3/T5：改名/拆分/调整是设计里的预期场景，届时须用谱系解析放宽这条
+                # 拒绝（给出合法恢复路径）；在此之前它是唯一出路——不得静默忽略。
                 raise WorkflowError(
                     f"事件 {event['id']}（implemented）引用了计划里没有的任务 {tid}——"
                     "事件与计划无法对应，无法推导状态，拒绝继续（不得按计划状态静默放行）。"
@@ -2392,7 +2477,7 @@ def repair_projection(root, slug, entry="（未标注）"):
     if not plan.is_v4:
         return
     derived = derived_states(plan, read_events(root, slug))
-    repairs, ahead = [], []
+    repairs, ahead, underivable = [], [], []
     for task in plan.tasks:
         want, have = derived[task.id], task.status
         if have == want:
@@ -2403,10 +2488,21 @@ def repair_projection(root, slug, entry="（未标注）"):
                 f"（只能是 {'/'.join(plan.valid_statuses)}），且无法由事件重放推导——"
                 "拒绝继续；先修正为合法状态或补齐对应事件。"
             )
-        if _STATUS_ORDER[want] > _STATUS_ORDER[have]:
+        if have not in DERIVED_STATUSES_V4:
+            # 合法但当前引擎推不出来（如 `complete`）：这是推导来源缺失，不是投影领先。
+            underivable.append(
+                f"{task.id}：计划 {have}，而当前引擎只能从事件推导 "
+                + " / ".join(DERIVED_STATUSES_V4))
+        elif _STATUS_ORDER[want] > _STATUS_ORDER[have]:
             repairs.append({"task": task.id, "from": have, "to": want})
         else:
             ahead.append(f"{task.id}：计划 {have} → 事件推导 {want}")
+    if underivable:
+        raise WorkflowError(
+            "计划状态无法由事件重放推导，拒绝继续：\n  - " + "\n  - ".join(underivable)
+            + "\n（`complete` 由节点审查通过后映射，该推导来源随 T3 引入；在此之前"
+            "不得手工把任务标成已验收，也不得按计划状态静默放行。）"
+        )
     if ahead:
         raise WorkflowError(
             "计划状态领先于事件重放推导，事件缺失或相互冲突，拒绝继续：\n  - "
@@ -3490,14 +3586,23 @@ def record_implemented(args, root, slug, plan):
             "实现证据随任务记账：实际修改、提交范围、验收方法与结果、相关失败信号、"
             "尚存疑问。缺它账本里就没有「这个任务凭什么算做完」的依据。"
         )
+    duplicates = sorted({tid for tid in args.task_id if args.task_id.count(tid) > 1})
+    if duplicates:
+        raise WorkflowError(
+            f"重复的任务 ID：{'、'.join(duplicates)}——格式 ≥4 的 record 一次操作按任务集合"
+            "记账（一条事件、一个操作身份、一次账本行），重复 ID 不产生额外效果，直接拒绝。"
+        )
 
-    requested = sorted(set(args.task_id))
+    # 请求身份用去重集合（重试可换书写顺序）；事件里的 tasks 用计划顺序取，
+    # 重复 ID 已在上面拒绝，两者是同一集合。
     request = operation_request_digest(
-        {"tasks": requested, "commits": args.commits, "evidence": evidence})
+        {"tasks": sorted(set(args.task_id)), "commits": args.commits, "evidence": evidence})
     action, existing = resolve_operation(root, slug, args.operation_id, request, "record")
     if action == "replay":
-        # 幂等重放：返回随事件持久化的原结果；不写事件、不改计划、不重复账本行。
-        return operation_receipt(existing)
+        # 幂等重放：不写事件、不改计划、不新增账本行；补齐中断可能漏写的账本行后
+        # 返回随事件持久化的原结果＋历史回放提示。
+        restore_ledger_rows(root, slug, existing)
+        return replay_result(existing, args.operation_id)
 
     require_plan_approval(root, slug, plan)   # 与 slice 同一道门，防绕过
     ledger_check_owner(root, slug)
@@ -3525,14 +3630,21 @@ def record_implemented(args, root, slug, plan):
     stamp = _now()
     commits = args.commits or "—"
     label = " + ".join(t.id for t in tasks)
+    # 账本行随事件持久化：中断（事件已落盘、账本未写）后重放据此补齐，缺则补、有则跳过。
+    ledger_rows = [{"section": "完成记录",
+                    "row": f"| {t.id} | {commits} | 已实现（操作 {args.operation_id}） | {stamp} |"}
+                   for t in tasks]
+    if args.note:
+        ledger_rows.append({"section": "裁决", "row": f"| {stamp} | {label} | {args.note} | — |"})
 
-    event = _event(slug, lifecycle(root, slug)["cycle"], "implemented", {
+    event = _event(slug, lifecycle(root, slug)["cycle"], EVENT_IMPLEMENTED, {
         "tasks": [t.id for t in tasks],
         "evidence": evidence,
         "commits": args.commits,
         "operation_id": args.operation_id,
         "request": request,
         "entry": "record",
+        "ledger": ledger_rows,
     })
     result = {
         "slug": slug,
@@ -3562,13 +3674,8 @@ def record_implemented(args, root, slug, plan):
     for t in tasks:
         plan.lines[t.field_lines["状态"]] = f"- **状态**：{STATUS_IMPLEMENTED}"
     _write_plan(plan)
-    for t in tasks:
-        ledger_append(
-            root, slug, "完成记录",
-            f"| {t.id} | {commits} | 已实现（操作 {args.operation_id}） | {stamp} |",
-        )
-    if args.note:
-        ledger_append(root, slug, "裁决", f"| {stamp} | {label} | {args.note} | — |")
+    for item in ledger_rows:
+        ledger_append(root, slug, item["section"], item["row"])
     return result, text
 
 
@@ -3583,6 +3690,14 @@ def cmd_record(args):
         repair_projection(root, slug, "record")
         plan = load_plan(root, slug)   # 修复可能已回写状态行，重新取计划
         return record_implemented(args, root, slug, plan)
+    if (args.evidence or "").strip() or (args.operation_id or "").strip():
+        # 新参数只服务格式 ≥4 的两态记账：旧格式上静默忽略会让误用被放过
+        # （控制器会以为走了两态记账）。拒绝即恢复旧输入空间的报错行为。
+        raise WorkflowError(
+            f"本计划是格式 {plan.format_version}，不支持 `--evidence`/`--operation-id`"
+            "（仅格式 ≥4 的两态记账使用）：请改用 `--verdict <clean|issues>`；"
+            "要把该工作流升级为两态记账，先把计划头部 `**格式**` 升到 4 并补齐 `## 审查节点` 段。"
+        )
     if args.verdict is None:
         args.verdict = "clean"
     require_plan_approval(root, slug, plan)   # 与 slice 同一道门，防绕过
@@ -3832,10 +3947,6 @@ def cmd_close(args):
     root = find_project_root()
     slug = resolve_slug(root, args.slug)
     plan = load_plan(root, slug)
-    if plan.is_v4:
-        # 入口统一在动作前做投影检查：落后先修复（留 projection_repair）、领先即拒绝。
-        repair_projection(root, slug, "close")
-        plan = load_plan(root, slug)   # 修复可能已回写状态行，重新取计划
     ledger_check_owner(root, slug)
     state = lifecycle(root, slug)
     if state["closed"]:
@@ -3843,6 +3954,12 @@ def cmd_close(args):
                 "cycle": state["cycle"], "close": state["close"]}, "✓ 已收尾；保留原结论，未重复记账"
     if args.manual_confirmed.strip():
         raise WorkflowError("--manual-confirmed 不再作为泛确认旁路；先 acceptance 展示清单，再 confirm --item 逐项登记既有用户答复")
+    if plan.is_v4:
+        # 入口统一在动作前做投影检查：落后先修复（留 projection_repair）、领先即拒绝。
+        # 排在 already-closed 与账本归属检查之后：已关闭周期不追加修复事件（事件读校验
+        # 会拒绝向关闭周期写事件，先写会污染权威文件）。
+        repair_projection(root, slug, "close")
+        plan = load_plan(root, slug)   # 修复可能已回写状态行，重新取计划
     incomplete = [t.id for t in plan.tasks if t.status != "complete"]
     if not plan.tasks or incomplete:
         raise WorkflowError("没有完整任务或仍有未完成任务：" + "、".join(incomplete))

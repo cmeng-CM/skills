@@ -1628,16 +1628,24 @@ class WorkflowCLI(unittest.TestCase):
         self.cli("approve", slug, "方案", "--by", "fixture 方案确认")
         self.cli("approve", slug, "计划", "--by", "fixture 计划确认")
 
+    def cli_text(self, *args, expected=0):
+        """不带 --json 跑一次，返回显示文案（receipt.text 只有这条路径可观察）。"""
+        process = subprocess.run([sys.executable, "-B", str(SCRIPT), *args],
+                                 cwd=self.root, capture_output=True, text=True)
+        self.assertEqual(process.returncode, expected, process.stdout + process.stderr)
+        return process.stdout.strip()
+
     def record_v4(self, *task_ids, slug="v4", operation_id="rv-N1-1",
                   evidence="跑 `true`：退出码 0；失败信号自查无", commits="HEAD..HEAD",
-                  note="fixture 本任务无新提交（空范围豁免）", expected=0, **extra):
+                  note="fixture 本任务无新提交（空范围豁免）", expected=0, text=False, **extra):
         args = ["record", slug, *task_ids, "--commits", commits,
                 "--evidence", evidence, "--operation-id", operation_id]
         if note is not None:
             args.extend(["--note", note])
         for key, value in extra.items():
             args.extend(["--" + key.replace("_", "-"), value])
-        return self.cli(*args, expected=expected)
+        return (self.cli_text(*args, expected=expected) if text
+                else self.cli(*args, expected=expected))
 
     def implemented_events(self, slug="v4"):
         return [event for event in self.events(slug) if event["type"] == "implemented"]
@@ -1645,10 +1653,30 @@ class WorkflowCLI(unittest.TestCase):
     def repair_events(self, slug="v4"):
         return [event for event in self.events(slug) if event["type"] == "projection_repair"]
 
+    def assert_replay_matches(self, replay, original):
+        """幂等重放＝原结果逐字段相同 ＋ 一条「历史回放」提示（裁决 6）。"""
+        self.assertEqual(replay["warnings"][:-1], original["warnings"])
+        self.assertIn("幂等重放", replay["warnings"][-1])
+        self.assertEqual({k: v for k, v in replay.items() if k != "warnings"},
+                         {k: v for k, v in original.items() if k != "warnings"})
+
     def rollback_status(self, slug="v4", status="pending"):
-        """把已实现任务的计划状态手工回退：等价于「事件已落盘、状态未及回写」的中断窗口。"""
+        """把已实现任务的计划状态手工回退。"""
         self.plan(slug).write_text(
             self.plan(slug).read_text().replace("- **状态**：implemented", f"- **状态**：{status}"))
+
+    def erase_ledger_lines(self, slug, *needles):
+        """抹掉账本里含指定片段的整行（构造「状态与账本行都未回写」的真实中断残留态）。"""
+        path = self.root / ".workflow" / slug / "ledger.md"
+        kept = [line for line in path.read_text().splitlines()
+                if not any(needle in line for needle in needles)]
+        path.write_text("\n".join(kept) + "\n")
+
+    def interrupt_after_event(self, slug, note_marker="fixture 本任务无新提交"):
+        """真实中断残留态：事件已落盘；计划状态与账本行（完成记录＋裁决）都未写——
+        写入顺序是 事件 → 计划状态 → 账本行，中断只能停在这两步之前。"""
+        self.rollback_status(slug)
+        self.erase_ledger_lines(slug, "已实现（操作 ", note_marker)
 
     def test_two_state_record_requires_evidence_and_operation_id(self):
         self.make_v4_plan(slug="t2", nodes=self.node_block("N1", "T1, T2", final="是"))
@@ -1667,6 +1695,45 @@ class WorkflowCLI(unittest.TestCase):
         self.assertIn("--operation-id", self.record_v4("T1", slug="t2", operation_id="", expected=1)["error"])
         self.assertEqual(self.events("t2"), [])
         self.assertEqual(workflow.load_plan(str(self.root), "t2").tasks[0].status, "pending")
+
+    def test_two_state_duplicate_task_ids_rejected_without_write(self):
+        """M1：重复任务 ID 直接拒绝（不得先落盘一条自己读不了的事件）。"""
+        self.make_v4_plan(slug="t2dup", nodes=self.node_block("N1", "T1, T2", final="是"))
+        self.approve_v4("t2dup")
+        message = self.record_v4("T2", "T2", slug="t2dup", operation_id="rv-N1-8", expected=1)["error"]
+        self.assertIn("重复的任务 ID：T2", message)
+        self.assertFalse((self.root / ".workflow/t2dup/events.jsonl").exists())
+        self.assertEqual(workflow.load_plan(str(self.root), "t2dup").tasks[1].status, "pending")
+
+    def test_two_state_prewrite_selfcheck_blocks_unreadable_event(self):
+        """M1 防线：要 append 的事件先按 read_events 同一套判据自校验，不合法不落盘。"""
+        start = {"schema": 1, "id": "s", "type": "start", "time": "2026-10-15T10:00:00+08:00",
+                 "workflow": "v4", "cycle": 1,
+                 "data": {"legacy_closed": False, "legacy_close": None}}
+        bad = {"schema": 1, "id": "b", "type": "implemented", "time": "2026-10-15T10:00:00+08:00",
+               "workflow": "v4", "cycle": 1, "data": {"tasks": ["T1", "T1"]}}
+        with self.assertRaises(workflow.WorkflowError) as caught:
+            workflow.validate_event_batch([start], [bad], "v4")
+        self.assertIn("未通过结构自校验", str(caught.exception))
+        self.assertIn("已实现事件缺少任务清单", str(caught.exception))
+        with self.assertRaises(workflow.WorkflowError):
+            workflow.validate_event_batch([], [], "v4")   # 空集合读校验同样拒绝
+
+    def test_two_state_legacy_plan_rejects_v4_only_parameters(self):
+        """M2：格式 ≤3 上给 --evidence/--operation-id 必须明确拒绝，不得静默忽略。"""
+        self.make_v4_plan(slug="v3rec", version=3)
+        self.approve_v4("v3rec")
+        message = self.cli("record", "v3rec", "T1", "--commits", "HEAD..HEAD",
+                           "--note", "fixture 空范围豁免", "--evidence", "我以为是格式 4",
+                           "--operation-id", "rv-N1-1", expected=1)["error"]
+        self.assertIn("--evidence", message)
+        self.assertIn("--operation-id", message)
+        self.assertIn("格式 3", message)
+        self.assertEqual(workflow.load_plan(str(self.root), "v3rec").tasks[0].status, "pending")
+        # 旧输入空间照旧：不带新参数仍按 ≤3 语义记账
+        result = self.cli("record", "v3rec", "T1", "--commits", "HEAD..HEAD", "--note", "fixture 空范围豁免")
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(self.events("v3rec"), [])
 
     def test_two_state_record_writes_event_then_status_and_ledger(self):
         self.make_v4_plan(slug="t2", nodes=self.node_block("N1", "T1, T2", final="是"))
@@ -1697,8 +1764,8 @@ class WorkflowCLI(unittest.TestCase):
         first = self.record_v4("T1", slug="t2")
         events, plan_text = self.events("t2"), self.plan("t2").read_text()
         ledger = (self.root / ".workflow/t2/ledger.md").read_text()
-        # 同 ID＋相同请求 → 幂等重放：返回原结果，计划、事件与账本均不重复
-        self.assertEqual(self.record_v4("T1", slug="t2"), first)
+        # 同 ID＋相同请求 → 幂等重放：原结果逐字段相同＋回放提示；计划、事件与账本均不重复
+        self.assert_replay_matches(self.record_v4("T1", slug="t2"), first)
         self.assertEqual(self.events("t2"), events)
         self.assertEqual(self.plan("t2").read_text(), plan_text)
         self.assertEqual((self.root / ".workflow/t2/ledger.md").read_text(), ledger)
@@ -1712,21 +1779,74 @@ class WorkflowCLI(unittest.TestCase):
         self.assertEqual(workflow.load_plan(str(self.root), "t2").tasks[1].status, "pending")
 
     def test_two_state_record_interrupt_after_event_recovers_projection(self):
-        """事件落盘、返回前中断的等价窗口：事件在、计划状态落后（手工回退构造）。"""
+        """真实中断残留态（事件在、状态与账本行都没写）→ 携原 ID 重放三步齐备：
+        事件不重复、状态修复、账本完成记录行补写；返回原结果（含显示文案）。"""
         self.make_v4_plan(slug="t2", nodes=self.node_block("N1", "T1, T2", final="是"))
         self.approve_v4("t2")
-        first = self.record_v4("T1", slug="t2")
-        self.rollback_status("t2")
+        shown = self.record_v4("T1", slug="t2", text=True)
+        self.assertIn("已实现（evidence 已记", shown)
+        ledger_path = self.root / ".workflow/t2/ledger.md"
+        self.interrupt_after_event("t2")
+        self.assertNotIn("| T1 | HEAD..HEAD |", ledger_path.read_text())
+        self.assertNotIn("fixture 本任务无新提交", ledger_path.read_text())
         self.assertEqual(workflow.load_plan(str(self.root), "t2").tasks[0].status, "pending")
-        # 携原 ID 重试：入口投影检查先修复，再幂等重放原结果
-        self.assertEqual(self.record_v4("T1", slug="t2"), first)
+        # 携原 ID 重试：入口投影检查先修复状态，重放再补账本行并返回原结果＋回放提示
+        replay_text = self.record_v4("T1", slug="t2", text=True)
+        self.assertTrue(replay_text.startswith(shown), replay_text)
+        self.assertIn("幂等重放", replay_text)
         self.assertEqual(workflow.load_plan(str(self.root), "t2").tasks[0].status, "implemented")
         self.assertEqual([event["type"] for event in self.events("t2")].count("implemented"), 1)
+        text = ledger_path.read_text()
+        self.assertIn("| T1 | HEAD..HEAD | 已实现（操作 rv-N1-1） |", text)
+        self.assertIn("fixture 本任务无新提交", text)
         repairs = self.repair_events("t2")
         self.assertEqual(len(repairs), 1)
         self.assertEqual(repairs[0]["data"]["entry"], "record")
         self.assertEqual(repairs[0]["data"]["repairs"],
                          [{"task": "T1", "from": "pending", "to": "implemented"}])
+        # 再次重放：账本行不重复追加
+        self.assertTrue(self.record_v4("T1", slug="t2", text=True).startswith(shown))
+        self.assertEqual(ledger_path.read_text().count("已实现（操作 rv-N1-1） |"), 1)
+
+    def test_two_state_complete_without_event_is_underivable_not_ahead(self):
+        """M5：`complete` 在 T2 没有推导来源 → 报「无法由事件重放推导」，不得误归为领先。"""
+        self.make_v4_plan(slug="t2done", nodes=self.node_block("N1", "T1, T2", final="是"))
+        self.approve_v4("t2done")
+        self.plan("t2done").write_text(
+            self.plan("t2done").read_text().replace("- **状态**：pending", "- **状态**：complete", 1))
+        message = self.cli("slice", "t2done", "T1", expected=1)["error"]
+        self.assertIn("无法由事件重放推导", message)
+        self.assertIn("T1", message)
+        self.assertNotIn("领先于事件重放推导", message)
+
+    def test_two_state_close_checks_closed_before_projection(self):
+        """M4：已关闭周期先返回 already-closed，不向关闭周期追加修复事件。"""
+        self.make_v4_plan(slug="t2closed", nodes=self.node_block("N1", "T1, T2", final="是"))
+        self.plan("t2closed").write_text(
+            self.plan("t2closed").read_text().replace("- **状态**：pending", "- **状态**：complete"))
+        with (self.root / ".workflow/t2closed/ledger.md").open("a") as fh:
+            fh.write("\n## 收尾\n| 时间 | 完成 | 指纹 | 下一步 |\n|---|---|---|---|\n"
+                     "| 2026-01-01 12:00 | 2/2 | 0123456789abcdef | — |\n")
+        result = self.cli("close", "t2closed")
+        self.assertTrue(result["already_closed"])
+        self.assertFalse((self.root / ".workflow/t2closed/events.jsonl").exists())
+
+    def test_two_state_event_referencing_unknown_task_is_refused_with_identity(self):
+        """M6：事件引用计划里没有的任务 → 拒绝并给出事件 ID 与任务 ID（T3/T5 再放宽）。"""
+        self.make_v4_plan(slug="t2ghost", nodes=self.node_block("N1", "T1, T2", final="是"))
+        self.approve_v4("t2ghost")
+        self.record_v4("T1", slug="t2ghost")
+        event_id = self.implemented_events("t2ghost")[0]["id"]
+        rewritten = []
+        for event in self.events("t2ghost"):
+            if event["type"] == "implemented":
+                event["data"]["tasks"] = ["T9"]
+            rewritten.append(event)
+        (self.root / ".workflow/t2ghost/events.jsonl").write_text(
+            "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in rewritten))
+        message = self.cli("slice", "t2ghost", "T2", expected=1)["error"]
+        self.assertIn(event_id, message)
+        self.assertIn("T9", message)
 
     def test_two_state_projection_repair_on_entries_and_missing_event_refused(self):
         self.make_v4_plan(slug="t2", nodes=self.node_block("N1", "T1, T2", final="是"))
@@ -1807,7 +1927,7 @@ class WorkflowCLI(unittest.TestCase):
         self.assertIn("| T1 | HEAD..HEAD |", ledger)
         self.assertIn("| T2 | HEAD..HEAD |", ledger)
         counts = len(self.events("t2b"))
-        self.assertEqual(self.record_v4("T2", "T1", slug="t2b"), first)   # 集合一致即同请求
+        self.assert_replay_matches(self.record_v4("T2", "T1", slug="t2b"), first)   # 集合一致即同请求
         self.assertEqual(len(self.events("t2b")), counts)
 
     def test_two_state_record_refuses_cleanly_without_status_line(self):
