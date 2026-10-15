@@ -3134,12 +3134,44 @@ class WorkflowCLI(unittest.TestCase):
         self.assertEqual(self.phase_events("t6bad"), [])
         self.assertEqual(len(self.node_review_events("t6bad")), 3)
 
+    def test_six_new_phase_requires_round_cap(self):
+        """未封顶（round_count 0/1）不得开新阶段；用尽两轮后合规开启通过。"""
+        self.t6_plan(slug="t6gate0")
+        first = self.t5_review_n1(slug="t6gate0", operation_id="rv-N1-1")   # 首审：0 轮用尽
+        lineage = first["lineage"]
+        self.assertEqual(workflow.round_count(self.events("t6gate0"), lineage, 1), 0)
+        message = self.new_phase_v4(slug="t6gate0", confirmation="rv-N1-1",
+                                    operation_id="np-N1-1", expected=1)["error"]
+        self.assertIn("未到封顶", message)
+        self.assertIn("继续常规修复轮次", message)
+        self.assertEqual(self.phase_events("t6gate0"), [])
+        # 第 1 轮已用（round_count 1）仍不得开新阶段
+        second = self.review_v4("N1", slug="t6gate0", operation_id="rv-N1-2", recheck="rv-N1-1")
+        self.assertEqual(workflow.round_count(self.events("t6gate0"), lineage, 1), 1)
+        message = self.new_phase_v4(slug="t6gate0", confirmation="rv-N1-2",
+                                    operation_id="np-N1-2", expected=1)["error"]
+        self.assertIn("未到封顶", message)
+        self.assertIn("只用了 1 轮", message)
+        self.assertEqual(self.phase_events("t6gate0"), [])
+        self.assertEqual(second["rounds"], 1)
+        # 第 2 轮用尽（round_count 2）→ 门槛通过，合规开启
+        self.review_v4("N1", slug="t6gate0", operation_id="rv-N1-3", recheck="rv-N1-1")
+        opened = self.new_phase_v4(slug="t6gate0", confirmation="rv-N1-3",
+                                   operation_id="np-N1-3")
+        self.assertEqual((opened["previous_phase"], opened["phase"]), (1, 2))
+        self.assertEqual(len(self.phase_events("t6gate0")), 1)
+
     def test_six_new_phase_phase_linkage_reuse_and_sequence(self):
         """阶段衔接：确认所载阶段≠当前、同一确认重复使用、重放序列不连续都拒绝。"""
         self.t6_plan(slug="t6link")
         self.t6_capped(slug="t6link")
         opened = self.new_phase_v4(slug="t6link", confirmation="rv-N1-3", operation_id="np-N1-1")
         self.assertEqual((opened["previous_phase"], opened["phase"]), (1, 2))
+        # 阶段 2 内重新送审并再次用尽两轮（新阶段从首审级重计）
+        self.review_v4("N1", slug="t6link", operation_id="rv-N1-5")
+        self.review_v4("N1", slug="t6link", operation_id="rv-N1-6", recheck="rv-N1-5")
+        self.review_v4("N1", slug="t6link", operation_id="rv-N1-7", recheck="rv-N1-5")
+        self.assertEqual(workflow.round_count(self.events("t6link"), opened["lineage"], 2), 2)
         # 同一确认记录换新操作 ID 再用 → 拒绝（一次性，不得重复重置预算）
         message = self.new_phase_v4(slug="t6link", confirmation="rv-N1-3", operation_id="np-N1-2",
                                     expected=1)["error"]
@@ -3149,12 +3181,11 @@ class WorkflowCLI(unittest.TestCase):
         message = self.new_phase_v4(slug="t6link", confirmation="rv-N1-1", operation_id="np-N1-3",
                                     expected=1)["error"]
         self.assertIn("阶段", message)
-        # 阶段 2 内的新记录可作下一次新阶段的确认（阶段 2 → 3）
-        second = self.review_v4("N1", slug="t6link", operation_id="rv-N1-5")
-        self.assertEqual((second["phase"], second["rounds"]), (2, 0))
+        # 阶段 2 内的新记录可作下一次新阶段的确认（阶段 2 → 3）；总账逐段累计
         third = self.new_phase_v4(slug="t6link", confirmation="rv-N1-5", operation_id="np-N1-4")
         self.assertEqual((third["previous_phase"], third["phase"]), (2, 3))
-        self.assertEqual(third["total_rounds"], 2)
+        self.assertEqual([item["rounds"] for item in third["ledger"]], [2, 2, 0])
+        self.assertEqual(third["total_rounds"], 4)
         self.assertEqual(len(self.phase_events("t6link")), 2)
         # 事件重放的阶段序列必须连续：打断序列（1→2 改记 3→4）后拒绝
         path = self.root / ".workflow/t6link/events.jsonl"
@@ -3290,6 +3321,10 @@ class WorkflowCLI(unittest.TestCase):
         self.assertEqual(payload["路径"], ".workflow/t6rep/reports/confirm.md")
         self.assertEqual(payload["摘要"], hashlib.sha256(report.read_bytes()).hexdigest()[:16])
         self.assertEqual(result["confirmation"], payload)
+        # 阶段 2 内重新送审并把新阶段的两轮也用尽（开新阶段须已封顶）
+        self.review_v4("N1", slug="t6rep", operation_id="rv-N1-5")
+        self.review_v4("N1", slug="t6rep", operation_id="rv-N1-6", recheck="rv-N1-5")
+        self.review_v4("N1", slug="t6rep", operation_id="rv-N1-7", recheck="rv-N1-5")
         # 同一报告（路径＋摘要）换新操作 ID 再用 → 拒绝（一次性；全路径与简写归一后同身份）
         message = self.new_phase_v4(slug="t6rep",
                                     confirmation=".workflow/t6rep/reports/confirm.md",

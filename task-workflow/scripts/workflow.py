@@ -5499,7 +5499,10 @@ def review_new_phase(args, root, slug, plan):
     ③ 所确认版本 `<A>..<B>`：A、B 均为真实提交、A 为 B 的祖先、B 在当前 HEAD 历史里，
        且其后该谱系范围（已审文件集）无未纳入确认的新变更；
     ④ 阶段衔接：新阶段号＝该谱系当前阶段＋1（引擎推导并写入事件）、
-       既往 `review_phase` 序列连续（1..k）。
+       既往 `review_phase` 序列连续（1..k）；
+    ⑤ 已封顶：该谱系×当前阶段的 `round_count` 必须已用尽（≥ `FIX_ROUND_LIMIT`）
+       ——新阶段是**封顶后**的恢复路径，未到封顶时继续常规修复轮次（防借分段
+       开阶段无限重置预算，与 D-06 同旨）。
 
     写序＝先事件（`review_phase`）后状态：新阶段＝未验收，成员任务按事件重放写回
     「已实现」（不退回待实现）。请求摘要含 basis/confirmation/confirmed-commit，
@@ -5587,6 +5590,19 @@ def review_new_phase(args, root, slug, plan):
             "——阶段衔接不符，拒绝开启新阶段（先人工裁定或修复事件文件）。"
         )
     new_phase = phase + 1
+
+    # ⑤ 已封顶门槛：`review --new-phase` 是**封顶后**的合法恢复路径（设计原文），
+    # 该谱系×当前阶段的轮次必须已用尽——否则继续常规修复轮次，或先完成根因/方案
+    # 分析使轮次用尽；不设这道门就能借分段开阶段无限重置预算（与 D-06「不得换
+    # 操作 ID 重复重置预算」同旨）。
+    used = round_count(events, lineage, phase)
+    if used < FIX_ROUND_LIMIT:
+        raise WorkflowError(
+            f"未到封顶：`review --new-phase` 是**封顶后**的恢复路径，而谱系 {lineage} 的"
+            f"审查阶段 {phase} 只用了 {used} 轮（上限 {FIX_ROUND_LIMIT} 轮）——"
+            "继续常规修复轮次（修复后送 `review`／`--recheck`），或先完成根因/方案分析、"
+            "待轮次用尽后再带独立确认记录开启新阶段（不得借分段开阶段重置修复预算）。"
+        )
 
     # ① 确认引用：先记录形态（操作 ID），再报告形态；两者都不命中即引用不存在。
     prior = prior_confirmations(events, lineage)
@@ -6326,7 +6342,7 @@ def build_parser():
     s.add_argument(
         "--new-phase",
         action="store_true",
-        help="封顶恢复：开启新审查阶段（两轮用尽后的唯一恢复路径；须带 --basis/"
+        help="封顶恢复：开启新审查阶段（两轮修复用尽后的唯一恢复路径；须带 --basis/"
              "--confirmation/--confirmed-commit，与普通 review 参数互斥）",
     )
     s.add_argument(
