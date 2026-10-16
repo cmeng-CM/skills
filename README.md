@@ -1,6 +1,6 @@
 # skills
 
-skill 集合仓库。每个 skill 以 `SKILL.md`（prompt-as-code）为主体、各自自包含，skill 之间无共享代码。写 skill 遵循 [`模板.md`](模板.md) 的四段式规范。
+skill 集合仓库。每个 skill 以 `SKILL.md`（prompt-as-code）为主体、各自自包含，skill 之间无共享代码。仓库维护约定见 [`AGENTS.md`](AGENTS.md)，skill 编写模板见 [`模板.md`](模板.md)。
 
 Delivery 的五项独立能力与编排 skill 统一位于 [`delivery/`](delivery/README.md)，安装名称仍为 `delivery-*`。该目录保存源码；任务产物使用项目内 `.delivery/日期-主题/`。例如 `bash install-skill.sh delivery/delivery-plan`。
 
@@ -99,4 +99,4 @@ skill list
 
 ### 关于"全局命令"的取舍
 
-`skill` 函数定义在 `~/.zshrc` 里，仅 zsh 交互式 shell 可用；若将来要给团队分发、或想在 bash / 脚本 / 非交互环境也能调，可把这段函数改写成一个带 `#!/usr/bin/env bash` 的 `skill.sh`，再软链到 `~/.local/bin/skill`——逻辑一行不用改，只是换个"住址"。详见 [`CLAUDE.md`](CLAUDE.md)。
+`skill` 函数定义在 `~/.zshrc` 里，仅 zsh 交互式 shell 可用；若将来要给团队分发、或想在 bash / 脚本 / 非交互环境也能调，需要另行适配可执行脚本，其中的 zsh 专用语法也要调整。安装脚本的维护注意事项见 [`AGENTS.md`](AGENTS.md)。
