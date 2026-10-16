@@ -48,10 +48,12 @@ class ExternalSeatbeltTests(unittest.TestCase):
   (self.state/'config.toml').write_text('model="test"')
   self.run=self.root/'run';self.run.mkdir()
  def tearDown(self):self.temp.cleanup()
- def fake_server(self,behavior,before_response=False,mcp_inventory=None):
+ def fake_server(self,behavior,before_response=False,mcp_inventory=None,skill_catalog=None):
   script=SERVER.replace('PYTHON',sys.executable).replace('BEHAVIOR',behavior)
   if mcp_inventory is not None:
    script=script.replace("result={'data':[]}", 'result='+repr(mcp_inventory))
+  if skill_catalog is not None:
+   script=script.replace(" elif method=='thread/start':", " elif method=='skills/list':result="+repr(skill_catalog)+"\n elif method=='thread/start':")
   if before_response:
    acknowledgement="  print(json.dumps({'id':identity,'result':{'turn':{'id':'unit-turn','status':'inProgress'}}}),flush=True)"
    script=script.replace(acknowledgement+'\n  '+behavior,'  '+behavior+'\n'+acknowledgement)
@@ -248,6 +250,40 @@ class ExternalSeatbeltTests(unittest.TestCase):
   self.assertEqual('initialized',value['status']);self.assertFalse(value['model_turn_started'])
   requests=[json.loads(v) for v in (self.run/'requests.jsonl').read_text().splitlines()]
   self.assertFalse(any(v.get('method')=='turn/start' for v in requests))
+ def natural_catalog(self):
+  package=self.workspace/'.agents/skills/delivery-implement';package.mkdir(parents=True)
+  entry=package/'SKILL.md';entry.write_text('frozen professional body')
+  policy=package/'agents/openai.yaml';policy.parent.mkdir();policy.write_text('policy:\n  allow_implicit_invocation: true\n')
+  import hashlib
+  expected={'delivery-implement':{'path':str(entry.resolve()),'skill_sha256':hashlib.sha256(entry.read_bytes()).hexdigest(),'policy_path':str(policy.resolve()),'policy_sha256':hashlib.sha256(policy.read_bytes()).hexdigest(),'implicit_policy':'true'}}
+  return expected,{'data':[{'cwd':str(self.workspace.resolve()),'skills':[{'name':'delivery-implement','description':'Professional purpose','scope':'repo','path':str(entry.resolve()),'enabled':True}],'errors':[]}]}
+ def test_natural_catalog_audited_before_model_and_never_writes_user_config(self):
+  expected,catalog=self.natural_catalog()
+  value=S.execute(self.fake_server(COMPLETE,skill_catalog=catalog),[],self.workspace,'ordinary public request',{},self.run,5,expected_skills=expected)
+  self.assertEqual('executed',value['status']);self.assertTrue(value['skill_catalog_audit']['passed'])
+  requests=[json.loads(line) for line in (self.run/'requests.jsonl').read_text().splitlines()]
+  methods=[request.get('method') for request in requests]
+  self.assertLess(methods.index('skills/list'),methods.index('turn/start'))
+  self.assertNotIn('skills/config/write',methods)
+  turn=next(request['params'] for request in requests if request.get('method')=='turn/start')
+  self.assertEqual([{'type':'text','text':'ordinary public request','text_elements':[]}],turn['input'])
+  override=next(arg for arg in value['argv'] if arg.startswith('skills.config='))
+  self.assertIn('name="delivery-implement", enabled=false',override)
+  self.assertIn('skills.include_instructions=true',value['argv'])
+  self.assertEqual(catalog,json.loads((self.run/'skill-catalog.json').read_text()))
+ def test_missing_frozen_catalog_blocks_turn_and_preserves_audit(self):
+  expected,catalog=self.natural_catalog();catalog['data'][0]['skills']=[]
+  value=S.execute(self.fake_server(COMPLETE,skill_catalog=catalog),[],self.workspace,'ordinary request',{},self.run,5,expected_skills=expected)
+  self.assertEqual('execution-failed',value['status']);self.assertFalse(value['skill_catalog_audit']['passed'])
+  requests=[json.loads(line) for line in (self.run/'requests.jsonl').read_text().splitlines()]
+  self.assertFalse(any(item.get('method')=='turn/start' for item in requests))
+  self.assertTrue((self.run/'skill-catalog-audit.json').is_file())
+ def test_natural_startup_only_includes_catalog_without_model_turn(self):
+  expected,catalog=self.natural_catalog()
+  value=S.execute(self.fake_server(COMPLETE,skill_catalog=catalog),[],self.workspace,'never sent',{},self.run,5,startup_only=True,expected_skills=expected)
+  self.assertEqual('initialized',value['status']);self.assertTrue(value['skill_catalog_audit']['passed'])
+  methods=[json.loads(line).get('method') for line in (self.run/'requests.jsonl').read_text().splitlines()]
+  self.assertIn('skills/list',methods);self.assertNotIn('turn/start',methods)
  def test_normal_zsh_temp_environment_reaches_child_without_replacing_user_homes(self):
   home_before=os.environ.get('HOME');codex_before=os.environ.get('CODEX_HOME')
   behavior=COMPLETE.replace("'Reviewed real artifacts'", "json.dumps({'TMPDIR':os.environ.get('TMPDIR'),'TMPPREFIX':os.environ.get('TMPPREFIX'),'HOME':os.environ.get('HOME'),'CODEX_HOME':os.environ.get('CODEX_HOME')})")

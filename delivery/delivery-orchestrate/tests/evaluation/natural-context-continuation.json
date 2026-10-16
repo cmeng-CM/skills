@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "id": "natural-context-continuation",
+  "activation": "natural",
+  "mode": "resume",
+  "skills": [
+    "delivery-design",
+    "delivery-plan",
+    "delivery-implement",
+    "delivery-review",
+    "delivery-verify",
+    "delivery-orchestrate",
+    "delivery-fix"
+  ],
+  "fixture": "fixtures/natural-continuation",
+  "git": false,
+  "prompt": "请先核对 progress.md 与当前文件的真实状态，接着完成上次已经授权的 --uppercase 局部改动并检查实际命令。不顺便修其他问题，不提交；如记录与代码不符，以实际检查说明差异。",
+  "requirements": [],
+  "allowed_changes": [
+    "app.py、相关测试、progress.md 和本次工作的必要说明"
+  ]
+}

@@ -34,6 +34,33 @@ macOS 适配使用 `sandbox-exec` 的 allow-default 加 deny-file-read 规则包
 
 一个候选一个新的 output，baseline 的 skills-root 指向冻结 baseline，legacy 指向冻结的 task-workflow 上级目录，并选 `ledger-legacy-fullflow.json`。standalone 五个 manifest 各只复制一包、无 Git、无 .workflow；fullflow 建本地 Git 以观察提交行为，仓库无 remote。
 
+## 自然发现输入
+
+案例新增可选轴 `activation`，取值为 `explicit`（缺省，保留以上原显式行为）或 `natural`。两种方式与 standalone/fullflow/resume/negative 模式分别记录。自然案例的 `skills` 必须恰好包含七个 Delivery 包，全部冻结到普通 fixture 的 `.agents/skills`；该清单仅供评测器，不拼进模型的用户提示。没有增加生产路由器、强制加载正确技能或固定阶段顺序。
+
+自然用户提示、requirements、allowed_changes 不得点名技能或写技能源路径，不能含私有预期。运行器会拒绝已知包名和技能路径提示；这只是有限字符串检查，不能自动识别所有答案暗示，维护者与独立评审仍需检查完整公开输入和 fixture。评测环境说明只界定工作区、外部源码/私有材料、提交权限及独立上下文接口。自然模式拒绝所有 `--prompt-file` 覆盖；上下文续接使用独立公开案例和正常的当前项目文件，不把显式恢复提示套回自然案例。
+
+现有代表输入：
+
+| 案例 | 公开任务 |
+| --- | --- |
+| [natural-small-development.json](natural-small-development.json) | 命令增加 uppercase 可选参数 |
+| [natural-mechanical-maintenance.json](natural-mechanical-maintenance.json) | 仅修正文档的一处拼写 |
+| [natural-discussion-only.json](natural-discussion-only.json) | 仅讨论多语言方案，不写文件 |
+| [natural-review-only.json](natural-review-only.json) | 只读核对现有命令与要求，不写报告文件 |
+| [natural-complex-delivery.json](natural-complex-delivery.json) | 有共享输入、业务依赖、独立复核和恢复要求的账本交付 |
+| [natural-context-continuation.json](natural-context-continuation.json) | 核对普通进度说明和代码，续完已授权局部修改 |
+
+准备命令只需把 `--case` 换成相应自然案例，`--skills-root delivery` 不变。自然运行必须显式选择 `--sandbox-strategy external-seatbelt --required-isolation filesystem`，并照常提供 `--private-dir` / `--deny-read-dir`；不支持用 exec 或仅目录分离绕过原生 catalog 审计。当前实现仅供给七包，没有为可选 delve 新增多根来源解析。
+
+在任何模型 turn 前，运行器核对 prepare 留存的完整技能快照、冻结元数据策略、本机导出的 schema 和实际 `skills/list`。本组 `agents/openai.yaml` 的隐式策略接受 `true` 或缺省，`false`、重复字段和不支持的策略语法拒绝。检查器使用明确受限的 YAML 拼写检查，不是通用 YAML 解析器；现有界面与依赖字段保留。原生 catalog 的 enabled 不代表 allow_implicit_invocation，故两者分开核对，并将内容摘要绑定到本次审计。
+
+为避免本机同名安装成为另一份输入，app-server 仅在本进程的 `-c skills.config=...` 中保留实际用户配置已有规则，再依次禁用七包名称并启用七个冻结精确路径；同时显式 `skills.include_instructions=true`。不调用 `skills/config/write`，不修改真实配置文件。当前适配拒绝自定义 provider/profile；本机所核对源码的 skill 规则只取用户与启动覆盖层，项目层不参与此规则集。仍须由实际启动目录核实规则生效，未知客户端或配置层语义不能凭声明放行。
+
+实际 catalog 必须恰有请求的 cwd、无加载 errors，七个冻结包全部在精确路径 enabled，技能正文/策略摘要与启动前一致；同名外部副本若仍 enabled，拒绝启动模型。其余外部 catalog 条目如实留存，不能宣称整台机器只存在七个技能。`skill-catalog.json` 与 `skill-catalog-audit.json` 保留目录和判断，`requests.jsonl` 留真实请求及启动参数；缺包、非法响应、源漂移和目录异常都不能算自然触发成绩。
+
+原 OS、历史元数据、MCP 空目录、保护文件及根生命周期门禁继续执行，不为自然运行放宽。可用 `external_seatbelt.execute(..., startup_only=True, expected_skills=...)` 检查同一 catalog 和空库而不发送模型 turn；其 initialized 仍只是设施证明。实际使用了哪份技能、是否选择合理、是否保持只读与完成范围，必须结合完整工具轨迹和真实产物独立判断；目录可见、模型自述或执行退出 0 都不能代替。
+
 ## 恢复与对照
 
 完整流程用 `ledger-fullflow.json`。中断恢复使用相同案例先 `run --prompt-file .../resume-stage-one.txt`，再从同一个 output `run --prompt-file .../resume-stage-two.txt`。两次都是新的真实 agent 上下文；前后输入、文件、输出和时间分别留存。超时或中断不自动重试；后续恢复必须先检查磁盘和未知副作用，不把盲重跑当恢复。

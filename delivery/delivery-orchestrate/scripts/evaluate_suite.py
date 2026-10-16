@@ -24,6 +24,60 @@ SCHEMA = 1
 EVALUATOR_DIRS = ('.evaluation-state', '.evaluation-log', '.evaluation-tmp', '.evaluation-output')
 SKILLS = ('delivery-design', 'delivery-plan', 'delivery-implement', 'delivery-review', 'delivery-verify', 'delivery-orchestrate')
 PROFESSIONAL_SKILLS = tuple(name for name in SKILLS if name != 'delivery-orchestrate') + ('delivery-fix',)
+NATURAL_SKILLS = SKILLS + ('delivery-fix',)
+
+
+def activation(case):
+    value = case.get('activation', 'explicit')
+    if value not in ('explicit', 'natural'):
+        raise ValueError('activation must be explicit or natural')
+    return value
+
+
+def validate_natural_input(case, prompt=None):
+    if activation(case) != 'natural':
+        return
+    skills = case.get('skills')
+    if not isinstance(skills, list) or not all(isinstance(name, str) for name in skills) or len(skills) != len(NATURAL_SKILLS) or set(skills) != set(NATURAL_SKILLS):
+        raise ValueError('natural activation requires exactly the seven frozen delivery skills')
+    if not isinstance(case.get('prompt'), str) or not case['prompt'].strip():
+        raise ValueError('natural activation requires a nonempty public prompt')
+    for field in ('requirements', 'allowed_changes'):
+        if not isinstance(case.get(field, []), list) or not all(isinstance(item, str) for item in case.get(field, [])):
+            raise ValueError('natural public ' + field + ' must be an array of strings')
+    public = json.dumps([case.get('prompt') if prompt is None else prompt,
+                         case.get('requirements', []), case.get('allowed_changes', [])], ensure_ascii=False)
+    if any(name in public.lower() for name in (*NATURAL_SKILLS, 'task-workflow')) or '.agents/skills' in public or 'SKILL.md' in public:
+        raise ValueError('natural public input must not name skills or their source paths')
+
+
+def natural_skill_sources(skill_root, skills):
+    specification = importlib.util.spec_from_file_location('delivery_policy_check', Path(__file__).with_name('check_suite.py'))
+    checker = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(checker)
+    result = {}
+    for name in skills:
+        entry = Path(skill_root) / name / 'SKILL.md'
+        policy = entry.parent / 'agents' / 'openai.yaml'
+        if entry.is_symlink() or policy.is_symlink():
+            raise ValueError('natural skill metadata must be regular frozen files')
+        result[name] = {'path': str(entry.resolve()), 'skill_sha256': digest(entry),
+                        'policy_path': str(policy.resolve()), 'policy_sha256': digest(policy) if policy.exists() else None,
+                        'implicit_policy': checker.implicit_policy(policy)}
+    return result
+
+
+def build_prompt(case, prompt):
+    validate_natural_input(case, prompt)
+    environment = 'Evaluator environment: the pre-existing .evaluation-state/, .evaluation-log/, .evaluation-tmp/, .evaluation-output/ directories are evaluator-owned derived execution facilities. They may be explicitly excluded from product change monitoring and commits by these exact paths; do not broadly exclude business code, requirements, professional artifacts or unknown configuration.\nThis is an isolated evaluation fixture. Work only within the current workspace. '
+    if activation(case) == 'natural':
+        public = environment + 'Do not read skill source contents outside the current workspace, external repositories, evaluation metadata or private scoring materials. Do not push or contact other people.\n\n' + prompt
+    else:
+        paths = '\n'.join(f"- .agents/skills/{name}/SKILL.md" for name in case['skills'])
+        public = environment + 'Read the explicitly supplied frozen skill(s):\n' + paths + '\nDo not search installed skills, external repositories, evaluation metadata or private scoring materials. Do not push or contact other people. Standalone requests must not invoke other skills or auto-start a workflow.\n\n' + prompt
+    public += '\n\nPublic acceptance requirements:\n' + '\n'.join('- ' + str(item) for item in case.get('requirements', []))
+    public += '\nAllowed changes:\n' + '\n'.join('- ' + str(item) for item in case.get('allowed_changes', []))
+    return public
 
 
 def digest(path):
@@ -142,10 +196,14 @@ def prepare(case_path, skills_root, output, variant):
     if case.get('mode') not in ('standalone', 'fullflow', 'resume', 'negative'):
         raise ValueError('unsupported mode')
     skills = case.get('skills', [])
-    if case['mode'] == 'standalone' and (len(skills) != 1 or skills[0] not in PROFESSIONAL_SKILLS):
+    selected_activation = activation(case)
+    validate_natural_input(case)
+    if selected_activation == 'explicit' and case['mode'] == 'standalone' and (len(skills) != 1 or skills[0] not in PROFESSIONAL_SKILLS):
         raise ValueError('standalone requires exactly one professional skill')
     if not skills or any(s not in (*SKILLS, *PROFESSIONAL_SKILLS, 'task-workflow') for s in skills):
         raise ValueError('unsupported skill selection')
+    if selected_activation == 'natural':
+        natural_skill_sources(skills_root, skills)
     output = Path(output).resolve()
     if output.exists():
         raise ValueError('output already exists; use a fresh evaluation directory')
@@ -170,11 +228,13 @@ def prepare(case_path, skills_root, output, variant):
         (workspace / '.git' / 'info' / 'exclude').write_text(''.join('/' + name + '/\n' for name in EVALUATOR_DIRS))
     if case['mode'] == 'standalone' and ((workspace / '.git').exists() or (workspace / '.workflow').exists()):
         raise ValueError('standalone fixture must have no Git or .workflow')
-    public = {k: case[k] for k in ('schema_version', 'id', 'mode', 'skills', 'prompt', 'requirements', 'allowed_changes') if k in case}
+    if selected_activation == 'natural':
+        natural_skill_sources(skill_root, skills)
+    public = {k: case[k] for k in ('schema_version', 'id', 'mode', 'activation', 'skills', 'prompt', 'requirements', 'allowed_changes') if k in case}
     save(output / 'case.json', public)
     save(output / 'sources.json', sources)
     save(output / 'before.json', inventory(workspace, EVALUATOR_DIRS))
-    write_result(output, {'schema_version': SCHEMA, 'id': str(uuid.uuid4()), 'case_id': case['id'], 'variant': variant, 'status': 'prepared', 'workspace': str(workspace), 'case_sha256': digest(case_path), 'source_policy': 'frozen professional inputs; maintenance tests excluded', 'evaluator_derived_directories': list(EVALUATOR_DIRS), 'product_snapshot_excludes': list(EVALUATOR_DIRS), 'runs': []})
+    write_result(output, {'schema_version': SCHEMA, 'id': str(uuid.uuid4()), 'case_id': case['id'], 'variant': variant, 'activation': selected_activation, 'status': 'prepared', 'workspace': str(workspace), 'case_sha256': digest(case_path), 'source_policy': 'frozen professional inputs; maintenance tests excluded', 'evaluator_derived_directories': list(EVALUATOR_DIRS), 'product_snapshot_excludes': list(EVALUATOR_DIRS), 'runs': []})
     return output
 
 
@@ -199,7 +259,7 @@ def parse_events(path):
 
 
 def markdown(result):
-    lines = ['# Agent evaluation', '', f"Case: `{result['case_id']}` · Variant: `{result['variant']}`", '', f"Execution: **{result['status']}**", '', 'Execution completion does not establish semantic acceptance. An independent review of actual artifacts is required.', '']
+    lines = ['# Agent evaluation', '', f"Case: `{result['case_id']}` · Variant: `{result['variant']}` · Activation: `{result.get('activation', 'explicit')}`", '', f"Execution: **{result['status']}**", '', 'Execution completion does not establish semantic acceptance. An independent review of actual artifacts is required.', '']
     for run in result['runs']:
         lines += [f"## {run['id']}", '', f"- State: {run['status']}", f"- Real adapter: {run['adapter']} ({run.get('cli_version', 'unavailable')})", f"- Model configuration: `{json.dumps(run.get('model_config', {}), ensure_ascii=False)}`", f"- Elapsed: {run.get('seconds', 0):.2f}s", f"- Evidence: `runs/{run['id']}/`", f"- Product snapshot exclusions: `{json.dumps(run.get('product_snapshot_excludes', []))}`", f"- Isolation: {run.get('isolation', 'not established')}", f"- Configuration policy: {run.get('config_policy', 'not established; CLI not yet started')}", f"- Temporary-file routing: `{json.dumps(run.get('temporary_environment', {}))}`", f"- CLI runtime write exceptions: `{json.dumps((run.get('external_isolation') or {}).get('policy', {}).get('exact_cli_state_write_exceptions', []))}`", f"- Reason: {run.get('reason', '')}", '']
     review = result.get('review')
@@ -231,6 +291,18 @@ def run(output, cli='codex', timeout=900, prompt_file=None, required_isolation='
     started = time.monotonic()
     executable = shutil.which(cli)
     try:
+        record['activation'] = activation(case)
+        if record['activation'] == 'natural':
+            validate_natural_input(case)
+            if prompt_file:
+                raise ValueError('natural activation rejects prompt-file overrides; prepare a separate public continuation case')
+            if sandbox_strategy != 'external-seatbelt' or required_isolation != 'filesystem':
+                raise ValueError('natural activation requires external-seatbelt and filesystem isolation with pre-turn catalog audit')
+            snapshots = load(output / 'sources.json')
+            for name in case['skills']:
+                if snapshots.get(name, {}).get('loaded_snapshot') != inventory(Path(result['workspace']) / '.agents' / 'skills' / name):
+                    raise ValueError('natural frozen skill snapshot changed since prepare: ' + name)
+            record['natural_skill_sources'] = natural_skill_sources(Path(result['workspace']) / '.agents' / 'skills', case['skills'])
         if required_isolation == 'filesystem' and not (private_dir or deny_read_dirs):
             record['status'] = 'invalid-isolation'
             record['reason'] = 'required OS deny-private isolation was not configured; agent not started'
@@ -240,7 +312,7 @@ def run(output, cli='codex', timeout=900, prompt_file=None, required_isolation='
             return record
         record['cli_path'] = executable
         record['harness_sources'] = {}
-        for source in (Path(__file__), Path(__file__).with_name('external_seatbelt.py')):
+        for source in (Path(__file__), Path(__file__).with_name('external_seatbelt.py'), Path(__file__).with_name('check_suite.py')):
             if source.is_file():
                 target = run_root / 'harness-source' / source.name
                 target.parent.mkdir(exist_ok=True)
@@ -297,15 +369,12 @@ def run(output, cli='codex', timeout=900, prompt_file=None, required_isolation='
             denied = ([private_dir] if private_dir else []) + list(deny_read_dirs)
             wrapper, external_isolation = adapter.probe_boundary(result['workspace'], denied, original_home, run_root)
             record['isolation'] = 'single inherited macOS read/write seatbelt; base + actual historical-state canaries passed; prior fixture state denied except fresh current run; exact existing installation_id write-open exception; app-server externalSandbox'
-            record['protocol'] = adapter.inspect_protocol(executable, run_root)
+            record['protocol'] = adapter.inspect_protocol(executable, run_root, require_skills=record['activation'] == 'natural')
         model_config = configured_model(original_home)
         record['model_config'] = model_config
         record['model_config_source'] = 'allowlisted actual CLI configuration; explicit command overrides' if model_config else 'CLI built-in default; actual model must be confirmed from trace before comparison'
         prompt = Path(prompt_file).read_text() if prompt_file else case['prompt']
-        skill_paths = '\n'.join(f"- .agents/skills/{name}/SKILL.md" for name in case['skills'])
-        prompt = ('Evaluator environment: the pre-existing .evaluation-state/, .evaluation-log/, .evaluation-tmp/, .evaluation-output/ directories are evaluator-owned derived execution facilities. They may be explicitly excluded from product change monitoring and commits by these exact paths; do not broadly exclude business code, requirements, professional artifacts or unknown configuration.\nThis is an isolated evaluation fixture. Work only within the current workspace. Read the explicitly supplied frozen skill(s):\n' + skill_paths + '\nDo not search installed skills, external repositories, evaluation metadata or private scoring materials. Do not push or contact other people. Standalone requests must not invoke other skills or auto-start a workflow.\n\n' + prompt)
-        prompt += '\n\nPublic acceptance requirements:\n' + '\n'.join('- ' + str(item) for item in case.get('requirements', []))
-        prompt += '\nAllowed changes:\n' + '\n'.join('- ' + str(item) for item in case.get('allowed_changes', []))
+        prompt = build_prompt(case, prompt)
         if adapter:
             interface_note = ('This app-server provides native multi_agent/spawn_agent for fresh independent contexts. '
                               'Use those native tools when independent execution is required. Do not launch another Codex CLI: '
@@ -323,14 +392,15 @@ def run(output, cli='codex', timeout=900, prompt_file=None, required_isolation='
         before = inventory(result['workspace'], EVALUATOR_DIRS)
         save(run_root / 'before.json', before)
         if adapter:
-            outcome = adapter.execute(executable, wrapper, result['workspace'], prompt, model_config, run_root, timeout)
+            options = {'expected_skills': record['natural_skill_sources']} if record['activation'] == 'natural' else {}
+            outcome = adapter.execute(executable, wrapper, result['workspace'], prompt, model_config, run_root, timeout, **options)
             protection = adapter.verify_protection(external_isolation)
             save(run_root / 'protected-files.json', protection)
             record['protected_files'] = protection
             if not protection['unchanged']:
                 outcome['status'] = 'invalid-protection'
                 outcome['reason'] = 'installation identity/auth/config contents or metadata changed; execution cannot count as valid quality evidence'
-            record.update({key: outcome[key] for key in ('status', 'reason', 'returncode', 'argv', 'sandbox_policy', 'environment_keys_changed', 'config_policy', 'actual_config_sha256', 'configured_mcp_servers_disabled', 'mcp_runtime_inventory', 'runtime_state', 'root_thread_id', 'root_turn_id', 'disabled_features', 'temporary_environment', 'startup_state_audit') if key in outcome})
+            record.update({key: outcome[key] for key in ('status', 'reason', 'returncode', 'argv', 'sandbox_policy', 'environment_keys_changed', 'config_policy', 'actual_config_sha256', 'configured_mcp_servers_disabled', 'mcp_runtime_inventory', 'runtime_state', 'root_thread_id', 'root_turn_id', 'disabled_features', 'temporary_environment', 'startup_state_audit', 'skill_catalog_audit') if key in outcome})
             record['adapter'] = 'codex-app-server-external-seatbelt'
             save(run_root / 'request.json', {'argv': outcome['argv'], 'environment_keys_changed': outcome['environment_keys_changed'], 'temporary_environment': outcome['temporary_environment'], 'model_config': model_config, 'prompt_file': 'prompt.txt', 'sandbox_policy': outcome['sandbox_policy']})
             agent_last = run_root / 'last-message.txt'
@@ -451,7 +521,7 @@ def review(output, review_path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     subs = parser.add_subparsers(dest='command', required=True)
-    prep = subs.add_parser('prepare', help='freeze one public case and exactly its declared skills')
+    prep = subs.add_parser('prepare', help='freeze one public case and exactly its declared skills; activation defaults to explicit')
     prep.add_argument('--case', required=True)
     prep.add_argument('--skills-root', required=True)
     prep.add_argument('--output', required=True)

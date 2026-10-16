@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "id": "natural-small-development",
+  "activation": "natural",
+  "mode": "standalone",
+  "skills": [
+    "delivery-design",
+    "delivery-plan",
+    "delivery-implement",
+    "delivery-review",
+    "delivery-verify",
+    "delivery-orchestrate",
+    "delivery-fix"
+  ],
+  "fixture": "fixtures/natural-cli",
+  "git": false,
+  "prompt": "请给现有命令增加可选的 --uppercase 参数：传入时整句转成大写，不传时保持原来的输出。直接完成这个局部修改并做有意义的检查；不顺便修其他问题，不提交。",
+  "requirements": [],
+  "allowed_changes": [
+    "app.py、相关测试和本次修改的必要说明"
+  ]
+}

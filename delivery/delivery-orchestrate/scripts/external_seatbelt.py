@@ -263,7 +263,7 @@ def probe_boundary(workspace, denied, state_home, run_root, sandbox_cli=None):
             inside.unlink(missing_ok=True)
 
 
-def inspect_protocol(cli, run_root):
+def inspect_protocol(cli, run_root, *, require_skills=False):
     """Derive supported protocol from the exact local CLI, not guessed flags."""
     run_root = Path(run_root)
     # The CLI exports 300+ duplicate per-method schemas. Preserve the canonical
@@ -283,6 +283,12 @@ def inspect_protocol(cli, run_root):
     branches = policy.get('oneOf', [])
     if not any(branch.get('properties', {}).get('type', {}).get('enum') == ['externalSandbox'] for branch in branches):
         raise ValueError('installed app-server schema does not support externalSandbox')
+    if require_skills:
+        for name, fields in {'SkillsListParams': ('cwds', 'forceReload'),
+                             'SkillMetadata': ('name', 'description', 'scope', 'path', 'enabled'),
+                             'SkillsListEntry': ('cwd', 'skills', 'errors')}.items():
+            if not all(field in definitions.get(name, {}).get('properties', {}) for field in fields):
+                raise ValueError('installed app-server schema lacks required natural skill catalog fields: ' + name)
     proof = {'schema_sha256': hashlib.sha256(path.read_bytes()).hexdigest(), 'policy': policy, 'source': str(path), 'command': command}
     (run_root / 'protocol.json').write_text(json.dumps(proof, ensure_ascii=False, indent=2) + '\n')
     return proof
@@ -315,7 +321,65 @@ def validate_mcp_inventory(inventory):
     return True
 
 
-def execute(cli, wrapper, workspace, prompt, model_config, run_root, timeout, *, startup_only=False):
+def natural_skill_config(actual_config, expected_skills):
+    """Session-only overrides: preserve existing rules, hide same-name host copies.
+
+    Name disables precede precise frozen-path enables, as required by the
+    installed configuration rule ordering. Never use skills/config/write.
+    """
+    skills = actual_config.get('skills', {})
+    existing = skills.get('config', []) if isinstance(skills, dict) else None
+    if not isinstance(existing, list):
+        raise ValueError('existing skills.config must be an array')
+    entries = []
+    for row in existing:
+        if not isinstance(row, dict) or set(row) not in ({'path', 'enabled'}, {'name', 'enabled'}) or type(row['enabled']) is not bool:
+            raise ValueError('existing skills.config has unsupported selectors; no silent rule loss')
+        key = 'path' if 'path' in row else 'name'
+        if not isinstance(row[key], str) or not row[key].strip():
+            raise ValueError('existing skills.config selector must be a nonempty string')
+        entries.append(dict(row))
+    entries.extend({'name': name, 'enabled': False} for name in expected_skills)
+    entries.extend({'path': item['path'], 'enabled': True} for item in expected_skills.values())
+    return '[' + ', '.join('{' + ', '.join(key + '=' + (str(value).lower() if type(value) is bool else json.dumps(value, ensure_ascii=False)) for key, value in row.items()) + '}' for row in entries) + ']'
+
+
+def audit_skill_catalog(inventory, workspace, expected_skills):
+    if not isinstance(inventory, dict) or not isinstance(inventory.get('data'), list) or len(inventory['data']) != 1:
+        raise RuntimeError('skill catalog malformed: exactly one requested cwd required')
+    entry = inventory['data'][0]
+    if not isinstance(entry, dict) or entry.get('cwd') != str(Path(workspace).resolve()) or not isinstance(entry.get('skills'), list) or not isinstance(entry.get('errors'), list):
+        raise RuntimeError('skill catalog malformed: cwd/skills/errors missing or invalid')
+    if entry['errors']:
+        raise RuntimeError('skill catalog contains load errors; natural availability not established')
+    found, external = {}, []
+    for skill in entry['skills']:
+        if not isinstance(skill, dict) or not isinstance(skill.get('name'), str) or not isinstance(skill.get('path'), str) or type(skill.get('enabled')) is not bool or not isinstance(skill.get('description'), str) or not skill['description'].strip() or skill.get('scope') not in ('repo', 'user', 'system', 'admin'):
+            raise RuntimeError('skill catalog malformed: name/description/scope/path/enabled missing or invalid')
+        name = skill['name']
+        expected = expected_skills.get(name)
+        if expected and skill['path'] == expected['path']:
+            if name in found or not skill['enabled']:
+                raise RuntimeError('frozen skill missing, duplicated or disabled: ' + name)
+            for path_key, hash_key in (('path', 'skill_sha256'), ('policy_path', 'policy_sha256')):
+                path = Path(expected[path_key])
+                observed = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+                if path.is_symlink() or observed != expected[hash_key]:
+                    raise RuntimeError('frozen skill metadata changed before turn: ' + name)
+            if expected.get('implicit_policy') not in ('true', 'default'):
+                raise RuntimeError('frozen skill does not permit implicit invocation: ' + name)
+            found[name] = dict(skill, implicit_policy=expected['implicit_policy'])
+        else:
+            external.append(skill)
+            if expected and skill['enabled']:
+                raise RuntimeError('enabled same-name skill outside frozen supply: ' + name)
+    if set(found) != set(expected_skills):
+        raise RuntimeError('skill catalog does not expose every frozen skill at its exact path')
+    return {'passed': True, 'frozen_skills': found, 'external_skills': external, 'catalog_errors': entry['errors'],
+            'limit': 'Catalog availability and frozen implicit policy only; actual source reads and routing require independent trace review. Noncompeting host catalog entries may remain visible.'}
+
+
+def execute(cli, wrapper, workspace, prompt, model_config, run_root, timeout, *, startup_only=False, expected_skills=None):
     """One fresh ephemeral app-server thread/turn. Complete raw protocol is retained."""
     run_root = Path(run_root)
     scratch = Path(workspace) / '.evaluation-tmp'
@@ -341,6 +405,9 @@ def execute(cli, wrapper, workspace, prompt, model_config, run_root, timeout, *,
         argv.extend(['-c', 'mcp_servers.' + name + '.enabled=false'])
     for key, value in model_config.items():
         argv.extend(['-c', key + '=' + json.dumps(value)])
+    if expected_skills:
+        argv.extend(['-c', 'skills.config=' + natural_skill_config(actual_config, expected_skills),
+                     '-c', 'skills.include_instructions=true'])
     outcome = {'returncode': None, 'status': 'not-run', 'argv': argv, 'environment_keys_changed': ['TMPDIR', 'TMPPREFIX'], 'sandbox_policy': {'type':'externalSandbox', 'networkAccess':'enabled'}, 'approval_policy': 'never', 'fresh_context': True, 'config_policy': 'app-server loads actual user config; model/effort explicit; actual configured MCP server names and stable apps/plugins/remote_plugin/memories/shell_snapshot features explicitly disabled; runtime inventory checked before model turn; no unsupported ignore-user-config flag'}
     outcome['temporary_environment'] = {'TMPDIR': environment['TMPDIR'], 'TMPPREFIX': environment['TMPPREFIX']}
     outcome['runtime_state'] = {'sqlite_home': str(sqlite_home), 'log_dir': str(log_dir), 'strict_config': True, 'user_home_write_exceptions': [str(state_home / 'installation_id')]}
@@ -457,6 +524,17 @@ def execute(cli, wrapper, workspace, prompt, model_config, run_root, timeout, *,
         send({'id':5,'method':'mcpServerStatus/list','params':{'threadId':thread_id}})
         outcome['mcp_runtime_inventory'] = response(5)
         validate_mcp_inventory(outcome['mcp_runtime_inventory'])
+        if expected_skills:
+            send({'id':6,'method':'skills/list','params':{'cwds':[str(Path(workspace).resolve())],'forceReload':True}})
+            catalog = response(6)
+            (run_root / 'skill-catalog.json').write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + '\n')
+            try:
+                outcome['skill_catalog_audit'] = audit_skill_catalog(catalog, workspace, expected_skills)
+            except (RuntimeError, OSError) as error:
+                outcome['skill_catalog_audit'] = {'passed':False, 'reason':str(error)}
+                raise
+            finally:
+                (run_root / 'skill-catalog-audit.json').write_text(json.dumps(outcome['skill_catalog_audit'], ensure_ascii=False, indent=2) + '\n')
         try:
             outcome['startup_state_audit'] = inspect_state_database(sqlite_home)
         except (OSError, RuntimeError, sqlite3.Error) as error:
