@@ -16,6 +16,10 @@ import subprocess
 import sys
 import tempfile
 
+# Keep one class/error identity when the CLI loads the v2 modules.
+if __name__ == "__main__":
+    sys.modules["delivery"] = sys.modules[__name__]
+
 
 class DeliveryError(Exception):
     pass
@@ -23,6 +27,9 @@ class DeliveryError(Exception):
 
 def fail(message):
     raise DeliveryError(message)
+
+
+LOADED_SOURCE_BYTES = Path(__file__).read_bytes()
 
 
 def canonical(value):
@@ -884,19 +891,54 @@ def read_json(path):
         fail(f"cannot read input JSON: {exc}")
 
 
+def render_markdown(value):
+    """Render the same result object; no second readiness calculation."""
+    lines = ["# Delivery 状态视图", ""]
+    def render(item, depth=0):
+        prefix = "  " * depth
+        if isinstance(item, dict):
+            for key, child in item.items():
+                if isinstance(child, (dict, list)) and child:
+                    lines.append(prefix + "- **" + str(key) + "**:")
+                    render(child, depth + 1)
+                else:
+                    lines.append(prefix + "- **" + str(key) + "**: " + json.dumps(child, ensure_ascii=False))
+        elif isinstance(item, list):
+            for child in item:
+                if isinstance(child, (dict, list)):
+                    lines.append(prefix + "- 条目:")
+                    render(child, depth + 1)
+                else:
+                    lines.append(prefix + "- " + str(child))
+        else:
+            lines.append(prefix + str(item))
+    render(value)
+    return "\n".join(lines)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("init", "configure", "record", "run", "status", "check", "next", "close", "reopen"):
+    for name in ("init", "configure", "record", "run", "status", "check", "next", "close", "reopen",
+                 "gate", "impact", "source-update", "resource", "attempt", "resolve-run", "source", "brief"):
         p = sub.add_parser(name)
         p.add_argument("--work", required=True)
-        if name not in ("status", "check", "next"):
+        if name not in ("status", "check", "next", "source", "brief"):
             p.add_argument("--op", required=True)
-        if name in ("configure", "record", "close"):
+        if name in ("configure", "record", "close", "gate", "impact", "source-update", "resource", "attempt", "resolve-run"):
             p.add_argument("--input", required=True)
         if name == "init":
             p.add_argument("--project", required=True)
             p.add_argument("--title", required=True)
+            p.add_argument("--contract-version", type=int, choices=(1, 2), default=1)
+        if name in ("status", "check", "next", "source", "brief"):
+            p.add_argument("--format", choices=("json", "markdown"), default="json")
+        if name == "source":
+            p.add_argument("--restore")
+            p.add_argument("--destination")
+        if name == "brief":
+            p.add_argument("--kind", choices=("implementation", "review", "verification"), required=True)
+            p.add_argument("--target", required=True)
         if name == "run":
             p.add_argument("--acceptance", required=True)
             p.add_argument("--actor", required=True)
@@ -906,18 +948,49 @@ def main(argv=None):
             p.add_argument("--reason", required=True)
     args = parser.parse_args(argv)
     try:
-        engine = Engine(args.work)
+        contract = args.contract_version if args.command == "init" else None
+        journal = Path(args.work) / "runtime" / "journal.json"
+        if journal.exists():
+            stored = read_json(journal)
+            existing_contract = stored["events"][0]["payload"].get("contract_version", 1)
+            if contract is not None and contract != existing_contract:
+                fail("init contract does not match existing work")
+            contract = existing_contract
+        if contract not in (1, 2):
+            fail("unsupported work contract or work not initialized")
+        if contract == 2:
+            # Adding scripts locally is sufficient for the standalone CLI; tests
+            # importing this file by spec retain the original v1 class identity.
+            scripts = str(Path(__file__).resolve().parent)
+            if scripts not in sys.path:
+                sys.path.insert(0, scripts)
+            from delivery_v2 import EngineV2
+            engine = EngineV2(args.work)
+        else:
+            engine = Engine(args.work)
+        extras = {"gate", "impact", "source-update", "resource", "attempt", "resolve-run", "source", "brief"}
+        if args.command in extras and contract != 2:
+            fail("command requires explicit v2 work; v1 is not silently upgraded")
         if args.command == "init":
             result = engine.init(args.project, args.title, args.op)
-        elif args.command in ("configure", "record", "close"):
-            result = getattr(engine, args.command)(read_json(args.input), args.op)
+        elif args.command in ("configure", "record", "close", "gate", "impact", "source-update", "resource", "attempt", "resolve-run"):
+            result = getattr(engine, args.command.replace("-", "_"))(read_json(args.input), args.op)
         elif args.command == "run":
             result = engine.run(args.acceptance, {"id": args.actor, "context": args.context}, args.timeout, args.op)
         elif args.command == "reopen":
             result = engine.reopen(args.reason, args.op)
+        elif args.command == "source":
+            result = engine.source(args.restore, args.destination)
+        elif args.command == "brief":
+            result = engine.brief(args.kind, args.target)
         else:
             result = engine.inspect(args.command)
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+            if contract == 1:
+                result["contract_version"] = 1
+        if getattr(args, "format", "json") == "markdown":
+            print(render_markdown(result))
+        else:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
     except (DeliveryError, OSError, ValueError, KeyError, TypeError) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)

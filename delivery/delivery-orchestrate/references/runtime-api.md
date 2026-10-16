@@ -1,5 +1,7 @@
 # 本地编排状态与门禁 API（契约 1）
 
+本文解释 v1 历史/活动工作。新编排请选择 [v2 API](runtime-api-v2.md)，显式 init --contract-version 2；省略仍为 v1，避免静默改变旧调用。两种工作不能混用请求版本，原有 v1 保证不因新版 CLI 自动升级。
+
 `scripts/delivery.py` 使用 Python 3 标准库和 POSIX `flock`，支持 macOS/Linux。本脚本管理本地状态、证据绑定与机械门禁，不调用模型、不解析自然语言计划、不执行 Git 提交或 push。五个能力 skill 不依赖脚本；编排者阅读其 Markdown 产物后才生成以下接纳 JSON。
 
 Markdown 是需求、专业判断和证据说明的权威来源；JSON 是绑定该版来源的准入快照。修改计划正文后必须重新接纳，不能只修改 JSON 来改变任务或验收要求。`mapping_reason` 说明映射依据；脚本检查引用存在、摘录匹配、指纹和结构，不证明映射语义真实。
