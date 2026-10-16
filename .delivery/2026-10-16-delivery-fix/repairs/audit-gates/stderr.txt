@@ -1,0 +1,17 @@
+test_diagnosis_survives_reconfiguration_and_requires_current_new_evidence (test_fix_gate_repairs.GateRepairCase.test_diagnosis_survives_reconfiguration_and_requires_current_new_evidence) ... ok
+test_explicit_compatible_fix_update_allows_unchanged_evidence_close (test_fix_gate_repairs.GateRepairCase.test_explicit_compatible_fix_update_allows_unchanged_evidence_close) ... ok
+test_same_bug_task_handoff_inherits_diagnosis (test_fix_gate_repairs.GateRepairCase.test_same_bug_task_handoff_inherits_diagnosis) ... ok
+test_unused_optional_fix_drift_does_not_block_default_delivery (test_fix_gate_repairs.GateRepairCase.test_unused_optional_fix_drift_does_not_block_default_delivery) ... ok
+test_used_fix_drift_blocks_close_and_restore_reuses_existing_results (test_fix_gate_repairs.GateRepairCase.test_used_fix_drift_blocks_close_and_restore_reuses_existing_results) ... ok
+test_identical_failures_need_new_diagnosis_not_waiver (test_delivery_v2.V2Case.test_identical_failures_need_new_diagnosis_not_waiver) ... ok
+test_professional_drift_blocks_only_relevant_activity (test_delivery_v2.V2Case.test_professional_drift_blocks_only_relevant_activity) ... ok
+test_compatible_source_explicit_readmission_preserves_original_report_pin_provenance (test_delivery_v2.V2Case.test_compatible_source_explicit_readmission_preserves_original_report_pin_provenance) ... ok
+test_FR001_gate_pin_expiry_blocks_until_valid_recheck (test_delivery_v2.V2Case.test_FR001_gate_pin_expiry_blocks_until_valid_recheck) ... ok
+test_FR002_transfer_requires_current_evidence_and_preserved_owner (test_delivery_v2.V2Case.test_FR002_transfer_requires_current_evidence_and_preserved_owner) ... ok
+test_original_work_without_fix_source_still_closes (test_delivery_fix.FixCase.test_original_work_without_fix_source_still_closes) ... ok
+test_same_bug_new_task_inherits_known_authors (test_delivery_fix.FixCase.test_same_bug_new_task_inherits_known_authors) ... ok
+
+----------------------------------------------------------------------
+Ran 12 tests in 4.654s
+
+OK

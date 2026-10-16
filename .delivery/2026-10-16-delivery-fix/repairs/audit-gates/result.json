@@ -1,0 +1,20 @@
+{
+  "argv": [
+    "/Users/cm/workspace/github/ppt-master/.venv/bin/python3",
+    "-B",
+    "-m",
+    "unittest",
+    "test_fix_gate_repairs",
+    "test_delivery_v2.V2Case.test_identical_failures_need_new_diagnosis_not_waiver",
+    "test_delivery_v2.V2Case.test_professional_drift_blocks_only_relevant_activity",
+    "test_delivery_v2.V2Case.test_compatible_source_explicit_readmission_preserves_original_report_pin_provenance",
+    "test_delivery_v2.V2Case.test_FR001_gate_pin_expiry_blocks_until_valid_recheck",
+    "test_delivery_v2.V2Case.test_FR002_transfer_requires_current_evidence_and_preserved_owner",
+    "test_delivery_fix.FixCase.test_original_work_without_fix_source_still_closes",
+    "test_delivery_fix.FixCase.test_same_bug_new_task_inherits_known_authors",
+    "-v"
+  ],
+  "exit_code": 0,
+  "seconds": 4.72,
+  "scope": "5 new gate regressions and 7 directly related existing tests; no full suite or repeated agent exercise"
+}

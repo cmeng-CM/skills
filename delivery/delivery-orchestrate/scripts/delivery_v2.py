@@ -422,6 +422,17 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
         state["diagnostics"] = diagnostics
         return state
 
+    def closing_sources(self, config):
+        """Current delivery inputs and admitted producers, not every installed package."""
+        names = {"delivery-orchestrate", "delivery-plan", "delivery-review", "delivery-verify"}
+        if "design" in config["payload"]["sources"]:
+            names.add("delivery-design")
+        names.update(self.activity_skill(config, "implementation", task["id"])
+                     for task in config["payload"]["spec"]["tasks"])
+        names.update(record["skill_pin"]["name"] for _, record in self.records(config).values()
+                     if "skill_pin" in record)
+        return names
+
     def assert_ready(self, kind, target, who):
         actor(who)
         self.active()
@@ -432,7 +443,9 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
         if state["unassessed_changes"] or state["unsupported_entries"]:
             fail("outside changes/unsupported entries require explicit assessment")
         relevant_sources = {"delivery-orchestrate"}
-        if kind in KINDS:
+        if kind == "close":
+            relevant_sources = self.closing_sources(config)
+        elif kind in KINDS:
             relevant_sources.add(self.activity_skill(config, kind, target))
         if any(d["name"] in relevant_sources for d in state["skill_drift"]):
             fail("actual skill source drift; restore source or explicitly accept update")

@@ -255,20 +255,37 @@ class RecoveryMixin:
             return self.append("attempt", op, key, {**request, "config_op": config["op"], "references": references})
 
     def diagnosis_state(self, config):
+        # A new admission is not new diagnostic evidence. Follow stable targets
+        # and the same known bug across task handoffs without rewriting history.
+        targets = {}
+        for kind, group in (("implementation", "tasks"), ("review", "reviews"), ("verification", "acceptance")):
+            for item in config["payload"]["spec"][group]:
+                targets[(kind, item["id"])] = (self.implementation_tasks([item["id"]])
+                                                if kind == "implementation" else {item["id"]})
         groups = {}
         for event in self.data["events"]:
             p = event["payload"]
-            if event["kind"] == "attempt" and p["config_op"] == config["op"]:
-                key = (p["target"]["kind"], p["target"]["id"], p["failure_key"])
-                groups.setdefault(key, []).append(p)
+            if event["kind"] == "attempt":
+                for (kind, target), aliases in targets.items():
+                    if p["target"]["kind"] == kind and p["target"]["id"] in aliases:
+                        groups.setdefault((kind, target, p["failure_key"]), []).append(p)
         blocked = []
         for key, values in groups.items():
-            if len(values) < 2:
-                continue
-            a, b = values[-2:]
-            def fingerprint(value):
-                return ([v["object_hash"] for v in value["references"]["facts"]], value["strategy"])
-            if a["outcome"] == b["outcome"] == "failed" and fingerprint(a) == fingerprint(b):
+            fingerprint, failures, pending = None, 0, False
+            for value in values:
+                observed = (sorted({v["object_hash"] for v in value["references"]["facts"]}), value["strategy"].strip())
+                changed = observed != fingerprint
+                if pending and (not changed or not self.references_current(value["references"])):
+                    continue
+                if changed:
+                    # A stale non-failure cannot erase a prior failure streak.
+                    if value["outcome"] != "failed" and not self.references_current(value["references"]):
+                        continue
+                    fingerprint, failures, pending = observed, 0, False
+                if value["outcome"] == "failed":
+                    failures += 1
+                    pending = failures >= 2
+            if pending:
                 blocked.append({"kind": key[0], "id": key[1], "failure_key": key[2]})
         return blocked
 

@@ -266,11 +266,15 @@ python3 -B CLI resolve-run --work W --input /项目路径/.delivery/日期-主�
 
 attempt 命令保存版本、actor、config_operation、target=`{kind,id}`、failure_key、非空 facts 引用、strategy、outcome=`failed|changed|unknown`、report。相同根因连续两次失败且事实摘要/策略不变，diagnosis_required 阻止原样循环；新事实/策略应有实质证据，不能只改文字、自动豁免或关闭问题。
 
+诊断责任按稳定目标跨配置承接；实施目标还按历史配置中相同 bug 身份关联任务。organization、换执行能力或同 bug 转交本身不解除阻塞。解除须有当前有效报告/事实引用支持的不同事实内容或策略；仅改 outcome、重复或重排同一事实引用不算变化。解除依据后来过期时，原未解决诊断责任重新阻塞；机器只能识别内容/声明变化，策略是否有实质新判断仍须专业核对。
+
 status/check/next/brief/source 均提供可追溯恢复入口；只读视图可选 `--format markdown|json`，同一结果对象生成。init 后未配置明确提示 configure required；日志或对象损坏 fail closed，不删失败事件或重算哈希链“修好”。
 
 ## 8 收尾及证据限度
 
 close 请求沿用 v1 的 actor/mode/summary/report/exceptions，版本为 2/2。它同时校验新准入、源漂移、范围外判断、资源、未知运行、诊断和原实施/独立审查/验收门禁。close 后写入拒绝，显式 reopen 留存原 close 事实。
+
+close 的来源检查覆盖当前计划、审查、验证、已配置设计、任务选用实施能力及当前接纳产物的真实专业来源，包含实际使用的 fix；仅登记而未使用的可选 fix 不因此成为依赖。发现漂移须恢复原包或完成显式 source-update，再按影响复用证据。漂移不自动抹掉历史报告的 pin 或强制全量重跑，但未处置漂移不能进入 complete 或 limited 收尾。
 
 需要从旧 v1 取得新保证，建新 v2 工作，可在 configure.transition 填 `{from_work,journal_hash,reason}`；核对原日志实际 head，但不自动复制其结果或运行回执。旧材料可作为专业输入，不声称当年已满足 v2。
 

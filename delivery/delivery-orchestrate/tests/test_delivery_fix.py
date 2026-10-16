@@ -14,7 +14,7 @@ delivery = legacy.delivery
 SCRIPTS = legacy.SCRIPTS
 
 
-class FixCase(unittest.TestCase):
+class FixFixture:
     # Reuse the public fixture helpers, without inheriting/rerunning its tests.
     setUp = legacy.V2Case.setUp
     write = legacy.V2Case.write
@@ -53,6 +53,8 @@ class FixCase(unittest.TestCase):
         fields.update(changes)
         return self.record(**fields)
 
+
+class FixCase(FixFixture, unittest.TestCase):
     def test_original_work_without_fix_source_still_closes(self):
         self.command()
         self.configure()

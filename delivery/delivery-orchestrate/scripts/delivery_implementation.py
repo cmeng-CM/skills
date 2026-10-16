@@ -107,17 +107,21 @@ class ImplementationMixin:
             if any(self.implementation_route(old, task) != self.implementation_route(payload, task) for task in tasks):
                 fail("changed implementation route cannot reuse affected results")
 
+    def implementation_tasks(self, tasks):
+        tasks = set(tasks)
+        routes = [route for event in self.data["events"] if event["kind"] == "configure"
+                  for route in event["payload"].get("implementation_routes", {}).items()]
+        changed = True
+        while changed:
+            bugs = {route["bug_id"] for target, route in routes if target in tasks and route["skill"] == "delivery-fix"}
+            linked = {target for target, route in routes if route["skill"] == "delivery-fix" and route["bug_id"] in bugs}
+            changed = not linked <= tasks
+            tasks.update(linked)
+        return tasks
+
     def implementation_authors(self, tasks=None):
         if tasks is not None:
-            tasks = set(tasks)
-            routes = [route for event in self.data["events"] if event["kind"] == "configure"
-                      for route in event["payload"].get("implementation_routes", {}).items()]
-            changed = True
-            while changed:
-                bugs = {route["bug_id"] for target, route in routes if target in tasks and route["skill"] == "delivery-fix"}
-                linked = {target for target, route in routes if route["skill"] == "delivery-fix" and route["bug_id"] in bugs}
-                changed = not linked <= tasks
-                tasks.update(linked)
+            tasks = self.implementation_tasks(tasks)
         values = []
         for event in self.data["events"]:
             record = event["payload"]
