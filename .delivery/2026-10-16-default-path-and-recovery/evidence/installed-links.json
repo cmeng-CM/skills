@@ -1,0 +1,62 @@
+[
+  {
+    "path": "/Users/cm/.claude/skills/delivery-design",
+    "target": "/Users/cm/workspace/github/skills/delivery-design",
+    "valid": true
+  },
+  {
+    "path": "/Users/cm/.agents/skills/delivery-design",
+    "target": "/Users/cm/workspace/github/skills/delivery-design",
+    "valid": true
+  },
+  {
+    "path": "/Users/cm/.claude/skills/delivery-plan",
+    "target": "/Users/cm/workspace/github/skills/delivery-plan",
+    "valid": true
+  },
+  {
+    "path": "/Users/cm/.agents/skills/delivery-plan",
+    "target": "/Users/cm/workspace/github/skills/delivery-plan",
+    "valid": true
+  },
+  {
+    "path": "/Users/cm/.claude/skills/delivery-implement",
+    "target": "/Users/cm/workspace/github/skills/delivery-implement",
+    "valid": true
+  },
+  {
+    "path": "/Users/cm/.agents/skills/delivery-implement",
+    "target": "/Users/cm/workspace/github/skills/delivery-implement",
+    "valid": true
+  },
+  {
+    "path": "/Users/cm/.claude/skills/delivery-review",
+    "target": "/Users/cm/workspace/github/skills/delivery-review",
+    "valid": true
+  },
+  {
+    "path": "/Users/cm/.agents/skills/delivery-review",
+    "target": "/Users/cm/workspace/github/skills/delivery-review",
+    "valid": true
+  },
+  {
+    "path": "/Users/cm/.claude/skills/delivery-verify",
+    "target": "/Users/cm/workspace/github/skills/delivery-verify",
+    "valid": true
+  },
+  {
+    "path": "/Users/cm/.agents/skills/delivery-verify",
+    "target": "/Users/cm/workspace/github/skills/delivery-verify",
+    "valid": true
+  },
+  {
+    "path": "/Users/cm/.claude/skills/delivery-orchestrate",
+    "target": "/Users/cm/workspace/github/skills/delivery-orchestrate",
+    "valid": true
+  },
+  {
+    "path": "/Users/cm/.agents/skills/delivery-orchestrate",
+    "target": "/Users/cm/workspace/github/skills/delivery-orchestrate",
+    "valid": true
+  }
+]

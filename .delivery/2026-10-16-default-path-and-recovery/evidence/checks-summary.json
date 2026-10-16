@@ -1,0 +1,52 @@
+[
+  {
+    "name": "runtime-tests",
+    "exit": 0,
+    "result_tail": "idate (test_delivery.RuntimeCase.test_unrelated_file_does_not_invalidate) ... ok\n\n----------------------------------------------------------------------\nRan 62 tests in 1.061s\n\nOK\n"
+  },
+  {
+    "name": "design-tests",
+    "exit": 0,
+    "result_tail": ".SkillResources.test_runtime_standard_retains_six_required_five_optional) ... ok\n\n----------------------------------------------------------------------\nRan 44 tests in 0.213s\n\nOK\n"
+  },
+  {
+    "name": "plan-tests",
+    "exit": 0,
+    "result_tail": "plan.PlanCheckTests.test_unstructured_document_discloses_unchecked_scope) ... ok\n\n----------------------------------------------------------------------\nRan 14 tests in 0.092s\n\nOK\n"
+  },
+  {
+    "name": "suite-packaging",
+    "exit": 0,
+    "result_tail": ",\n  \"errors\": [],\n  \"scope\": \"Packaging, basic metadata, explicit-entry policy, JSON syntax and ordinary local Markdown links only; no semantic quality or behavioral guarantee.\"\n}\n"
+  },
+  {
+    "name": "package-design",
+    "exit": 0,
+    "result_tail": "Skill is valid!\n"
+  },
+  {
+    "name": "package-plan",
+    "exit": 0,
+    "result_tail": "Skill is valid!\n"
+  },
+  {
+    "name": "package-implement",
+    "exit": 0,
+    "result_tail": "Skill is valid!\n"
+  },
+  {
+    "name": "package-review",
+    "exit": 0,
+    "result_tail": "Skill is valid!\n"
+  },
+  {
+    "name": "package-verify",
+    "exit": 0,
+    "result_tail": "Skill is valid!\n"
+  },
+  {
+    "name": "package-orchestrate",
+    "exit": 0,
+    "result_tail": "Skill is valid!\n"
+  }
+]

@@ -1,0 +1,20 @@
+{
+  "delivery-design/SKILL.md": "4f29a8add0f3ddbe71a41cfc4dc02271a0491a7aae84281c9b4cbdeac8fcc707",
+  "delivery-design/references/delivery-contract.md": "c9d09f2c6c1e15486bd4968ef429b3e8616f15aa1ee9f846724ac5cf55cd3e3e",
+  "delivery-design/tests/behavior-cases.json": "795ce51cde116f15e5f9558755b9985e7a619cf3e2358df1cbe2524c361c2731",
+  "delivery-implement/SKILL.md": "70d2ef86dca5214a3cfc0af8c9a25a8e70aac08af7e04a2a23e0546c54c133d4",
+  "delivery-implement/references/delivery-contract.md": "2ee99a1f6f60c097a72455c57aab41791a321d353a72dab9f72fd007584712aa",
+  "delivery-implement/tests/behavior-cases.json": "15ae0cc1cd640e598799d7d7f785c7934796ce9f338cafdd28bba762fe14a6a6",
+  "delivery-orchestrate/SKILL.md": "30f69ba6aa3b1d1b1df7f97da8dcfa00e10ce989f4a1e563319081ce5e14bcec",
+  "delivery-orchestrate/references/orchestration.md": "d428e0422e771ecec496796ea3a39f1c5f8c0340fff0f77625fda1c739ddae40",
+  "delivery-orchestrate/references/runtime-api.md": "6ea200cbda88a2cb56217fc68ae4dbafa75945ab4295c5d2799c3221d9af6222",
+  "delivery-orchestrate/tests/test_delivery.py": "d005cc47fc0940e0db42a16247e63544cf72f2c1d3d96f26528f4bd4487be78d",
+  "delivery-plan/SKILL.md": "cd3e84da54b9bd2829d7d0b7eaea6a18f4f668c2e1ec52282d6ed9941c664011",
+  "delivery-plan/references/delivery-contract.md": "1b33b1f7fc013852e7e8cd3718c3038594e6de196858ba519ce345966beedb7a",
+  "delivery-plan/references/example-plan.md": "2a540543e31d6b668210afaa9d167a5664661ecd896ddabb6048d810d6342274",
+  "delivery-plan/tests/behavior-cases.json": "45506caf1cd03940f227bb54d8637be1395f9b0d0b47ca14d7b1d73186a5d1f3",
+  "delivery-review/SKILL.md": "086f50665ee436d231501399c6bae20a55b2d7c552af42dc128e23be8ff1b10f",
+  "delivery-review/references/delivery-contract.md": "d209ef71cec3fbd1fb312b0758f0603f2359219efccf827e1d217cb2b0e4532f",
+  "delivery-verify/SKILL.md": "a0fa94718b29e62f367ea419e1d386adb6238971d6251ad07d74c4c0c365d8d4",
+  "delivery-verify/references/delivery-contract.md": "9c7ca24a0fba55a101155ada5905be2fa64e262d3fe470d43164631038957226"
+}
