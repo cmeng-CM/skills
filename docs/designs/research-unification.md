@@ -82,4 +82,4 @@ flowchart LR
 - T2 三次实际研究及 T3 一次源码入口交接分别经独立语义审查 pass，关联 6 类案例定义；原始请求、答复、工具证据、版本和审查声明留存在本地 `.workflow/research-unification/reports/`，不把定义数量当执行次数。
 - 先核对安装目标并新装 research、验证两处链接，再移除四个已核实的旧链接。`~/.claude/skills/research` 与 `~/.agents/skills/research` 均指向本仓库 `research/`。
 - 两个旧包移至 `Archive/research-unification-2026-10-16/` 下对应原目录，七文件摘要与基线一致，历史验证文字保持不变；六个原跟踪文件进入归档提交。
-- 完整交付检查器、三个受影响包的 `quick_validate` 与限定范围 diff 检查通过；结构、行为审查和安装各有不同证据范围。整体终审及工作流关闭由后续收尾执行。
+- 完整交付检查器、三个受影响包的 `quick_validate` 与限定范围 diff 检查通过；结构、行为审查和安装各有不同证据范围。整体终审、workflow verify/close 由本地工作流另行记录，本记录不替代其证据。
