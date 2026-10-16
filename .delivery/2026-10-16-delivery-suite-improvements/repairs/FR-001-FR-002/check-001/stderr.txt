@@ -1,0 +1,22 @@
+test_FR001_gate_pin_expiry_blocks_until_valid_recheck (test_delivery_v2.V2Case.test_FR001_gate_pin_expiry_blocks_until_valid_recheck) ... ok
+test_FR002_real_interruption_replans_without_replaying_revoked_command (test_delivery_v2.V2Case.test_FR002_real_interruption_replans_without_replaying_revoked_command) ... ok
+test_FR002_transfer_requires_current_evidence_and_preserved_owner (test_delivery_v2.V2Case.test_FR002_transfer_requires_current_evidence_and_preserved_owner) ... ok
+test_FR002_source_assessment_can_repair_stale_admission_without_executing (test_delivery_v2.V2Case.test_FR002_source_assessment_can_repair_stale_admission_without_executing) ... ok
+test_all_execution_entrypoints_block_without_gates (test_delivery_v2.V2Case.test_all_execution_entrypoints_block_without_gates) ... ok
+test_gate_latest_failure_and_mutated_report_block (test_delivery_v2.V2Case.test_gate_latest_failure_and_mutated_report_block) ... ok
+test_compatible_source_update_and_expired_review_reblocks_new_records (test_delivery_v2.V2Case.test_compatible_source_update_and_expired_review_reblocks_new_records) ... ok
+test_IR005_fresh_complete_source_reassessment_recovers_after_stale_review (test_delivery_v2.V2Case.test_IR005_fresh_complete_source_reassessment_recovers_after_stale_review) ... ok
+test_IR005_dependent_incremental_source_review_cannot_bridge_stale_ancestor (test_delivery_v2.V2Case.test_IR005_dependent_incremental_source_review_cannot_bridge_stale_ancestor) ... ok
+test_release_does_not_unlock_unknown_run (test_delivery_v2.V2Case.test_release_does_not_unlock_unknown_run) ... ok
+test_evidenced_resolution_then_replacement_and_verdict_allows_close (test_delivery_v2.V2Case.test_evidenced_resolution_then_replacement_and_verdict_allows_close) ... ok
+test_resolution_evidence_change_reblocks (test_delivery_v2.V2Case.test_resolution_evidence_change_reblocks) ... ok
+test_IR006_settled_unknown_chain_survives_legitimate_reconfiguration (test_delivery_v2.V2Case.test_IR006_settled_unknown_chain_survives_legitimate_reconfiguration) ... ok
+test_IR006_stale_archived_investigation_can_be_reinvestigated_in_current_admission (test_delivery_v2.V2Case.test_IR006_stale_archived_investigation_can_be_reinvestigated_in_current_admission) ... ok
+test_IR006_genuinely_unresolved_run_cannot_be_erased_by_reconfiguration (test_delivery_v2.V2Case.test_IR006_genuinely_unresolved_run_cannot_be_erased_by_reconfiguration) ... ok
+test_IR008_shared_task_acceptances_keep_recovery_owner_and_close (test_delivery_v2.V2Case.test_IR008_shared_task_acceptances_keep_recovery_owner_and_close) ... ok
+test_IR009_twice_interrupted_owner_binds_all_resolutions_and_survives_reconfigure (test_delivery_v2.V2Case.test_IR009_twice_interrupted_owner_binds_all_resolutions_and_survives_reconfigure) ... ok
+
+----------------------------------------------------------------------
+Ran 17 tests in 6.921s
+
+OK

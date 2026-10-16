@@ -85,13 +85,13 @@ python3 -B CLI gate --work W --input /项目路径/.delivery/日期-主题/admis
 }
 ```
 
-kind 为 plan_review/design_review/mapping_review/change_review，result 为 passed/failed/unknown。相同 kind 最新记录生效，不能绕过后续失败选早期通过。报告、证据、来源变化令结论 stale。
+kind 为 plan_review/design_review/mapping_review/change_review，result 为 passed/failed/unknown。相同 kind 最新记录生效，不能绕过后续失败选早期通过。报告、证据、来源变化令结论 stale。gate 保存的实际编排 pin，以及 plan/design 审阅对应专业 pin，必须仍属于有效来源链；兼容证据失效后，即使恢复旧包，也不能把新版生成的审阅当成旧版审阅。补齐有效兼容链或按有效来源重新审阅才可继续。无关专业包的 pin 不使该 gate 过期。
 
 plan_review 排除所有历史 plan 作者；design_review 同理；mapping_review 排除所有历史 design/plan/mapping 作者；change_review 排除 mapping 作者。相同 id **或** context 都不独立。配置者自动加入 mapping 作者；重新配置不会删除原作者。专业计划和映射可同次独立检查、共用一份有分项结论的报告，但须分别登记两个 gate，实施 review 不接管它们。
 
 重配置必须 change.previous_config 指向上一配置，category 为 within_grant/organization/material，并需独立 change_review。前两者不机械重问用户，但报告要核查原授权；material 需具体新授权 `{path,quote}`。已知结构性弱化（取消必需验收、放开 waivable、把 command 改成其他方法）不能标局部组织调整，必须 material 加具体授权。自然语言是否真的降低要求仍需独立审阅。
 
-旧结果默认不进入新配置；显式 reuse 除原始记录/目标结构/证据/产物不变外，v2 还核对紧邻上一配置里的真实 latest rebound 是否当前有效。不得回溯更早原事件绕过上一配置的 impact 失效；来源文字合法细化仍允许 ignore_config 的明确重接纳。原专业 pin 与恢复链按实际原配置追溯，本次新 gate 仍需满足。上一配置已知相关 context 保守继承，并纳入排除重叠检查；不自动迁移其 owner，需保留稳定目标或关联新工作。未知运行先在原配置核查恢复；不能用重配置抹掉未完成副作用。
+旧结果默认不进入新配置；显式 reuse 除原始记录/目标结构/证据/产物不变外，v2 还核对紧邻上一配置里的真实 latest rebound 是否当前有效。不得回溯更早原事件绕过上一配置的 impact 失效；来源文字合法细化仍允许 ignore_config 的明确重接纳。原专业 pin 与恢复链按实际原配置追溯，本次新 gate 仍需满足。上一配置已知相关 context 保守继承，并纳入排除重叠检查；不自动迁移其 owner，需保留稳定目标或关联新工作。默认未知运行先在原配置核查恢复；来源已变且需要新计划时，显式使用第 7 节恢复子契约 2 的调查与 recovery_transfers。不能用重配置抹掉未完成副作用。
 
 ## 4 资源、实施、实现审查与验证
 
@@ -168,6 +168,8 @@ source-update 输入：版本、actor、config_operation、name、old_tree_hash�
 
 orchestrate 的 new_root 必须为当前实际执行包，不能由第三份规则声称切换到另一份。兼容判断的证据过期使其新来源和对应新记录待确认；可从当前有效旧 pin 提交新的完整独立复核恢复。只有经有效证据连接的旧 pin→新 pin 链生效，依赖失效祖先的增量后代不能绕过缺口。旧报告仍按原 pin 解释。未知专业契约直接拒绝启用。四种版本（skill 修订、语义契约、文档版本、产品版本）分别保留，源文件摘要不证明语义兼容。
 
+source-update 是来源评估，可以在 plan/authorization 已变化时绑定当前不可变 config_operation，先独立接纳实际修复包，再调查中断。它不接纳新计划、不执行命令、不解除业务准入门禁；独立性、真实执行包和原 pin 检查仍适用。
+
 ## 7 未知运行、持续失败与恢复
 
 run-started 没有完成回执时，同 op 不重跑；新 op 也不能仅因释放资源而运行。相关 record/run 和 close 受阻，无关任务可继续。
@@ -179,6 +181,24 @@ python3 -B CLI resolve-run --work W --input /项目路径/.delivery/日期-主�
 输入：版本、actor、run_operation、report、非空 evidence、decision=`safe_to_retry|unresolved`、reason。报告必须实际调查进程、子进程、副作用和隔离/清理必要性。safe_to_retry 保存调查人、来源与产品快照，只允许新 op 真实重跑；旧 run 永远仍 unknown。调查证据或相关版本变则解除过期重新阻塞。
 
 仅 safe_to_retry 不能 close；必须有绑定 recovery_operation 的替代真实 run、通过的新 verification verdict 及其余门禁，才忽略旧 unknown 的阻塞。旧事实不改写；解除/替代链失效重新阻塞。替代回执严格归原 acceptance owner；共享任务的其他验收虽受副作用条件约束，不能抢走它的恢复身份。连续中断时，新真实 run 用 recovery_operations 绑定该 owner 的全部有效调查，保留单数末项供旧记录读取；每个根调查证据都要有效，不能只保留最后一次解除。合法重配置按解除所属配置解释已完成历史链，计划/产品后续合法变化不制造新的历史未知；调查与 verdict 原始证据、来源链仍必须有效。真正证据过期允许在当前配置重新调查并产生新的替代运行；重配置必须保留历史未知运行的验收 owner 和任务覆盖，不能孤立其恢复入口。原资源另行交还，不能拿过程核查伪造成功回执。
+
+### 恢复子契约 2：旧命令不再适用时转接当前计划
+
+以上未声明 recovery_contract_version 的请求仍是恢复子契约 1，不静默改变其含义。显式在 resolve-run 输入增加 `recovery_contract_version: 2`，decision 改为 `safe_to_replan|unresolved`，进入子契约 2。顶层请求仍为 schema_version/contract_version 2/2；此处版本只控制恢复协议。新记录类型 `run-investigation` 会被旧引擎拒绝，不能用旧引擎忽略转接后继续操作。活动包更新仍须 source-update 接纳，不直接改 init/journal。
+
+来源 stale 时可以保存该调查，因为调查绑定旧 run 和不可变配置、观察当前现场，而不是宣布旧授权仍有效。先确认原进程及子进程已停止、副作用已查清、必要隔离/处置完成；实际报告和非空 evidence 必填。`safe_to_replan` 仅表示可以重新规划，不能重放旧命令或收尾。报告保存当前产品快照、全树观察摘要及实际编排 pin；未支持的现场条目不能声明 safe。调查不确定使用 unresolved。
+
+准备新计划和真实授权后调查，在 configure 中显式承接所有尚未完成的责任：
+
+```json
+"recovery_transfers": [
+  {"recovery_contract_version": 2, "run_operation": "interrupted-A1", "investigation_operation": "investigate-A1-002"}
+]
+```
+
+每项必须引用紧邻旧配置下对原 run 的最新、当前有效 safe_to_replan 调查；遗漏、重复、失效或 unresolved 拒绝。验收 owner 和原任务覆盖保留，新方法仍为 command，不取消必需性或放宽例外。新配置仍需 plan/mapping/change 等适用独立 gate；改变或撤销命令必须对应真实授权并接受变更审阅。验收改名、拆分及取消责任不在此最小转接接口支持范围，不能用换 ID 绕过。
+
+新配置可组织授权内工作；新的 run 自动绑定原调查，执行新配置的当前命令，并须取得当前 passed verification 才允许 close。旧 run 永远仍 incomplete/unknown；调查或新配置存在都不算通过。调查证据、编排来源或相关现场变化会阻塞后续执行，需要按当前现场重新调查并明确重新转接，不能引用过期调查。已经完成有效替代和验收的历史链不因后来合法重规划重复要求旧命令，但其真实证据仍须有效。失败验证、缺少 verdict、其他 owner 的通过和 limited 都不能替代当前责任的通过。
 
 attempt 命令保存版本、actor、config_operation、target=`{kind,id}`、failure_key、非空 facts 引用、strategy、outcome=`failed|changed|unknown`、report。相同根因连续两次失败且事实摘要/策略不变，diagnosis_required 阻止原样循环；新事实/策略应有实质证据，不能只改文字、自动豁免或关闭问题。
 

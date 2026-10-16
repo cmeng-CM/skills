@@ -14,7 +14,7 @@ from delivery_recovery import RecoveryMixin
 KINDS = {"implementation": "implement", "review": "review", "verification": "verify"}
 GATES = {"plan_review", "design_review", "mapping_review", "change_review"}
 CONFIG_EXTRA = ("source_authors", "requirements", "admission_policy", "change", "monitor", "skill_sources")
-CONFIG_OPTIONAL = ("resources", "transition")
+CONFIG_OPTIONAL = ("resources", "transition", "recovery_transfers")
 CONFIG_CORE = ("actor", "plan", "authorization", "mapping_reason", "tasks", "reviews", "acceptance")
 RECORD_CORE = ("kind", "target", "actor", "report", "result", "summary", "evidence")
 RECORD_OPTIONAL = ("issues", "resolutions", "run_operation", "confirmation", "supersedes", "reason")
@@ -33,7 +33,7 @@ class EngineV2(SourcesMixin, MonitorMixin, RecoveryMixin, Engine):
         super().load()
         if self.data["events"][0]["payload"].get("contract_version") != 2:
             fail("v2 engine cannot operate a v1 work")
-        allowed = {"init", "configure", "record", "run-started", "run", "close", "reopen", "gate", "impact", "source-update", "resource", "attempt", "run-resolution"}
+        allowed = {"init", "configure", "record", "run-started", "run", "close", "reopen", "gate", "impact", "source-update", "resource", "attempt", "run-resolution", "run-investigation"}
         if any(e["kind"] not in allowed for e in self.data["events"]):
             fail("unknown v2 journal event kind")
 
@@ -127,12 +127,16 @@ class EngineV2(SourcesMixin, MonitorMixin, RecoveryMixin, Engine):
                 kind, target = identity.split(":", 1)
                 self.target(payload, kind, target)
             payload["inherited_context"] = {key: sorted(value) for key, value in inherited.items()}
+            transfers = self.validate_recovery_transfers(request.get("recovery_transfers", []), old_config, payload)
             for unknown in self.unknown_runs(old_config):
-                if not unknown["settled"]:
-                    fail("recover incomplete run in its current admission before reconfiguration")
+                if not unknown["settled"] and unknown["operation"] not in transfers:
+                    fail("recover incomplete run or explicitly transfer a current investigation before reconfiguration")
                 owner = self.target(payload, "verification", unknown["acceptance"])
                 if not set(unknown["tasks"]) <= set(owner["tasks"]):
                     fail("preserve historical unknown-run acceptance owner and task coverage")
+            payload["recovery_transfers"] = list(transfers.values())
+        elif request.get("recovery_transfers"):
+            fail("recovery transfers require a previous configuration")
         authors = request["source_authors"]
         expected = ("plan", "mapping", "design") if "design" in request else ("plan", "mapping")
         shape(authors, expected, name="source_authors")
@@ -280,9 +284,17 @@ class EngineV2(SourcesMixin, MonitorMixin, RecoveryMixin, Engine):
             status = "pending"
             if event:
                 p = event["payload"]
-                status = p["result"] if self.references_current(p["references"]) and self.references_current(config["payload"]["sources"]) else "stale"
+                names = self.gate_sources(kind)
+                pins = p.get("skill_pins", {})
+                current = all(pins.get(name) in self.valid_pin_hashes(config, name) for name in names)
+                status = p["result"] if current and self.references_current(p["references"]) and self.references_current(config["payload"]["sources"]) else "stale"
             result[kind] = {"status": status, "operation": event["op"] if event else None}
         return result
+
+    @staticmethod
+    def gate_sources(kind):
+        professional = {"plan_review": "delivery-plan", "design_review": "delivery-design"}.get(kind)
+        return {"delivery-orchestrate"} | ({professional} if professional else set())
 
     def gate(self, request, op):
         self.validate_extra(request, ("config_operation", "kind", "report", "result", "summary", "evidence"))
@@ -295,8 +307,7 @@ class EngineV2(SourcesMixin, MonitorMixin, RecoveryMixin, Engine):
                 return prior
             self.active()
             config = self.match_config(request)
-            source_kind = {"plan_review": "delivery-plan", "design_review": "delivery-design", "mapping_review": "delivery-orchestrate", "change_review": "delivery-orchestrate"}[request["kind"]]
-            if any(d["name"] in ("delivery-orchestrate", source_kind) for d in self.source_drift(config)):
+            if any(d["name"] in self.gate_sources(request["kind"]) for d in self.source_drift(config)):
                 fail("actual gate skill source drift; accept compatible update or restore pin")
             if request["kind"] == "design_review" and "design" not in config["payload"]["sources"]:
                 fail("design review requires actual configured design source")
@@ -393,7 +404,8 @@ class EngineV2(SourcesMixin, MonitorMixin, RecoveryMixin, Engine):
         for item in drift:
             add("skill_drift", [item["name"]], ["restored actual source or independent compatible update"], "source / source-update")
         for item in state["unknown_runs"]:
-            add("incomplete_run", [item["operation"]], ["side-effect and process investigation"], "resolve-run then new run and verdict", item["acceptance"])
+            action = "configure with explicit recovery_transfers or renew investigation" if item.get("investigation") and not item["resolution"] else "resolve-run then new run and verdict"
+            add("incomplete_run", [item["operation"]], ["side-effect and process investigation"], action, item["acceptance"])
         for item in diagnoses:
             add("diagnosis_required", [item["failure_key"]], ["new facts or substantiated strategy"], "attempt", item["id"])
         state["diagnostics"] = diagnostics

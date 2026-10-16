@@ -20,5 +20,6 @@
 - [定向专业案例冻结](evidence/behavior/focused-case-assets/report.md)、[正文映射案例](evidence/behavior/mapping-case-preflight-002/asset-report.md)、[重复失败交接案例](evidence/behavior/repeated-failure-case-preflight/asset-report.md)：资产和自检不能代替真实模型成绩。
 - [本轮交付与验证边界](summary.md)、[用户最新收敛要求](verification/convergence.md)、[最终247项检查](evidence/final-mechanical-003/report.md)：不再扩大测试，未验能力留实际任务验证。
 - [全部运行状态清单](verification/behavior-observations.json)、[本机原始证据留存](evidence/README.md)：保留失败和限制，不把prepared计作执行。
+- [新增独立审查027](review/027-independent-fresh-audit.md)、[两项修复决定](repairs/FR-001-FR-002/plan.md)、[修复实施与必要验证](implementation/017-fr001-fr002.md)、[独立定向复审028](review/028-fr001-fr002-recheck.md)：FR-001/FR-002 修复及其有限证据，不替代原全套验收。
 
 依据：本会话已确认的独立调用、编排管理、质量优先、内容留存与本地提交边界，以及 2026-10-16 对当前仓库和安装入口的只读核查。本文仅导航，不维护另一份执行状态。

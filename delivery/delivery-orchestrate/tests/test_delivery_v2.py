@@ -834,6 +834,162 @@ class V2Case(unittest.TestCase):
         self.assertEqual(status.returncode, 0, status.stderr)
         self.assertIn("configure_required", status.stdout)
 
+    def test_FR001_gate_pin_expiry_blocks_until_valid_recheck(self):
+        import shutil
+        root = self.work / "plan-copy"
+        shutil.copytree(SCRIPTS.parents[1] / "delivery-plan", root)
+        next(s for s in self.config["skill_sources"] if s["name"] == "delivery-plan")["root"] = str(root)
+        original = (root / "SKILL.md").read_text()
+        self.completed()
+        old = self.engine.effective_pins(self.engine.current_config(False))["delivery-plan"]
+        (root / "SKILL.md").write_text(original + "\nCompatible method clarification.\n")
+        self.write(".delivery/example/compat.md", "Independent compatibility judgement")
+        self.write(".delivery/example/compat.txt", "Actual compatibility evidence")
+        update = self.engine.source_update(self.extra(config_operation=self.configuration["op"], name="delivery-plan",
+            old_tree_hash=old["tree_hash"], new_root=str(root), decision="compatible", reason="Same professional contract",
+            affected_targets=[], report={"path": ".delivery/example/compat.md"}, evidence=[{"path": ".delivery/example/compat.txt"}]), self.op())
+        reviewed = self.gate("plan_review")
+        self.write(".delivery/example/compat.txt", "Compatibility evidence superseded")
+        (root / "SKILL.md").write_text(original)
+        state = self.status()
+        self.assertFalse(state["skill_drift"])
+        self.assertEqual(state["admission"]["plan_review"]["status"], "stale")
+        self.assertEqual(state["admission"]["mapping_review"]["status"], "passed")
+        self.assertTrue(any(d["code"] == "admission_stale" for d in self.engine.inspect("next")["diagnostics"]))
+        for action in (lambda: self.record(claim=False), lambda: self.execute_run(), lambda: self.engine.close(self.closing(), self.op())):
+            with self.assertRaisesRegex(delivery.DeliveryError, "admission gate"):
+                action()
+        self.gate("plan_review")
+        self.engine.close(self.closing(), self.op())
+        self.assertEqual(reviewed["payload"]["skill_pins"]["delivery-plan"], update["payload"]["pin"]["tree_hash"])
+
+    def prepare_replan(self):
+        self.write("plan.md", "T1 delivers persistence; A1 observes actual consumer. Use replacement command.\n")
+        self.write("authorization.md", "User authorizes T1. Revoke old command; allow replacement, no push.\n")
+        self.config["change"] = {"category": "material", "reason": "User revoked old command; retain actual consumer acceptance",
+            "previous_config": self.configuration["op"], "authorization": {"path": "authorization.md", "quote": "Revoke old command; allow replacement"}}
+        self.command("from pathlib import Path; assert Path('src/main.txt').read_text() == 'works\\n'; print('new authorized consumer check')")
+
+    def investigate_replan(self, operation="interrupted", decision="safe_to_replan", label="replan"):
+        self.write(f".delivery/example/{label}.md", "Checked original process and descendants stopped; examined actual product and side effects. Old command revoked; new plan required.")
+        self.write(f".delivery/example/{label}.txt", f"Observed run {operation}, stable src, stopped process, reviewed scene. decision={decision}")
+        return self.engine.resolve_run(self.extra(run_operation=operation, decision=decision, recovery_contract_version=2,
+            reason="Actual safety investigation only; no command replay or acceptance claim",
+            report={"path": f".delivery/example/{label}.md"}, evidence=[{"path": f".delivery/example/{label}.txt"}]), self.op())
+
+    def transfer_replan(self, investigation):
+        self.config["recovery_transfers"] = [{"recovery_contract_version": 2,
+            "run_operation": investigation["payload"]["run_operation"], "investigation_operation": investigation["op"]}]
+
+    def test_FR002_real_interruption_replans_without_replaying_revoked_command(self):
+        import signal
+        self.command("from pathlib import Path; import os,time; p=Path('.delivery/example/old-count'); p.write_text(str(int(p.read_text())+1) if p.exists() else '1'); Path('.delivery/example/old.pid').write_text(str(os.getpid())); time.sleep(30)")
+        self.implement_and_review()
+        original_command = list(self.config["acceptance"][0]["command"])
+        self.claim("verification", "A1", self.verifier)
+        process = subprocess.Popen([sys.executable, "-B", str(SCRIPTS / "delivery.py"), "run", "--work", str(self.work),
+            "--acceptance", "A1", "--actor", self.verifier["id"], "--context", self.verifier["context"], "--timeout", "40", "--op", "real-fr002"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        marker = self.work / "old.pid"
+        deadline = time.monotonic() + 5
+        try:
+            while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertTrue(marker.exists(), "the actual command must start before interrupting its controller")
+        finally:
+            process.terminate()
+            process.communicate(timeout=5)
+            if marker.exists():
+                try:
+                    os.killpg(int(marker.read_text()), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            self.claim("verification", "A1", self.verifier, "release")
+        self.assertEqual(self.status()["runs"]["real-fr002"]["status"], "incomplete")
+        self.prepare_replan()
+        with self.assertRaisesRegex(delivery.DeliveryError, "sources changed"):
+            self.engine.resolve_run(self.extra(run_operation="real-fr002", decision="safe_to_retry", reason="Legacy unchanged", **self.report()), self.op())
+        investigation = self.investigate_replan("real-fr002")
+        with self.assertRaisesRegex(delivery.DeliveryError, "recover incomplete run"):
+            self.configure()
+        self.transfer_replan(investigation)
+        self.configure()
+        with self.assertRaisesRegex(delivery.DeliveryError, "admission gate"):
+            self.record(claim=False)
+        for kind in ("plan_review", "mapping_review", "change_review"):
+            self.gate(kind)
+        self.record()
+        self.record("review", "R1")
+        with self.assertRaisesRegex(delivery.DeliveryError, "replacement run"):
+            self.engine.close(self.closing(), self.op())
+        run = self.execute_run()
+        self.assertEqual(run["payload"]["recovery_operations"], [investigation["op"]])
+        self.assertNotEqual(run["payload"]["command"], original_command)
+        with self.assertRaisesRegex(delivery.DeliveryError, "replacement run"):
+            self.engine.close(self.closing(), self.op())
+        self.record("verification", "A1", run_operation=run["op"])
+        self.assertTrue(self.status()["unknown_runs"][0]["settled"])
+        self.engine.close(self.closing(), self.op())
+        self.assertEqual((self.work / "old-count").read_text(), "1")
+        self.assertEqual(self.status()["runs"]["real-fr002"]["status"], "incomplete")
+        print("FR-002 actual CLI: interrupted old command -> changed authorization -> investigation -> new independent gates -> replacement run -> verdict -> close; old command executions=1")
+
+    def test_FR002_transfer_requires_current_evidence_and_preserved_owner(self):
+        self.unknown()
+        self.prepare_replan()
+        unknown = self.investigate_replan(decision="unresolved")
+        self.transfer_replan(unknown)
+        with self.assertRaisesRegex(delivery.DeliveryError, "latest current"):
+            self.configure()
+        good = self.investigate_replan(label="good")
+        self.transfer_replan(good)
+        self.write(".delivery/example/good.txt", "Investigation evidence no longer current")
+        with self.assertRaisesRegex(delivery.DeliveryError, "latest current"):
+            self.configure()
+        good = self.investigate_replan(label="renewed")
+        self.transfer_replan(good)
+        acceptance = self.config["acceptance"][0]
+        for field, value in (("method", "inspection"), ("required", False), ("waivable", True)):
+            original = copy.deepcopy(acceptance)
+            acceptance[field] = value
+            if field == "method":
+                acceptance.pop("command")
+            with self.assertRaises(delivery.DeliveryError):
+                self.configure()
+            acceptance.clear()
+            acceptance.update(original)
+        self.configure()
+        for kind in ("plan_review", "mapping_review", "change_review"):
+            self.gate(kind)
+        self.write(".delivery/example/renewed.txt", "Safety facts were corrected after transfer")
+        with self.assertRaisesRegex(delivery.DeliveryError, "resolve-run"):
+            self.record(claim=False)
+        # A full new investigation can recover the current scene, but still
+        # needs an explicit newly reviewed transfer and real replacement.
+        good = self.investigate_replan(label="current")
+        self.transfer_replan(good)
+        self.config["change"]["previous_config"] = self.configuration["op"]
+        self.configure()
+        for kind in ("plan_review", "mapping_review", "change_review"):
+            self.gate(kind)
+        self.record()
+        self.record("review", "R1")
+        run = self.execute_run()
+        self.record("verification", "A1", run_operation=run["op"])
+        self.write("plan.md", "T1 delivers persistence; A1 observes actual consumer. Later lawful refinement.\n")
+        self.config.pop("recovery_transfers")
+        self.reconfigure_after_recovery()
+        self.assertTrue(self.status()["unknown_runs"][0]["settled"])
+
+    def test_FR002_source_assessment_can_repair_stale_admission_without_executing(self):
+        root = self.source_copy()
+        self.unknown()
+        self.prepare_replan()
+        (root / "SKILL.md").write_text((root / "SKILL.md").read_text() + "\nCompatible clarification\n")
+        self.review_source(root, "stale-plan-source-assessment")
+        self.assertFalse(self.status()["skill_drift"])
+        with self.assertRaisesRegex(delivery.DeliveryError, "sources changed"):
+            self.record(claim=False)
+
 
 if __name__ == "__main__":
     unittest.main()

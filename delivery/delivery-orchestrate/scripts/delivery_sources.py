@@ -144,7 +144,12 @@ class SourcesMixin:
             if previous:
                 return previous
             self.active()
-            config = self.match_config(request)
+            # Source assessment changes no business execution or authorization.
+            # Bind the immutable admission even when its plan has since changed,
+            # so a pinned recovery fix can be admitted before investigating it.
+            config = self.current_config(False)
+            if request["config_operation"] != config["op"]:
+                fail("request belongs to another configuration")
             pins = self.effective_pins(config)
             if request["name"] != "delivery-orchestrate" and any(d["name"] == "delivery-orchestrate" for d in self.source_drift(config)):
                 fail("first accept actual orchestrate source before professional update")
