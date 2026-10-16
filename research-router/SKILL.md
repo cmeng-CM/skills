@@ -50,7 +50,7 @@ description: 联网搜「指定类型的资源」时用——先判动作（检�
 | 近 30 天的讨论 / 风向 / 互动量 | `last30days` | 时间窗 + 互动量是别的工具给不了的 |
 | 中文视频 | `bili search "<词>" --type video -n 5` | 免登录可用 |
 | Reddit | `rdt search "<词>" --limit 10` | cookies 可用 |
-| X / Twitter | ✗ **当前不可用**（未登录） | 需要先解决凭证 |
+| X / Twitter | `opencli twitter search "q" --limit N -f json`（实测 2026-10-12）；时间窗研究走 `last30days` | 登录态走 Chrome 扩展桥接，无需 cookie 环境变量；细则与坑见 `references/sites.md` 的 X 条目 |
 | 原始文件（raw / 仓库内文件） | `curl` 或 `gh api … \| base64 -d` | **零摘要损耗**，别经过任何摘要工具 |
 | 需要 JS 渲染的页面 | `browser-use` | 前几条路线都拿不到时 |
 

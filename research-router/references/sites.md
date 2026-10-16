@@ -63,6 +63,18 @@
 - **保底**：`awesome-agent-skills` / `awesome-claude-skills` 这类 awesome list（用 `gh search repos "awesome ..."` 找），或 `gh search code --filename checklist.md`。
 - **坑**：**别停在"我知道有这个站"**。看到目录站要立刻切到穷举动作，否则等于没查。
 
+### X / Twitter（推文搜索）
+- **状态**：已实测（2026-10-12）
+- **覆盖**：X/Twitter 上的帖子、讨论、当事人一手发言 —— 关键词：推特、推文、X 上、某某说了什么、社区反应
+- **检索**：`opencli twitter search "<query>" --limit 20 -f json`（实测 5.2 秒返回；字段：id / author / text / created_at / likes / views / url / media_urls。query 支持 x.com 原生操作符原样透传：`from:`、`since:YYYY-MM-DD`、`lang:en`、`"精确短语"`、OR；`--product live` 切 Latest 标签，`--top-by-engagement N` 按互动重排）
+- **穷举**：不适用（无公开全量目录）；要更多加大 `--limit`（内部自动翻页）
+- **保底**：① 苟活 Nitter 实例的搜索 RSS：`curl -s "https://nitter.kareem.one/search/rss?f=tweets&q=<query>"`（备胎 `nitter.meowing.monster`；两个实测各返回 19 条，但随时会死）；② 需要"最近 30 天 + 互动量"视角时走 `last30days <话题>`（其 X 源已配 bird 后端）
+- **坑**：
+  - **登录态**走 Chrome 扩展桥接（daemon `127.0.0.1:19825`）。Chrome 未开/扩展未连 → exit 69；x.com 登出 → exit 77，跑 `opencli twitter login` 补。次要后端 `twitter` CLI 已配好同一对 cookie（凭据 `~/.config/twitter-cli/credentials.env`），**但其 `search` 端点目前上游 404**（X 改 GraphQL，版本已是最新 0.8.5）；`twitter feed` / `twitter user-posts` 可用。
+  - **默认读 Top 标签**，会混入几年前的爆款推文（实测 "OpenAI" 的 Top 里出现 2022 年内容）；要近期内容加 `--product live` 或 `since:`。
+  - **last30days 的 X（bird 后端）**依赖 `~/.config/last30days/.env` 里的 `AUTH_TOKEN`/`CT0`（2026-10-12 经 opencli 桥接提取写入）；登出/改密后 cookie 失效，重跑桥接提取刷新即可。
+  - Nitter 苟活实例：X 自 2026-08 起法律清剿（xcancel、nitter.net、sotwe、twstalker 已关停或 403），仅存实例带 bot 检查与限流——**不要当主路线**。
+
 ### r.jina.ai（任意网页转 Markdown 的兜底）
 - **状态**：未实测
 - **覆盖**：任何没有专用抓取路线的网页 —— 关键词：通用兜底
@@ -79,7 +91,7 @@
 | 站/源 | 覆盖 | 为什么值得收 | 待验什么 |
 |---|---|---|---|
 | Hacker News（Algolia API） | 技术讨论、风向 | 讨论质量高且可全文搜 | `https://hn.algolia.com/api/v1/search?query=` 是否可用、限流如何 |
-| arXiv | 论文 | 本机 `arxiv-pp-cli` 显示 unavailable（last30days doctor 报的） | 是否有可用的检索路线 |
+| arXiv | 论文 | 本机 `arxiv-pp-cli` 已装好（2026-10-12），last30days 内置源当天实测返回过结果（5 条） | 直连路线 `arxiv-pp-cli query --search-query "<q>" --agent` 当日实测被 arXiv 限流（429/超时）——换个时段复验一次干净通过即可转正 |
 | awesome list 家族 | 各类资源的清单 | `gh search repos "awesome <主题>"` 能找一批 | 收录哪些、还是只用通用检索即可 |
 
 ---
