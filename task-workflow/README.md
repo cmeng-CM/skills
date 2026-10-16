@@ -660,4 +660,4 @@ execution 执行中发现新判断 → `gate <slug> --reason ...` → gated（�
 
 回归：`python3 -B -m unittest discover -s task-workflow/tests -v`。用例在隔离 Git 仓库运行真实 CLI，另有完整声明/表结构输入矩阵与前中后插入坏引用的不变量检查，不触碰业务项目。
 
-安装：`./install-skill.sh ./task-workflow`，软链到两个客户端目录（`~/.claude/skills` + `~/.agents/skills`），改源即生效。
+安装：在仓库根目录运行 `./skill install task-workflow`，软链到两个客户端目录（`~/.claude/skills` + `~/.agents/skills`）。修改源码无需重新安装，运行中客户端是否重新加载按其自身规则处理。

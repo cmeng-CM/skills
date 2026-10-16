@@ -1,4 +1,0 @@
-# SIMULATED review input
-
-This fixture encodes a passed spec/quality result under a different actor/context to test admission rules.
-It is not evidence of an actual independent agent review; runtime actor declarations cannot prove independence.

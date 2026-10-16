@@ -1,1 +1,0 @@
-{"error": "closed journal is immutable; explicitly reopen first"}

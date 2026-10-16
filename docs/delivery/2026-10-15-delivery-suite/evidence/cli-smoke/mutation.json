@@ -1,5 +1,0 @@
-{
-  "action": "explicit fixture-only mutation",
-  "path": "/Users/cm/workspace/github/skills/docs/delivery/2026-10-15-delivery-suite/evidence/cli-smoke/fixture-project/src/app.py",
-  "reason": "Test that reopened work invalidates prior scope-bound evidence; actual suite product files unchanged."
-}

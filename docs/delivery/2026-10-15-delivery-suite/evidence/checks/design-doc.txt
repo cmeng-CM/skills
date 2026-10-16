@@ -1,5 +1,0 @@
-$ ['/Users/cm/workspace/github/ppt-master/.venv/bin/python3', '-B', 'delivery-design/scripts/check_doc.py', 'docs/delivery/2026-10-15-delivery-suite/design.md']
-exit=0
-机械检查：0 个错误，0 个警告；profile=feature-change
-范围：支持的标题、空节、D-NN 定义与引用、文内锚点及占位提示；外部链接和复杂 Markdown 未验证。
-结果不代表设计可行、共识完整、用户批准或验收通过。输入文件未修改。

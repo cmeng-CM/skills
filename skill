@@ -1,0 +1,505 @@
+#!/usr/bin/env python3
+"""Manage this repository's source links. Python 3 standard library only."""
+from __future__ import annotations
+
+import argparse
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+import errno
+import fcntl
+import os
+from pathlib import Path
+import stat
+import sys
+from typing import TextIO
+import unicodedata
+
+
+SOURCE_GROUPS = ("", "delivery")
+RESERVED = {"Archive", "99-Archive", "docs", "tests", "scripts", "delivery"}
+TARGET_LABELS = {"claude": "Claude", "agents": "Agents"}
+CONNECTED, ABSENT, STALE = "已连接", "未安装", "链接失效"
+DELETED, CONFLICT, ERROR = "源已删除", "同名冲突", "检查错误"
+
+
+class InputError(Exception):
+    pass
+
+
+class OperationError(Exception):
+    pass
+
+
+@dataclass
+class Context:
+    repo: Path
+    targets: dict[str, Path]
+    lock_path: Path
+    cwd: Path = field(default_factory=Path.cwd)
+    stdin: TextIO = field(default_factory=lambda: sys.stdin)
+    stdout: TextIO = field(default_factory=lambda: sys.stdout)
+    stderr: TextIO = field(default_factory=lambda: sys.stderr)
+
+    @classmethod
+    def production(cls):
+        user_dir = Path.home()
+        return cls(Path(__file__).resolve().parent,
+                   {"claude": user_dir / ".claude/skills",
+                    "agents": user_dir / ".agents/skills"},
+                   user_dir / ".cache/local-skill-manager/write.lock")
+
+
+@dataclass(frozen=True)
+class Slot:
+    state: str
+    reason: str = ""
+    raw: str | None = None
+    target: Path | None = None
+    identity: tuple | None = None
+
+
+@dataclass
+class Snapshot:
+    sources: dict[str, list[Path]]
+    rows: dict[str, dict[str, Slot]]
+    errors: list[str]
+    target_errors: dict[str, str]
+    external: dict[str, int]
+
+
+@dataclass(frozen=True)
+class Change:
+    name: str
+    client: str
+    action: str
+    source: Path | None
+    before: Slot
+
+
+@dataclass(frozen=True)
+class Plan:
+    action: str
+    names: tuple[str, ...]
+    target: str
+    changes: tuple[Change, ...]
+
+
+def safe(value) -> str:
+    """Do not emit terminal control characters from filesystem names/targets."""
+    return "".join(c if unicodedata.category(c) != "Cc" else repr(c)[1:-1]
+                   for c in str(value))
+
+
+def out(ctx, message=""):
+    print(safe(message), file=ctx.stdout, flush=True)
+
+
+def diagnostic(ctx, message):
+    print(safe(message), file=ctx.stderr, flush=True)
+
+
+def valid_name(name):
+    return (bool(name) and name not in {".", ".."} and "/" not in name
+            and not any(unicodedata.category(c) == "Cc" for c in name))
+
+
+def source_location(ctx, name, path):
+    if not valid_name(name) or name.startswith(".") or name in RESERVED:
+        return False
+    allowed = [ctx.repo / group / name for group in SOURCE_GROUPS]
+    if path not in allowed:
+        return False
+    # resolve also detects aliases through existing parents and dangling escapes.
+    try:
+        return path.resolve(strict=False) == path
+    except (OSError, RuntimeError):
+        return False
+
+
+def discover(ctx):
+    sources, errors = {}, []
+    for group in SOURCE_GROUPS:
+        base = ctx.repo / group
+        try:
+            if base.is_symlink():
+                raise OperationError(f"源码分组是软链接：{base}")
+            entries = list(base.iterdir())
+        except FileNotFoundError:
+            if not group:
+                errors.append(f"仓库不存在：{base}")
+            continue
+        except (OSError, OperationError) as exc:
+            errors.append(f"无法读取源码分组 {base}：{exc}")
+            continue
+        for entry in entries:
+            name = entry.name
+            if not valid_name(name) or name.startswith(".") or name in RESERVED:
+                continue
+            try:
+                if not stat.S_ISDIR(entry.lstat().st_mode):
+                    continue
+                marker = entry / "SKILL.md"
+                try:
+                    marker_stat = marker.lstat()
+                except FileNotFoundError:
+                    continue
+                if marker.is_symlink():
+                    if marker.resolve().parent != entry:
+                        continue
+                    marker_stat = marker.stat()
+                if stat.S_ISREG(marker_stat.st_mode):
+                    sources.setdefault(name, []).append(entry)
+            except (OSError, RuntimeError) as exc:
+                errors.append(f"无法检查源码 {entry}：{exc}")
+    return sources, errors
+
+
+def inspect_slot(ctx, name, client, candidates):
+    path = ctx.targets[client] / name
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return Slot(ABSENT)
+    except OSError as exc:
+        return Slot(ERROR, str(exc))
+    identity = (info.st_dev, info.st_ino, info.st_mode, info.st_mtime_ns,
+                info.st_ctime_ns)
+    if not stat.S_ISLNK(info.st_mode):
+        return Slot(CONFLICT, "目标是实际文件或目录，不属于可管理链接", identity=identity)
+    try:
+        raw = os.readlink(path)
+        normalized = Path(os.path.abspath(os.path.join(str(path.parent), raw)))
+        if not source_location(ctx, name, normalized):
+            return Slot(CONFLICT, "链接归属不明、越界或存在路径别名", raw, normalized, identity)
+        if len(candidates) > 1:
+            return Slot(CONFLICT, "仓库内有多个同名源码包", raw, normalized, identity)
+        if not candidates:
+            return Slot(DELETED, "有效源码包不存在", raw, normalized, identity)
+        if normalized == candidates[0]:
+            return Slot(CONNECTED, raw=raw, target=normalized, identity=identity)
+        return Slot(STALE, "所属旧链接未指向当前源码", raw, normalized, identity)
+    except (OSError, RuntimeError) as exc:
+        return Slot(ERROR, str(exc), identity=identity)
+
+
+def scan(ctx):
+    sources, errors = discover(ctx)
+    names, target_errors = set(sources), {}
+    external = {client: 0 for client in ctx.targets}
+    for client, base in ctx.targets.items():
+        try:
+            entries = list(base.iterdir())
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            target_errors[client] = f"无法读取 {base}：{exc}"
+            continue
+        for entry in entries:
+            slot = inspect_slot(ctx, entry.name, client, sources.get(entry.name, []))
+            if slot.state in {CONNECTED, STALE, DELETED}:
+                names.add(entry.name)
+            elif slot.state == ERROR:
+                target_errors[client] = f"无法检查 {entry}：{slot.reason}"
+            else:
+                external[client] += 1
+    rows = {}
+    for name in sorted(names):
+        rows[name] = {
+            client: (Slot(ERROR, target_errors[client]) if client in target_errors
+                     else inspect_slot(ctx, name, client, sources.get(name, [])))
+            for client in ctx.targets
+        }
+    return Snapshot(sources, rows, errors, target_errors, external)
+
+
+def requested_names(ctx, snapshot, args):
+    names = []
+    for arg in args:
+        name = arg
+        if "/" in arg:
+            path = Path(os.path.abspath(ctx.cwd / arg))
+            name = path.name
+            if not source_location(ctx, name, path):
+                raise InputError(f"不是本仓库允许的源码路径：{arg}")
+        if not valid_name(name) or name not in snapshot.rows:
+            raise InputError(f"未知或无效的 skill 名称：{arg}")
+        if name not in names:
+            names.append(name)
+    if not names:
+        raise InputError("至少指定一个 skill 名称")
+    return tuple(names)
+
+
+def make_plan(ctx, snapshot, action, names, target="all"):
+    if snapshot.errors:
+        raise OperationError("整批未执行：\n" + "\n".join(snapshot.errors))
+    names = requested_names(ctx, snapshot, names)
+    clients = tuple(ctx.targets) if target == "all" else (target,)
+    errors = list(snapshot.errors)
+    errors.extend(snapshot.target_errors[c] for c in clients if c in snapshot.target_errors)
+    changes = []
+    for name in names:
+        candidates = snapshot.sources.get(name, [])
+        if len(candidates) > 1:
+            errors.append(f"{name}：源码重名：{', '.join(map(str, candidates))}")
+        elif action == "install" and not candidates:
+            errors.append(f"{name}：源已删除，只能清理所属残留链接")
+        source = candidates[0] if len(candidates) == 1 else None
+        for client in clients:
+            slot = snapshot.rows[name][client]
+            if slot.state in {CONFLICT, ERROR}:
+                errors.append(f"{name} / {TARGET_LABELS[client]}：{slot.state}，{slot.reason}")
+            if action == "install":
+                change = "无操作" if slot.state == CONNECTED else ("修复" if slot.state == STALE else "新增")
+            else:
+                change = "无操作" if slot.state == ABSENT else "移除"
+            changes.append(Change(name, client, change, source, slot))
+    if errors:
+        raise OperationError("整批未执行：\n" + "\n".join(dict.fromkeys(errors)))
+    return Plan(action, names, target, tuple(changes))
+
+
+def show_plan(ctx, plan):
+    out(ctx, f"操作：{plan.action}；目标：{plan.target}")
+    for item in plan.changes:
+        destination = ctx.targets[item.client] / item.name
+        suffix = f" -> {item.source}" if plan.action == "install" else ""
+        out(ctx, f"  {item.action}  {destination}{suffix}")
+
+
+@contextmanager
+def write_lock(ctx):
+    ctx.lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(ctx.lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OperationError("锁路径不是普通文件")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno in (errno.EAGAIN, errno.EACCES):
+                raise OperationError("另一个 skill 写操作正在进行，请稍后重试") from exc
+            raise
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def execute(ctx, plan, confirmed=False):
+    if all(item.action == "无操作" for item in plan.changes):
+        show_plan(ctx, plan)
+        return 0
+    completed = 0
+    failure = None
+    code = 1
+    with write_lock(ctx):
+        current = make_plan(ctx, scan(ctx), plan.action, plan.names, plan.target)
+        if confirmed and current != plan:
+            raise OperationError("确认后的状态已变化，本次未执行；请刷新后重新选择")
+        plan = current
+        for item in plan.changes:
+            path = ctx.targets[item.client] / item.name
+            try:
+                snapshot = scan(ctx)
+                if snapshot.errors or item.client in snapshot.target_errors:
+                    raise OperationError("执行前无法重新检查源码或安装目录")
+                candidates = snapshot.sources.get(item.name, [])
+                expected_sources = [item.source] if item.source is not None else []
+                latest = inspect_slot(ctx, item.name, item.client, candidates)
+                # A cleaned orphan disappears from the catalog; its remaining
+                # absent slots still belong to this already validated request.
+                if candidates != expected_sources or latest != item.before:
+                    raise OperationError(f"{path} 状态已变化，停止后续写入")
+                if item.action != "无操作":
+                    if plan.action == "install":
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        if inspect_slot(ctx, item.name, item.client,
+                                        snapshot.sources.get(item.name, [])) != item.before:
+                            raise OperationError(f"{path} 状态已变化")
+                    if item.action in {"修复", "移除"}:
+                        path.unlink()
+                    if item.action in {"新增", "修复"}:
+                        path.symlink_to(item.source, target_is_directory=True)
+                    after = inspect_slot(ctx, item.name, item.client,
+                                         discover(ctx)[0].get(item.name, []))
+                    expected = ABSENT if plan.action == "remove" else CONNECTED
+                    if after.state != expected:
+                        raise OperationError(f"操作后复查未达到 {expected}：{path}（{after.state}）")
+                out(ctx, f"✓ {item.action}  {item.name} / {TARGET_LABELS[item.client]}")
+                completed += 1
+            except (OSError, OperationError, InputError, KeyboardInterrupt) as exc:
+                failure = "用户中断" if isinstance(exc, KeyboardInterrupt) else str(exc)
+                if isinstance(exc, KeyboardInterrupt):
+                    code = 130
+                diagnostic(ctx, f"失败：{item.name} / {TARGET_LABELS[item.client]}：{failure}")
+                for pending in plan.changes[completed + 1:]:
+                    out(ctx, f"未执行  {pending.name} / {TARGET_LABELS[pending.client]}")
+                break
+    out(ctx, f"结果：{completed}/{len(plan.changes)} 项完成（含无操作）；目标：{plan.target}")
+    if failure:
+        out(ctx, "当前实际状态；已完成部分保留，重试会跳过正确链接：")
+        show_status(ctx, scan(ctx), plan.names)
+        return code
+    return 0
+
+
+def width(text):
+    return sum(0 if unicodedata.combining(c) else
+               2 if unicodedata.east_asian_width(c) in {"W", "F"} else 1
+               for c in text)
+
+
+def pad(text, size):
+    text = safe(text)
+    return text + " " * max(0, size - width(text))
+
+
+def show_status(ctx, snapshot, names=None):
+    names = list(snapshot.rows) if names is None else list(names)
+    name_width = max([20] + [width(safe(name)) + 2 for name in names])
+    out(ctx, f"本地 Skills：{ctx.repo}（状态表示文件连接，不代表客户端已重新加载）")
+    out(ctx, f"编号  {pad('Skill', name_width)}{pad('Claude', 14)}Agents")
+    if not names:
+        out(ctx, "（没有可管理的 skill；/ 清除筛选，q 退出）")
+    for index, name in enumerate(names, 1):
+        slots = snapshot.rows.get(name, {client: Slot(ABSENT) for client in ctx.targets})
+        duplicate = " [源码重名]" if len(snapshot.sources.get(name, [])) > 1 else ""
+        out(ctx, f"{index:>3}   {pad(name, name_width)}{pad(slots['claude'].state, 14)}{slots['agents'].state}{duplicate}")
+    out(ctx, f"外部内容不管理：Claude {snapshot.external['claude']} 项，Agents {snapshot.external['agents']} 项")
+    errors = snapshot.errors + list(snapshot.target_errors.values())
+    for error in errors:
+        diagnostic(ctx, error)
+    return 1 if errors else 0
+
+
+def show_detail(ctx, snapshot, name):
+    out(ctx, f"Skill：{name}")
+    for source in snapshot.sources.get(name, []):
+        out(ctx, f"  源码：{source}")
+    if not snapshot.sources.get(name):
+        out(ctx, "  源码：不存在有效源码包")
+    for client, slot in snapshot.rows[name].items():
+        out(ctx, f"  {TARGET_LABELS[client]}：{ctx.targets[client] / name}  {slot.state}")
+        if slot.raw is not None:
+            out(ctx, f"    链接文本：{slot.raw}")
+            out(ctx, f"    解析目标：{slot.target}")
+        if slot.reason:
+            out(ctx, f"    原因：{slot.reason}")
+
+
+def readline(ctx, prompt):
+    print(prompt, end="", file=ctx.stdout, flush=True)
+    value = ctx.stdin.readline()
+    return None if value == "" else value.strip()
+
+
+def menu(ctx):
+    query = ""
+    while True:
+        snapshot = scan(ctx)
+        names = [name for name in snapshot.rows if query in name]
+        show_status(ctx, snapshot, names)
+        out(ctx, "i 安装  r 卸载  v 详情  /关键词 筛选  q 退出；默认操作两处")
+        command = readline(ctx, "输入操作和编号，例如 i 2 或 r 1 2：")
+        if command is None or command == "q":
+            return 0
+        if command.startswith("/"):
+            query = command[1:]
+            continue
+        try:
+            parts = command.split()
+            if not parts or parts[0] not in {"i", "r", "v"} or len(parts) < 2:
+                raise InputError("请输入 i/r 和一个或多个编号，或 v 和一个编号")
+            try:
+                numbers = list(dict.fromkeys(int(number) for number in parts[1:]))
+            except ValueError as exc:
+                raise InputError("编号必须为整数") from exc
+            if any(number < 1 or number > len(names) for number in numbers):
+                raise InputError("编号不在当前列表中")
+            selected = [names[number - 1] for number in numbers]
+            if parts[0] == "v":
+                if len(numbers) != 1:
+                    raise InputError("详情一次只接受一个编号")
+                show_detail(ctx, snapshot, selected[0])
+                continue
+            action = "install" if parts[0] == "i" else "remove"
+            plan = make_plan(ctx, snapshot, action, selected)
+            show_plan(ctx, plan)
+            if all(item.action == "无操作" for item in plan.changes):
+                continue
+            answer = readline(ctx, "执行以上变更？[y/N]：")
+            if answer is None:
+                out(ctx, "已取消")
+                return 0
+            if answer.lower() != "y":
+                out(ctx, "已取消")
+                continue
+            code = execute(ctx, plan, confirmed=True)
+            if code == 130:
+                return code
+        except (InputError, OperationError, OSError) as exc:
+            diagnostic(ctx, str(exc))
+
+
+class Parser(argparse.ArgumentParser):
+    def __init__(self, *args, context=None, **kwargs):
+        self.context = context
+        super().__init__(*args, **kwargs)
+
+    def error(self, message):
+        raise InputError(message)
+
+    def _print_message(self, message, file=None):
+        if message:
+            stream = self.context.stderr if file is sys.stderr else self.context.stdout
+            stream.write(message)
+
+
+def argument_parser(ctx):
+    parser = Parser(prog="skill", context=ctx,
+                    description="管理本仓库源码软链接。裸命令进入编号菜单；无终端时只显示状态。")
+    commands = parser.add_subparsers(dest="command", parser_class=lambda **kw: Parser(context=ctx, **kw))
+    commands.add_parser("status", aliases=["list"], help="查看两处连接状态")
+    for action, aliases, help_text in [("install", [], "连接或修复源码链接"),
+                                        ("remove", ["uninstall"], "仅移除所属链接")]:
+        command = commands.add_parser(action, aliases=aliases, help=help_text)
+        command.add_argument("names", nargs="+", metavar="NAME", help="skill 名称或本仓库源码路径，可批量")
+        command.add_argument("--target", choices=["claude", "agents", "all"], default="all", help="作用范围，默认 all")
+        command.add_argument("--dry-run", action="store_true", help="仅预览，不创建目录或锁文件")
+    return parser
+
+
+def main(argv=None, ctx=None):
+    ctx = ctx or Context.production()
+    try:
+        try:
+            args = argument_parser(ctx).parse_args(argv)
+        except SystemExit as exc:
+            return int(exc.code or 0)
+        if args.command is None and ctx.stdin.isatty() and ctx.stdout.isatty():
+            return menu(ctx)
+        snapshot = scan(ctx)
+        if args.command in {None, "status", "list"}:
+            return show_status(ctx, snapshot)
+        action = "remove" if args.command == "uninstall" else args.command
+        plan = make_plan(ctx, snapshot, action, args.names, args.target)
+        if args.dry_run:
+            show_plan(ctx, plan)
+            return 0
+        return execute(ctx, plan)
+    except InputError as exc:
+        diagnostic(ctx, f"参数错误：{exc}")
+        return 2
+    except (OSError, OperationError) as exc:
+        diagnostic(ctx, str(exc))
+        return 1
+    except KeyboardInterrupt:
+        diagnostic(ctx, "已中断；已完成的变更保留，可查看状态后重试")
+        return 130
+
+
+if __name__ == "__main__":
+    sys.exit(main())

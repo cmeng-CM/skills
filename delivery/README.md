@@ -23,17 +23,13 @@
 在仓库根执行：
 
 ```bash
-bash install-skill.sh delivery/delivery-design
-bash install-skill.sh delivery/delivery-plan
-bash install-skill.sh delivery/delivery-implement
-bash install-skill.sh delivery/delivery-review
-bash install-skill.sh delivery/delivery-verify
-bash install-skill.sh delivery/delivery-orchestrate
+./skill install delivery-design delivery-plan delivery-implement \
+  delivery-review delivery-verify delivery-orchestrate
 # 需要复杂 bug 诊断与修复时另装
-bash install-skill.sh delivery/delivery-fix
+./skill install delivery-fix
 ```
 
-安装仍以 basename 命名，客户端使用 `$delivery-plan` 等原名称。安装器会覆盖既有目标，操作前核对它们确实是预期软链；未知实际目录先保留和判断。各专业包分别可搬到无 Git、无编排器、无兄弟包的项目使用；独立调用默认不提交。
+安装名称沿用包目录 basename，客户端使用 `$delivery-plan` 等原名称。正确链接保持不动，缺失时补链；同名外部链接或实际内容报冲突并保留，不覆盖删除。各专业包分别可搬到无 Git、无编排器、无兄弟包的项目使用；独立调用默认不提交。
 
 ## 使用与恢复
 

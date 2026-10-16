@@ -15,7 +15,7 @@
 | [设计规范](delivery/delivery-design/references/document-standard.md)、[规划规范](delivery/delivery-plan/references/plan-standard.md) | 分别由新设计、规划 skill 维护，修改真源，不另建副本 |
 | `docs/designs/`、`docs/plans/` | 设计与计划资料；是否适用于当前改动须结合文档范围和实际实现判断 |
 | `.delivery/`、`.workflow/`、历史 `docs/delivery/` | 任务材料、执行状态或验证证据；不是 skill 源码包 |
-| [README.md](README.md) | 安装、卸载与本机 `skill` shell 函数说明 |
+| [skill](skill)、[README.md](README.md) | 轻量本地管理命令及安装、卸载、状态和兼容说明 |
 
 ## 修改原则
 
@@ -31,20 +31,23 @@
 ## 脚本与依赖
 
 - 辅助代码以 Python 3 和 Bash 为主。Python 优先标准库；新增外部依赖在所属 skill 中声明，不为单包改动引入仓库级依赖体系。
-- 根目录安装与卸载脚本使用 `set -euo pipefail`，通过 `bash` 执行，不要 `source`。
+- 根目录 `skill` 是唯一的安装管理入口，使用 Python 3 标准库。菜单和快捷命令共享同一套核心规则；旧安装、卸载 shell 脚本已移除，不再新增转发层。
 - `folo/` 使用自己的 CLI 和版本约定。具体依赖、环境选择和命令以目标 `SKILL.md` 为准。
 
 ## 安装与卸载
 
 ```bash
-bash install-skill.sh <skill目录>
-bash install-skill.sh delivery/delivery-plan
-bash uninstall-skill.sh <skill名或路径>
+./skill status
+./skill install delve delivery-plan
+./skill remove delve
+./skill install delve --dry-run
 ```
 
-- 安装器将指定包软链接到 `~/.claude/skills/` 和 `~/.agents/skills/`，名称取包目录的 basename。
-- 安装器会删除同名旧目标后重建链接，卸载器也会删除同名实际目录或文件；执行前核对目标，保全不属于本次操作的内容。
-- 保留现有绝对路径处理和先删除再建链接的语义，不直接改成 `ln -sfn`：目标为真实目录时可能把链接建进目录内部。
+- 管理器只发现根目录及 `delivery/` 直接子包，名称取包目录 basename；不递归历史快照或归档，不维护安装数据库。
+- 安装位置为 `~/.claude/skills/` 和 `~/.agents/skills/`，直接链接当前源码；归属要求目标恰好匹配本仓库允许的同名包位置，不能只检查字符串前缀。
+- 正确链接不重建，缺失时补链；实际文件、目录、外部链接或归属不明目标不覆盖、不删除。卸载只移除所属链接，不递归删除，不提供 force。
+- 批量修改先整批预检，真实执行互斥并再次核对；中途失败报告实际结果，重试幂等。`status` 和 `--dry-run` 不创建安装目录或锁文件。
+- `skill install/remove` 支持名称或本仓库合法源码路径，所有规则在 `skill` 中维护；不在 README 或终端函数中复制管理逻辑。全局入口为 `~/.local/bin/skill`，原 `skill()` 函数须移除以免遮蔽。
 - 软链接使安装位置指向当前源码，无需重复复制；已运行客户端是否重新加载、活动任务采用哪个版本，仍须按客户端与流程规则确认。
 
 ## 验证方式
@@ -65,3 +68,7 @@ python3 -B -m unittest discover -s <skill目录>/tests -p 'test_*.py' -v
 适用目录包括 `task-workflow`、`delivery/delivery-design`、`delivery/delivery-plan`、`delivery/delivery-orchestrate`。不要把仅有行为案例 JSON 的目录当作已运行单元测试。
 
 文档检查器和包结构检查器只证明各自声明的机械条件；通过不等于语义正确、模型执行有效或用户验收完成。汇报时说明实际运行了什么、覆盖什么，以及仍未验证什么。
+
+本地管理器使用 `python3 -B -m unittest discover -s tests -p 'test_skill_manager.py' -v`。测试注入隔离运行上下文，不改真实 HOME 或两处客户端安装；验证本机入口时另外核实 shell 解析和已有链接是否保持。
+
+测试使用自动清理的临时目录；保留测试源码，运行后清理本次临时夹具、调试脚本和迁移快照，不把它们作为长期仓库产物。终端配置恢复备份与测试临时产物分别处理。

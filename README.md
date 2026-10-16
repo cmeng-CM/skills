@@ -1,106 +1,80 @@
 # skills
 
-skill 集合仓库。每个 skill 以 `SKILL.md`（prompt-as-code）为主体、各自自包含，skill 之间无共享代码。仓库维护约定见 [`AGENTS.md`](AGENTS.md)，skill 编写模板见 [`模板.md`](模板.md)。
-
-Delivery 的五项独立能力与编排 skill 统一位于 [`delivery/`](delivery/README.md)，安装名称仍为 `delivery-*`。该目录保存源码；任务产物使用项目内 `.delivery/日期-主题/`。例如 `bash install-skill.sh delivery/delivery-plan`。
+可独立安装的 agent skills 集合。每个包以 `SKILL.md` 为主体，按需附带参考文档、资源和脚本。维护约定见 [AGENTS.md](AGENTS.md)，编写模板见 [模板.md](模板.md)。Delivery 的专业能力与编排入口位于 [delivery/](delivery/README.md)，安装名称保持 `delivery-*`。
 
 技术方案和实现规划分别统一使用 [`delivery-design`](delivery/delivery-design/SKILL.md) 与 [`delivery-plan`](delivery/delivery-plan/SKILL.md)，普通设计、规划请求即可使用，无需先启动完整编排。新目标分别保存为同一任务目录中的 `design.md`、`plan.md`；已有明确归属的目标继续沿用原目录。旧 `design-tech-doc`、`plan-implementation` 已退役，历史文档、快照和运行记录保留。
 
 `.delivery/`、`.workflow/` 是仅本地保留的任务材料和执行记录目录，不纳入 Git；已有历史提交不改写。
 
-## 安装与卸载
+## 本地管理
 
-仓库提供两个脚本，把指定 skill 以**软链接**方式安装到两个目录：
+在任意目录输入 `skill`，查看本仓库技能在两处安装目录的连接状态，并按编号操作：
 
-- `~/.claude/skills` —— Claude Code
-- `~/.agents/skills` —— 跨工具标准路径，**ZCode / Codex / pi 都读这里**（Codex 源码里 `AGENTS_DIR_NAME = ".agents"`，注释明确写着读 `$HOME/.agents/skills`）
+```text
+编号  Skill             Claude        Agents
+  1   delve             已连接        已连接
+  2   delivery-plan     未安装        已连接
 
-所以两处就够了：一个给 Claude Code，一个给其余客户端。
+i 安装  r 卸载  v 详情  /关键词 筛选  q 退出
+输入操作和编号，例如 i 2 或 r 1 2：
+```
 
-- [`install-skill.sh`](install-skill.sh) — 安装 / 覆盖安装一个 skill
-- [`uninstall-skill.sh`](uninstall-skill.sh) — 从两个目录移除一个 skill
+列表编号以当前屏幕为准；筛选后重新编号。`i 1 2` 批量安装，`r 1 2` 批量卸载，`v 1` 查看源码、两处链接目标和冲突原因，`/` 清除筛选。修改前预览并确认一次，默认操作两处；取消不写入。没有交互终端时，裸命令只输出状态。
 
-软链接的好处：**改源即生效**。skill 随时在仓库里更新，无需重新安装，各客户端立刻看到最新内容。
-
-### 直接调用
+也可以按名称直接执行，不再确认：
 
 ```bash
-# 在仓库根目录下
-./install-skill.sh <skill 目录路径>
-./uninstall-skill.sh <skill 名称或路径>
+skill status
+skill install delve delivery-plan
+skill remove delve
+skill install delve --target claude
+skill install delve --dry-run
+skill --help
 ```
 
-### 推荐用法：`skill` 命令（zshrc 函数）
+`--target claude|agents|all` 默认 `all`，`--dry-run` 不创建目录或锁文件。`list` 是 `status` 的别名，`uninstall` 是 `remove` 的别名。源码目录变化后，按名称操作无需记住嵌套路径。
 
-每次都 `cd` 到脚本目录、还要拼 skill 的绝对路径，太繁琐。在 `~/.zshrc` 里加一个 `skill` 函数，即可在**任意目录**用 `install / remove / list` 三个子命令调用本仓库的脚本：
+## 安装方式与状态
 
-```zsh
-# skill 安装/卸载/列表：任意目录可用，调用 skills 仓库的脚本
-skill() {
-  local repo="$HOME/workspace/github/skills"
-  local cmd="$1"
-  local clients=(
-    "$HOME/.claude/skills"
-    "$HOME/.agents/skills"
-  )
-  case "$cmd" in
-    install)
-      [ $# -ge 2 ] || { echo "用法: skill install <skill 目录的绝对路径>"; return 1; }
-      bash "$repo/install-skill.sh" "$2"
-      ;;
-    remove|uninstall)
-      [ $# -ge 2 ] || { echo "用法: skill remove <skill 目录的绝对路径或名称>"; return 1; }
-      bash "$repo/uninstall-skill.sh" "$2"
-      ;;
-    list)
-      local dir entry name target found
-      for dir in "${clients[@]}"; do
-        echo "## $dir"
-        [ -d "$dir" ] || { echo "  (目录不存在)"; echo; continue; }
-        found=0
-        for entry in "$dir"/*(N); do
-          [ -e "$entry" ] || [ -L "$entry" ] || continue
-          found=1
-          name="${entry:t}"
-          if [ -L "$entry" ]; then
-            target="${entry:A}"
-            printf "  %-20s -> %s\n" "$name" "$target"
-          else
-            printf "  %-20s (实际目录)\n" "$name"
-          fi
-        done
-        (( found )) || echo "  (空)"
-        echo
-      done
-      ;;
-    *)
-      echo "用法:"
-      echo "  skill install <skill 目录的绝对路径>     # 安装/覆盖安装到两个目录"
-      echo "  skill remove  <skill 路径或名称>        # 从两个目录卸载"
-      echo "  skill list                               # 列出两个目录已装的 skill"
-      return 1
-      ;;
-  esac
-}
-```
+管理器把源码直接软链接到 `~/.claude/skills` 和 `~/.agents/skills`。修改源码无需重新复制；已运行客户端是否重新加载，取决于各自的发现、配置和缓存规则。
 
-加载后即可使用：
+| 状态 | 含义与处理 |
+| --- | --- |
+| 已连接 | 正确指向当前源码；重复安装不重建链接 |
+| 未安装 | 该处没有安装目标；安装时补链 |
+| 链接失效 | 可识别的本仓库旧链接没有指向当前源码；安装时修复 |
+| 源已删除 | 仍有所属链接，但有效源码不存在；允许卸载残留 |
+| 同名冲突 | 实际文件、目录、外部链接或无法认定的目标；拒绝覆盖和删除 |
+| 检查错误 | 无法读取或检查；报错，不当作未安装 |
+
+只发现根目录及 `delivery/` 的直接子包，历史快照和归档不进入安装目录。外部技能不纳入管理，同名时显示冲突。卸载只移除所属链接，保留源码。首版没有强制覆盖、远程下载、版本管理或自动搬家迁移。
+
+批量操作先整批检查；有冲突则不开始。中途失败会停止后续写入，报告已完成、失败及未执行项；再次执行会跳过正确链接并补齐缺失。两处目录之间不提供整体回滚。
+
+## 命令入口
+
+核心为仓库根目录可执行文件 [skill](skill)，只使用 Python 3 标准库，面向当前 macOS/POSIX 环境。仓库内可直接运行：
 
 ```bash
-source ~/.zshrc
-
-skill install /Users/cm/workspace/github/skills/delve
-skill remove  /Users/cm/workspace/github/skills/delve
-skill remove  delve          # remove 也支持只写名称
-skill list
+./skill
+./skill status
 ```
 
-实现要点：
-- 用 `bash` 调用而非 `source`——脚本里 `set -euo pipefail` 配 `exit`，`source` 会让 `exit` 关掉当前终端。
-- `install` 走脚本的"传相对路径也会自动转绝对路径"逻辑，所以传相对路径同样可用。
-- `remove` 用脚本里的 `basename` 取名，传绝对路径或纯名称都能卸载。
-- `list` 用 zsh glob `*(N)` 处理空目录，软链接显示 `-> 源目录`，git clone 的真实目录显示 `(实际目录)`。
+全局入口使用 `~/.local/bin/skill` 到仓库 `skill` 的链接，终端 PATH 需要包含 `~/.local/bin`。旧 `.zshrc` 中的 `skill()` 函数应移除，否则会遮蔽新命令；已有终端请重新打开，或执行 `unfunction skill`。只重新 source 配置不会删除内存中的旧函数。
 
-### 关于"全局命令"的取舍
+只使用 `skill` 入口，也支持合法的本仓库源码路径：
 
-`skill` 函数定义在 `~/.zshrc` 里，仅 zsh 交互式 shell 可用；若将来要给团队分发、或想在 bash / 脚本 / 非交互环境也能调，需要另行适配可执行脚本，其中的 zsh 专用语法也要调整。安装脚本的维护注意事项见 [`AGENTS.md`](AGENTS.md)。
+```bash
+./skill install delivery/delivery-plan
+./skill remove delve
+```
+
+支持绝对路径、加引号的含空格路径和额外选项。原安装、卸载 shell 脚本已移除；外部路径安装、仅取外部路径 basename 卸载、删除同名真实内容的旧行为不再支持。
+
+## 验证与设计
+
+```bash
+python3 -B -m unittest discover -s tests -p 'test_skill_manager.py' -v
+```
+
+测试注入隔离源码、安装目录和锁路径，不修改本机真实安装；临时目录在测试结束后自动清理。覆盖发现范围、状态、保护、幂等、失败恢复、菜单、路径参数及真实 PTY 交互。测试源码保留用于后续回归。设计与交付记录见 [技术方案](docs/designs/local-skill-manager.md) 和 [实现计划](docs/plans/local-skill-manager.md)。
