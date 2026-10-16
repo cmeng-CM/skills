@@ -1,6 +1,6 @@
 ---
 name: delve
-description: Use when the request isn't clear enough to act on — two readings leading to different outcomes, or two approaches with non-obvious tradeoffs. Also for explicit asks: 拷问我 / 帮我分析一下 / 哪种方案好 / 帮我对比一下 / 方案设计.
+description: 用于围绕问题、想法、方案或设计进行深入思考、分析、比较、权衡和改进讨论。用户表达这类意图即触发，无需出现固定关键词，如“思考一下”“分析下”“这个问题怎么分析”“哪种方式好”“怎么处理合适”“有没有更好的设计”。即使目标明确，只要做法仍需讨论或优化，也应使用；需求有歧义或缺少关键决策信息时同样适用。不用于单纯事实查询、内容摘要，或方案已确定的直接执行。
 ---
 
 # delve
