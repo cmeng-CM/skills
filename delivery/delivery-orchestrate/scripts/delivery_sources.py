@@ -6,8 +6,8 @@ import sys
 
 from delivery import actor, canonical, digest, fail, safe_path, shape, strings, text
 
-NAMES = {"delivery-" + name for name in ("design", "plan", "implement", "review", "verify", "orchestrate")}
-MODULES = ("delivery", "delivery_v2", "delivery_sources", "delivery_monitor", "delivery_recovery")
+NAMES = {"delivery-" + name for name in ("design", "plan", "implement", "review", "verify", "orchestrate", "fix")}
+MODULES = ("delivery", "delivery_v2", "delivery_sources", "delivery_monitor", "delivery_recovery", "delivery_implementation")
 
 
 LOADED_SOURCE_BYTES = Path(__file__).read_bytes()
@@ -167,7 +167,7 @@ class SourcesMixin:
             if decision == "compatible":
                 excluded = list(config["payload"]["source_authors"]["mapping"])
                 if new["name"] == "delivery-orchestrate":
-                    excluded += [e["payload"]["actor"] for e in self.data["events"] if e["kind"] == "record" and e["payload"]["kind"] == "implementation"]
+                    excluded += self.implementation_authors()
                 if any(self.same_actor(request["actor"], a) for a in excluded):
                     fail("compatible source update needs independent review")
             references = self.report_references(request)

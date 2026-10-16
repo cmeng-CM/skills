@@ -62,6 +62,20 @@ class HarnessTests(unittest.TestCase):
         self.assertFalse((self.workspace/'.agents/skills/delivery-review/tests').exists())
         self.assertNotIn('PRIVATE_ANSWER', json.dumps(H.load(self.output/'case.json')))
 
+    def test_optional_fix_is_a_single_standalone_professional(self):
+        package = self.skills / 'delivery-fix'
+        package.mkdir()
+        (package / 'SKILL.md').write_text('# fix\n')
+        case = H.load(self.case)
+        case['skills'] = ['delivery-fix']
+        H.save(self.case, case)
+        output = self.root / 'fix-result'
+        result = H.prepare(self.case, self.skills, output, 'candidate')
+        workspace = Path(H.load(output / 'evaluation.json')['workspace'])
+        self.addCleanup(shutil.rmtree, workspace, ignore_errors=True)
+        self.assertEqual(['delivery-fix'], [p.name for p in (workspace / '.agents/skills').iterdir()])
+        self.assertFalse((workspace / '.git').exists())
+
     def test_evaluator_runtime_files_are_excluded_only_at_exact_top_roots(self):
         (self.workspace/'.evaluation-state/state.sqlite').write_text('runtime metadata')
         business=self.workspace/'ledger/.evaluation-state';business.mkdir(parents=True)

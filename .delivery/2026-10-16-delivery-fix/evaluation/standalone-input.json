@@ -1,0 +1,15 @@
+{
+  "project": "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-fix-standalone-4i76gw3g",
+  "skill": "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-fix-standalone-4i76gw3g/.agents/skills/delivery-fix",
+  "input_files": {
+    "SKILL.md": "7daff8e141e9646c1ea314dd9d61af7eb1b2083b2b5a503d9d17de93b7ce49d2",
+    "agents/openai.yaml": "0102ae6fa6a118f6439f53d94a48e2ffbe329a121ccd297ae7265f2f26581052",
+    "assets/bug-index-template.md": "588683535cc33b2a03ec04dfbe76ef813dbebe7b34130b4a1fc631c45c51e460",
+    "assets/fix-template.md": "60e6ebe80c779ff22d13f4707881dedeceebd9cac9cbd026c22a5c8fb3877335",
+    "references/delivery-contract.md": "fb3a58c217c80508f2853a82ffc347e933b7ab2eff0fa18c8995669c429dbdf7",
+    "references/example-fix.md": "f05685f97f4c8b4acaaf59ad7d013bbabe1e1884f4b990986a0e48c64c6c055a",
+    "references/fix-standard.md": "5977bd714b217bad9cff42282e21b239388878f9e18912c0c95bf2b13ac6ce49",
+    "references/work-rules.md": "94facd708d3dd8b7df27d87946f13dd36e6f1d9f4138805bd8f9ea82c54ffc80"
+  },
+  "mode": "native fresh agent, only fix package copied; controlled fault, no Git"
+}

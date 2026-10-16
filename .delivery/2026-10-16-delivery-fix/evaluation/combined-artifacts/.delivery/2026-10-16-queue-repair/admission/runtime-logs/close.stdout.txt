@@ -1,0 +1,76 @@
+{
+  "seq": 25,
+  "at": "2026-10-16T07:13:04.698366+00:00",
+  "kind": "close",
+  "op": "close",
+  "request_hash": "7359a6c8aa453e8d4356df0ff543609aa2a258a2ee7f50ea53389341b3b435d3",
+  "payload": {
+    "mode": "complete",
+    "actor": {
+      "id": "/root",
+      "context": "delivery-fix-combined-control"
+    },
+    "summary": "Current implementation, independent whole review and required command/verdict passed.",
+    "report": {
+      "path": ".delivery/2026-10-16-queue-repair/closeout.md",
+      "object_hash": "8aa3d21968c17590359b09e9a04ff39461470dbd280d600246e7be205c9fee09",
+      "bytes": 395
+    },
+    "config_op": "configure-002",
+    "exceptions": [],
+    "state": {
+      "configuration": "current",
+      "config_operation": "configure-002",
+      "implementation": {
+        "T1": {
+          "status": "passed",
+          "operation_id": "fix-passed"
+        }
+      },
+      "review": {
+        "R1": {
+          "status": "passed",
+          "operation_id": "review-R1"
+        }
+      },
+      "verification": {
+        "A1": {
+          "status": "passed",
+          "operation_id": "verification-A1"
+        }
+      },
+      "issues": {},
+      "lifecycle": "active",
+      "closure": null,
+      "runs": {
+        "run-A1": {
+          "status": "finished",
+          "acceptance": "A1",
+          "exit_code": 0,
+          "timed_out": false
+        }
+      },
+      "contract_version": 2,
+      "admission": {
+        "mapping_review": {
+          "status": "passed",
+          "operation": "mapping-002"
+        },
+        "change_review": {
+          "status": "passed",
+          "operation": "change-002"
+        }
+      },
+      "unassessed_changes": [],
+      "change_set_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "unsupported_entries": [],
+      "skill_drift": [],
+      "resources": [],
+      "diagnosis_required": [],
+      "unknown_runs": [],
+      "diagnostics": []
+    }
+  },
+  "previous": "1aafd5831e45d54315e793a8afa42c4ebf731c968b5052a979459d80ab035e5f",
+  "hash": "0c82c4833e37f53f2c3a5ecb199e4055e7185ecdca0c330d2369dc60566abfd2"
+}

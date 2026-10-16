@@ -1,0 +1,109 @@
+{
+  "seq": 5,
+  "at": "2026-10-16T07:02:52.500739+00:00",
+  "kind": "record",
+  "op": "initial-failed",
+  "request_hash": "c2a6a2ffd4d47b44c5015584e187c15d0322a1f1b4a1adda416b5b4e994bc5ea",
+  "payload": {
+    "schema_version": 2,
+    "contract_version": 2,
+    "actor": {
+      "id": "/root",
+      "context": "delivery-fix-combined-control"
+    },
+    "kind": "implementation",
+    "target": "T1",
+    "result": "failed",
+    "summary": "Actual initial selfcheck fails; no product correction claimed.",
+    "config_op": "configure-001",
+    "snapshot": {
+      "scopes": [
+        "queue_store.py",
+        "tests"
+      ],
+      "entries": {
+        "queue_store.py": {
+          "object_hash": "5dafb66963d6fa0d9b45fb8a917012df4c1ba824e0f668b46d030e2cb402fc98",
+          "bytes": 1023,
+          "executable": false
+        },
+        "tests": {
+          "directory": true
+        },
+        "tests/test_queue.py": {
+          "object_hash": "eeedeef2d4f287f225eb67d690a3b33990a67d18d68491817a9e62b01c278965",
+          "bytes": 1518,
+          "executable": false
+        }
+      },
+      "hash": "f3cd5fed76f2245a9cd470c3beba73623df6647823138dfa668c0fe670f8beb1"
+    },
+    "references": {
+      "report": {
+        "path": ".delivery/2026-10-16-queue-repair/fixes/BUG-001-stale-result/001/fix.md",
+        "object_hash": "5bad5e69d8cc64597eeaa1ece4e7c24310512c55356f33e72d6a513d843ba93b",
+        "bytes": 1061
+      },
+      "evidence": [
+        {
+          "path": ".delivery/2026-10-16-queue-repair/fixes/BUG-001-stale-result/001/evidence/before.stderr.txt",
+          "object_hash": "21c02718cac1d6e0dda5a0a58abe400cf44c20451b7b71047a35b5ff95661d66",
+          "bytes": 1169
+        }
+      ]
+    },
+    "skill_pin": {
+      "contract_version": 1,
+      "files": [
+        {
+          "bytes": 4842,
+          "executable": false,
+          "object_hash": "56612d7d01283519edfdebad37a170e73ac052260f8305bfa8c5a4f7bd4fb53f",
+          "relative_path": "SKILL.md"
+        },
+        {
+          "bytes": 334,
+          "executable": false,
+          "object_hash": "d48433ebc66a1b2961a14458fc90c6c342f942527e6a6328902411e46eee29a9",
+          "relative_path": "agents/openai.yaml"
+        },
+        {
+          "bytes": 2218,
+          "executable": false,
+          "object_hash": "a42c9ca9e62c441f730176fc00d0e795a2264b1f2591c9b1bc01c8de07b2af96",
+          "relative_path": "assets/implementation-template.md"
+        },
+        {
+          "bytes": 5873,
+          "executable": false,
+          "object_hash": "2ee99a1f6f60c097a72455c57aab41791a321d353a72dab9f72fd007584712aa",
+          "relative_path": "references/delivery-contract.md"
+        },
+        {
+          "bytes": 4279,
+          "executable": false,
+          "object_hash": "65d201668df3206288a2bab2bc328bf47fbb58684ea8c593fe340010241ce472",
+          "relative_path": "references/example-implementation.md"
+        },
+        {
+          "bytes": 7430,
+          "executable": false,
+          "object_hash": "3fd73462006c06e7101f707b004078521aaeab14faf61eb41a3dbd4f41143dad",
+          "relative_path": "references/implementation-standard.md"
+        },
+        {
+          "bytes": 4188,
+          "executable": false,
+          "object_hash": "4d1a5e438d0334c311d15adc31d764b5a8c4b3d30057883559bc87ab9cb5305c",
+          "relative_path": "references/work-rules.md"
+        }
+      ],
+      "name": "delivery-implement",
+      "source_root": "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-fix-combined-k4hy9hln/.agents/skills/delivery-implement",
+      "tree_hash": "377e09830986bbc09726564638b148a7c843dbde68306b976e24a2f104b58ba7"
+    },
+    "orchestrate_pin": "ee71294b37cac95a3f42070132cb01704114549ead084cb4be4f7199b880b420"
+  },
+  "previous": "4c088df3bea74c261aba0757785ceaa3270359f52be2c2c5a07546560c19e51d",
+  "hash": "dc5e698583f61cbbb82853c269d0ee94cffb19a44ac6929a6d05f127ce986c83"
+}

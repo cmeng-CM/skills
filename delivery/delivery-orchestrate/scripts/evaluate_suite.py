@@ -23,6 +23,7 @@ import uuid
 SCHEMA = 1
 EVALUATOR_DIRS = ('.evaluation-state', '.evaluation-log', '.evaluation-tmp', '.evaluation-output')
 SKILLS = ('delivery-design', 'delivery-plan', 'delivery-implement', 'delivery-review', 'delivery-verify', 'delivery-orchestrate')
+PROFESSIONAL_SKILLS = tuple(name for name in SKILLS if name != 'delivery-orchestrate') + ('delivery-fix',)
 
 
 def digest(path):
@@ -141,9 +142,9 @@ def prepare(case_path, skills_root, output, variant):
     if case.get('mode') not in ('standalone', 'fullflow', 'resume', 'negative'):
         raise ValueError('unsupported mode')
     skills = case.get('skills', [])
-    if case['mode'] == 'standalone' and (len(skills) != 1 or skills[0] not in SKILLS[:5]):
+    if case['mode'] == 'standalone' and (len(skills) != 1 or skills[0] not in PROFESSIONAL_SKILLS):
         raise ValueError('standalone requires exactly one professional skill')
-    if not skills or any(s not in (*SKILLS, 'task-workflow') for s in skills):
+    if not skills or any(s not in (*SKILLS, *PROFESSIONAL_SKILLS, 'task-workflow') for s in skills):
         raise ValueError('unsupported skill selection')
     output = Path(output).resolve()
     if output.exists():

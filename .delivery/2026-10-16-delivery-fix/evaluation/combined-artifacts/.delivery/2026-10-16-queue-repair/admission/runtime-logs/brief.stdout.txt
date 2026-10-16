@@ -1,0 +1,163 @@
+{
+  "kind": "review",
+  "target": "R1",
+  "definition": {
+    "id": "R1",
+    "tasks": [
+      "T1"
+    ],
+    "whole": true
+  },
+  "tasks": [
+    "T1"
+  ],
+  "requirements": [
+    {
+      "acceptance": [
+        "A1"
+      ],
+      "id": "Q1",
+      "source": {
+        "path": ".delivery/2026-10-16-queue-repair/plan.md",
+        "quote": "Requirement Q1"
+      },
+      "tasks": [
+        "T1"
+      ]
+    }
+  ],
+  "required_sources": {
+    "authorization": {
+      "bytes": 171,
+      "object_hash": "91ea1b5251ec1ced19f0326225fc92e4bfe9a9216aff2423185e78bb97c81f26",
+      "path": ".delivery/2026-10-16-queue-repair/authorization.md",
+      "quote": "The user authorizes",
+      "scope": "T1 queue repair and optional fix transfer"
+    },
+    "plan": {
+      "bytes": 1176,
+      "object_hash": "a8e084b33f37fe39021e769ac4c994130dcd1d5c0e385d22bc90d8433ce6c15e",
+      "path": ".delivery/2026-10-16-queue-repair/plan.md",
+      "quote": "Requirement Q1"
+    },
+    "requirements": [
+      {
+        "bytes": 1176,
+        "object_hash": "a8e084b33f37fe39021e769ac4c994130dcd1d5c0e385d22bc90d8433ce6c15e",
+        "path": ".delivery/2026-10-16-queue-repair/plan.md",
+        "quote": "Requirement Q1"
+      }
+    ]
+  },
+  "skill_pins": {
+    "delivery-fix": {
+      "contract_version": 1,
+      "name": "delivery-fix",
+      "source_root": "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-fix-combined-k4hy9hln/.agents/skills/delivery-fix",
+      "tree_hash": "1a782b462dcb930d6bb6ca0194ababbbf977499e4ae2f1f06170120a6d469297"
+    },
+    "delivery-implement": {
+      "contract_version": 1,
+      "name": "delivery-implement",
+      "source_root": "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-fix-combined-k4hy9hln/.agents/skills/delivery-implement",
+      "tree_hash": "377e09830986bbc09726564638b148a7c843dbde68306b976e24a2f104b58ba7"
+    },
+    "delivery-orchestrate": {
+      "contract_version": 2,
+      "name": "delivery-orchestrate",
+      "source_root": "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-fix-combined-k4hy9hln/.agents/skills/delivery-orchestrate",
+      "tree_hash": "ee71294b37cac95a3f42070132cb01704114549ead084cb4be4f7199b880b420"
+    },
+    "delivery-plan": {
+      "contract_version": 1,
+      "name": "delivery-plan",
+      "source_root": "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-fix-combined-k4hy9hln/.agents/skills/delivery-plan",
+      "tree_hash": "430daed35bf32c290ef094d14d4c676c40078cc8ba2f0111b555055d5b9f04b7"
+    },
+    "delivery-review": {
+      "contract_version": 1,
+      "name": "delivery-review",
+      "source_root": "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-fix-combined-k4hy9hln/.agents/skills/delivery-review",
+      "tree_hash": "fb6c7d41eff1b6001cb68c62d177ec255d3425257c9cfdd9ffbb9ce8c78ec15c"
+    },
+    "delivery-verify": {
+      "contract_version": 1,
+      "name": "delivery-verify",
+      "source_root": "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-fix-combined-k4hy9hln/.agents/skills/delivery-verify",
+      "tree_hash": "68b34ea8e1a3640875753c72feb99ed4406498fcf5acfb84e3685ab0ef303c0c"
+    }
+  },
+  "excluded_implementation_authors": [
+    {
+      "context": "delivery-fix-combined-control",
+      "id": "/root"
+    },
+    {
+      "context": "native-agent:/root/fix_combined_diagnose",
+      "id": "/root/fix_combined_diagnose"
+    },
+    {
+      "context": "native-agent:/root/fix_combined_resume",
+      "id": "/root/fix_combined_resume"
+    }
+  ],
+  "writable_scope": [],
+  "resources": [
+    {
+      "id": "path:queue_store.py",
+      "mode": "read"
+    },
+    {
+      "id": "path:tests",
+      "mode": "read"
+    }
+  ],
+  "report_location": "review/",
+  "state": {
+    "configuration": "current",
+    "config_operation": "configure-002",
+    "implementation": {
+      "T1": {
+        "status": "passed",
+        "operation_id": "fix-passed"
+      }
+    },
+    "review": {
+      "R1": {
+        "status": "pending",
+        "operation_id": null
+      }
+    },
+    "verification": {
+      "A1": {
+        "status": "pending",
+        "operation_id": null
+      }
+    },
+    "issues": {},
+    "lifecycle": "active",
+    "closure": null,
+    "runs": {},
+    "contract_version": 2,
+    "admission": {
+      "mapping_review": {
+        "status": "passed",
+        "operation": "mapping-002"
+      },
+      "change_review": {
+        "status": "passed",
+        "operation": "change-002"
+      }
+    },
+    "unassessed_changes": [],
+    "change_set_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "unsupported_entries": [],
+    "skill_drift": [],
+    "resources": [],
+    "diagnosis_required": [],
+    "unknown_runs": [],
+    "diagnostics": []
+  },
+  "note": "Read full referenced requirements and constraints; this derived brief is not a second task authority.",
+  "skill": "delivery-review"
+}

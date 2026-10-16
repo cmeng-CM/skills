@@ -8,12 +8,14 @@ from urllib.parse import unquote, urlsplit
 
 NAMES = tuple('delivery-' + suffix for suffix in
               ('design', 'plan', 'implement', 'review', 'verify', 'orchestrate'))
+OPTIONAL = ('delivery-fix',)
 
 
-def check(root):
+def check(root, require_fix=False):
     errors = []
     counts = {'skills': 0, 'markdown': 0, 'json': 0, 'local_links': 0}
-    for name in NAMES:
+    selected = NAMES + tuple(name for name in OPTIONAL if require_fix or (root / name).exists())
+    for name in selected:
         folder = root / name
         entry = folder / 'SKILL.md'
         if not entry.is_file():
@@ -73,8 +75,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--skills-root', required=True, type=Path)
     parser.add_argument('--json', action='store_true')
+    parser.add_argument('--require-fix', action='store_true', help='Require the optional fix package in this candidate suite')
     args = parser.parse_args()
-    result = check(args.skills_root.resolve())
+    result = check(args.skills_root.resolve(), args.require_fix)
     print(json.dumps(result, ensure_ascii=False, indent=2) if args.json else
           '\n'.join([f"suite packaging: {'PASS' if result['ok'] else 'FAIL'}",
                      str(result['counts']), result['scope']] + result['errors']))

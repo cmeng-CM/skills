@@ -920,12 +920,12 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("init", "configure", "record", "run", "status", "check", "next", "close", "reopen",
-                 "gate", "impact", "source-update", "resource", "attempt", "resolve-run", "source", "brief"):
+                 "gate", "impact", "source-update", "resource", "attempt", "resolve-run", "source", "brief", "enable-fix"):
         p = sub.add_parser(name)
         p.add_argument("--work", required=True)
         if name not in ("status", "check", "next", "source", "brief"):
             p.add_argument("--op", required=True)
-        if name in ("configure", "record", "close", "gate", "impact", "source-update", "resource", "attempt", "resolve-run"):
+        if name in ("configure", "record", "close", "gate", "impact", "source-update", "resource", "attempt", "resolve-run", "enable-fix"):
             p.add_argument("--input", required=True)
         if name == "init":
             p.add_argument("--project", required=True)
@@ -968,12 +968,12 @@ def main(argv=None):
             engine = EngineV2(args.work)
         else:
             engine = Engine(args.work)
-        extras = {"gate", "impact", "source-update", "resource", "attempt", "resolve-run", "source", "brief"}
+        extras = {"gate", "impact", "source-update", "resource", "attempt", "resolve-run", "source", "brief", "enable-fix"}
         if args.command in extras and contract != 2:
             fail("command requires explicit v2 work; v1 is not silently upgraded")
         if args.command == "init":
             result = engine.init(args.project, args.title, args.op)
-        elif args.command in ("configure", "record", "close", "gate", "impact", "source-update", "resource", "attempt", "resolve-run"):
+        elif args.command in ("configure", "record", "close", "gate", "impact", "source-update", "resource", "attempt", "resolve-run", "enable-fix"):
             result = getattr(engine, args.command.replace("-", "_"))(read_json(args.input), args.op)
         elif args.command == "run":
             result = engine.run(args.acceptance, {"id": args.actor, "context": args.context}, args.timeout, args.op)

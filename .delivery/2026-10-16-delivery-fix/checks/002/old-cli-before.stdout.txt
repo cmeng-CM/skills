@@ -1,0 +1,15 @@
+{
+  "contract_version": 2,
+  "configuration": "missing",
+  "diagnostics": [
+    {
+      "code": "configure_required",
+      "target": null,
+      "sources": [],
+      "evidence_needed": [
+        "plan and authorization"
+      ],
+      "next_action": "configure"
+    }
+  ]
+}

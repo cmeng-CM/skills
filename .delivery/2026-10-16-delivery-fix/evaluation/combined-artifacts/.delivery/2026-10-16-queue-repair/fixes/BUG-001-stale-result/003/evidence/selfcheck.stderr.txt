@@ -1,0 +1,12 @@
+test_active_lease_and_boundary_reclaim (test_queue.QueueTests) ... ok
+test_stale_completion_cannot_corrupt_reclaimed_job (test_queue.QueueTests) ... ok
+test_success_persists_and_duplicate_enqueue_preserves_result (test_queue.QueueTests) ... ok
+test_duplicate_enqueue_preserves_running_and_completed_job (test_queue_owner.QueueOwnerRegressionTests) ... ok
+test_pending_and_done_completion_do_not_mutate_state (test_queue_owner.QueueOwnerRegressionTests) ... ok
+test_reclaimed_owner_rejected_then_current_owner_persists (test_queue_owner.QueueOwnerRegressionTests) ... ok
+test_unrelated_owner_rejected_during_active_lease (test_queue_owner.QueueOwnerRegressionTests) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.004s
+
+OK

@@ -1,0 +1,18 @@
+2026-10-16 14:58:52.801 xcodebuild[29909:24223613]  DVTFilePathFSEvents: Failed to start fs event stream.
+2026-10-16 14:58:52.986 xcodebuild[29909:24223610] [MT] DVTDeveloperPaths: Failed to get length of DARWIN_USER_CACHE_DIR from confstr(3), error = Error Domain=NSPOSIXErrorDomain Code=5 "Input/output error". Using NSCachesDirectory instead.
+test_active_lease_and_boundary_reclaim (test_queue.QueueTests) ... ok
+test_stale_completion_cannot_corrupt_reclaimed_job (test_queue.QueueTests) ... FAIL
+test_success_persists_and_duplicate_enqueue_preserves_result (test_queue.QueueTests) ... ok
+
+======================================================================
+FAIL: test_stale_completion_cannot_corrupt_reclaimed_job (test_queue.QueueTests)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-fix-standalone-4i76gw3g/tests/test_queue.py", line 30, in test_stale_completion_cannot_corrupt_reclaimed_job
+    self.assertFalse(self.q.complete("job", "worker-A", "stale"))
+AssertionError: True is not false
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.002s
+
+FAILED (failures=1)

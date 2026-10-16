@@ -1,0 +1,72 @@
+test_duplicate_enqueue_preserves_running_job (test_owner_regression.OwnerRegressionTests) ... ok
+test_non_owner_cannot_complete_active_lease (test_owner_regression.OwnerRegressionTests) ... FAIL
+test_pending_and_done_completion_are_rejected_without_mutation (test_owner_regression.OwnerRegressionTests) ... ok
+test_repeated_reclaim_rejects_every_previous_owner_without_mutation (test_owner_regression.OwnerRegressionTests) ... FAIL
+test_active_lease_and_boundary_reclaim (test_queue.QueueTests) ... ok
+test_stale_completion_cannot_corrupt_reclaimed_job (test_queue.QueueTests) ... FAIL
+test_success_persists_and_duplicate_enqueue_preserves_result (test_queue.QueueTests) ... ok
+
+======================================================================
+FAIL: test_non_owner_cannot_complete_active_lease (test_owner_regression.OwnerRegressionTests)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-fix-standalone-4i76gw3g/tests/test_owner_regression.py", line 23, in test_non_owner_cannot_complete_active_lease
+    self.assertFalse(self.q.complete("job", "worker-B", "wrong"))
+AssertionError: True is not false
+
+======================================================================
+FAIL: test_repeated_reclaim_rejects_every_previous_owner_without_mutation (test_owner_regression.OwnerRegressionTests) (owner='worker-A')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-fix-standalone-4i76gw3g/tests/test_owner_regression.py", line 35, in test_repeated_reclaim_rejects_every_previous_owner_without_mutation
+    self.assertFalse(self.q.complete("job", owner, "stale"))
+AssertionError: True is not false
+
+======================================================================
+FAIL: test_repeated_reclaim_rejects_every_previous_owner_without_mutation (test_owner_regression.OwnerRegressionTests) (owner='worker-B')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-fix-standalone-4i76gw3g/tests/test_owner_regression.py", line 36, in test_repeated_reclaim_rejects_every_previous_owner_without_mutation
+    self.assertEqual(self.snapshot(), before)
+AssertionError: Tuples differ: ({'job': {'state': 'done', 'owner': 'worker-C', 'until': 15, [99 chars]5}}') != ({'job': {'state': 'leased', 'owner': 'worker-C', 'until': 15[97 chars]5}}')
+
+First differing element 0:
+{'job': {'state': 'done', 'owner': 'worker-C', 'until': 15, 'result': 'stale'}}
+{'job': {'state': 'leased', 'owner': 'worker-C', 'until': 15, 'result': None}}
+
++ ({'job': {'owner': 'worker-C', 'result': None, 'state': 'leased', 'until': 15}},
+- ({'job': {'owner': 'worker-C',
+-           'result': 'stale',
+-           'state': 'done',
+-           'until': 15}},
+-  b'{"job": {"owner": "worker-C", "result": "stale", "state": "done", "until": 1'
+?                                            ^^^^ ^^             ---
+
++  b'{"job": {"owner": "worker-C", "result": null, "state": "leased", "until": 15'
+?                                            ^^ ^            +++++              +
+
+-  b'5}}')
+?    -
+
++  b'}}')
+
+======================================================================
+FAIL: test_repeated_reclaim_rejects_every_previous_owner_without_mutation (test_owner_regression.OwnerRegressionTests)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-fix-standalone-4i76gw3g/tests/test_owner_regression.py", line 37, in test_repeated_reclaim_rejects_every_previous_owner_without_mutation
+    self.assertTrue(self.q.complete("job", "worker-C", "fresh"))
+AssertionError: False is not true
+
+======================================================================
+FAIL: test_stale_completion_cannot_corrupt_reclaimed_job (test_queue.QueueTests)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-fix-standalone-4i76gw3g/tests/test_queue.py", line 30, in test_stale_completion_cannot_corrupt_reclaimed_job
+    self.assertFalse(self.q.complete("job", "worker-A", "stale"))
+AssertionError: True is not false
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.005s
+
+FAILED (failures=5)

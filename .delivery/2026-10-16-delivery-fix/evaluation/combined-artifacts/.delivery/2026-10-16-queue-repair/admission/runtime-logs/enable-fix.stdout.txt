@@ -1,0 +1,20 @@
+{
+  "seq": 7,
+  "at": "2026-10-16T07:02:52.607418+00:00",
+  "kind": "implementation-protocol",
+  "op": "enable-fix",
+  "request_hash": "7c64fe1ddabdab59cd2ec645935c86633fa927ebb56b05803591fe69b4cf5f34",
+  "payload": {
+    "schema_version": 2,
+    "contract_version": 2,
+    "actor": {
+      "id": "/root",
+      "context": "delivery-fix-combined-control"
+    },
+    "implementation_contract_version": 1,
+    "reason": "Observed unresolved failure transferred under approved plan",
+    "orchestrate_pin": "ee71294b37cac95a3f42070132cb01704114549ead084cb4be4f7199b880b420"
+  },
+  "previous": "ea8677dde16073fcfd24f1a02cd0404ca74ed5e4c32fd22e8a163258e4a84c83",
+  "hash": "969bd5ac0499c7805125e317b993c17ec2c017b54abdbd06466f23b7426b1ef5"
+}

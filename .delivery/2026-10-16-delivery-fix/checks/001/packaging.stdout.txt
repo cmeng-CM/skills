@@ -1,0 +1,11 @@
+{
+  "ok": true,
+  "counts": {
+    "skills": 7,
+    "markdown": 66,
+    "json": 33,
+    "local_links": 75
+  },
+  "errors": [],
+  "scope": "Packaging, basic metadata, explicit-entry policy, JSON syntax and ordinary local Markdown links only; no semantic quality or behavioral guarantee."
+}

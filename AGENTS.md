@@ -9,7 +9,7 @@
 | 位置 | 用途 |
 | --- | --- |
 | 根目录各 `<skill>/SKILL.md` | 独立 skill 的触发范围、操作规则和资源入口 |
-| `delivery/delivery-*/` | 五项独立专业能力及一个编排 skill；组合方式见 [delivery/README.md](delivery/README.md) |
+| `delivery/delivery-*/` | 五项基础专业能力、可选复杂修复能力及一个编排 skill；组合方式见 [delivery/README.md](delivery/README.md) |
 | `references/`、`assets/`、`scripts/`、`tests/` | 各 skill 按需设置的参考资料、模板资源、工具和测试，不要求每包都有 |
 | [模板.md](模板.md) | skill 编写模板；模板调整与实际 skill 改动分别确定范围 |
 | [实现计划规范.md](实现计划规范.md) | 指向 `plan-implementation/references/plan-standard.md` 的软链接，修改真源，不替换成另一份副本 |

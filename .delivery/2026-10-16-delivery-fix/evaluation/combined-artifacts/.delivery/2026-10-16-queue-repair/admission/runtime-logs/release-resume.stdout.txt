@@ -1,0 +1,29 @@
+{
+  "seq": 16,
+  "at": "2026-10-16T07:10:57.358623+00:00",
+  "kind": "resource",
+  "op": "release-resume",
+  "request_hash": "7613f0e9b8c5bf658bf9efc84b42441295c8d67514f7e47b48bc9673788e68aa",
+  "payload": {
+    "schema_version": 2,
+    "contract_version": 2,
+    "actor": {
+      "id": "/root/fix_combined_resume",
+      "context": "native-agent:/root/fix_combined_resume"
+    },
+    "action": "release",
+    "resources": [
+      {
+        "id": "path:queue_store.py",
+        "mode": "write"
+      },
+      {
+        "id": "path:tests",
+        "mode": "write"
+      }
+    ],
+    "reason": "Actual bounded queue exercise resource handoff"
+  },
+  "previous": "19667c1b9ba878d82c4dc870b73d3e6e57503b024e80826e75282b238f551a2b",
+  "hash": "823e60f27dc39d1e51049c1c1597f014d41b2fe048dc64607830c723f6f96392"
+}

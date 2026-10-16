@@ -1,0 +1,52 @@
+{
+  "seq": 3,
+  "at": "2026-10-16T07:02:52.348142+00:00",
+  "kind": "gate",
+  "op": "mapping-001",
+  "request_hash": "4c3a1b685a1f9a8abe18510e78dcbed3f78364d21dbdbf4bed31c52f65f877c2",
+  "payload": {
+    "schema_version": 2,
+    "contract_version": 2,
+    "actor": {
+      "id": "/root/fix_independent_review",
+      "context": "delivery-fix-combined-admission-review-001"
+    },
+    "config_operation": "configure-001",
+    "kind": "mapping_review",
+    "result": "passed",
+    "summary": "Actual independent review-001.md covers this exact mapping/route change.",
+    "report": {
+      "path": ".delivery/2026-10-16-queue-repair/admission/review-001.md"
+    },
+    "evidence": [
+      {
+        "path": ".delivery/2026-10-16-queue-repair/admission/review-001.md"
+      }
+    ],
+    "config_op": "configure-001",
+    "config_hash": "4252564838da1156f4bd4c50728b060abc4235c0a8697bb6fbe8996ce03c7557",
+    "references": {
+      "report": {
+        "path": ".delivery/2026-10-16-queue-repair/admission/review-001.md",
+        "object_hash": "e20d129b5875004336b0487e3025cc834dcee271c1eb3b3c50c4e2041b1107c0",
+        "bytes": 4797
+      },
+      "evidence": [
+        {
+          "path": ".delivery/2026-10-16-queue-repair/admission/review-001.md",
+          "object_hash": "e20d129b5875004336b0487e3025cc834dcee271c1eb3b3c50c4e2041b1107c0",
+          "bytes": 4797
+        }
+      ]
+    },
+    "skill_pins": {
+      "delivery-implement": "377e09830986bbc09726564638b148a7c843dbde68306b976e24a2f104b58ba7",
+      "delivery-orchestrate": "ee71294b37cac95a3f42070132cb01704114549ead084cb4be4f7199b880b420",
+      "delivery-plan": "430daed35bf32c290ef094d14d4c676c40078cc8ba2f0111b555055d5b9f04b7",
+      "delivery-review": "fb6c7d41eff1b6001cb68c62d177ec255d3425257c9cfdd9ffbb9ce8c78ec15c",
+      "delivery-verify": "68b34ea8e1a3640875753c72feb99ed4406498fcf5acfb84e3685ab0ef303c0c"
+    }
+  },
+  "previous": "4252564838da1156f4bd4c50728b060abc4235c0a8697bb6fbe8996ce03c7557",
+  "hash": "b9e22b32e913920a7a147c330d3fcac7586d9d7b331a98f86cfd2383994ac78c"
+}

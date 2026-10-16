@@ -1,0 +1,29 @@
+{
+  "seq": 4,
+  "at": "2026-10-16T07:02:52.438303+00:00",
+  "kind": "resource",
+  "op": "claim-initial",
+  "request_hash": "8f9a60751f35c19fbf0bc610353f3c80acd29ba5c3a613775719c4123c5830cb",
+  "payload": {
+    "schema_version": 2,
+    "contract_version": 2,
+    "actor": {
+      "id": "/root",
+      "context": "delivery-fix-combined-control"
+    },
+    "action": "claim",
+    "resources": [
+      {
+        "id": "path:queue_store.py",
+        "mode": "write"
+      },
+      {
+        "id": "path:tests",
+        "mode": "write"
+      }
+    ],
+    "reason": "Actual bounded queue exercise resource handoff"
+  },
+  "previous": "b9e22b32e913920a7a147c330d3fcac7586d9d7b331a98f86cfd2383994ac78c",
+  "hash": "4c088df3bea74c261aba0757785ceaa3270359f52be2c2c5a07546560c19e51d"
+}

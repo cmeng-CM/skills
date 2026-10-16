@@ -1,0 +1,23 @@
+{
+  "checked_at": "2026-10-16T15:10:25.377571+08:00",
+  "report_sha256": "bf5883029e4a3c2d1646a681a6e91cd74b61e03c869551046531778bde8d3771",
+  "seven_sections_present": true,
+  "relative_links_exist": {
+    "../001/fix.md": true,
+    "../002/fix.md": true,
+    "evidence/baseline.json": true,
+    "../002/evidence/probe.stdout.json": true,
+    "evidence/new-regression-before.stderr.txt": true,
+    "evidence/new-regression-before.result.json": true,
+    "evidence/product.diff": true,
+    "evidence/after/queue_store.py": true,
+    "evidence/after/tests/test_queue_owner.py": true,
+    "evidence/selfcheck.stderr.txt": true,
+    "evidence/selfcheck.result.json": true,
+    "evidence/handoff-identity-check.json": true
+  },
+  "product_matches_selfcheck_snapshot": true,
+  "protected_inputs_and_prior_rounds_still_unchanged": true,
+  "scope": "mechanical identity/link/section check only; not semantic review or acceptance",
+  "pending_commands": []
+}

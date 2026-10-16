@@ -1,0 +1,20 @@
+{
+  "schema_version": 2,
+  "contract_version": 2,
+  "actor": {
+    "id": "/root/fix_combined_resume",
+    "context": "native-agent:/root/fix_combined_resume"
+  },
+  "action": "claim",
+  "resources": [
+    {
+      "id": "path:queue_store.py",
+      "mode": "write"
+    },
+    {
+      "id": "path:tests",
+      "mode": "write"
+    }
+  ],
+  "reason": "Actual bounded queue exercise resource handoff"
+}

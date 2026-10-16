@@ -1,0 +1,137 @@
+{
+  "schema_version": 2,
+  "contract_version": 2,
+  "actor": {
+    "id": "/root",
+    "context": "delivery-fix-combined-control"
+  },
+  "plan": {
+    "path": ".delivery/2026-10-16-queue-repair/plan.md",
+    "quote": "Requirement Q1"
+  },
+  "authorization": {
+    "path": ".delivery/2026-10-16-queue-repair/authorization.md",
+    "quote": "The user authorizes",
+    "scope": "T1 queue repair and optional fix transfer"
+  },
+  "mapping_reason": "Q1 covers actual queue consumer; T1 code/tests, independent R1 and required A1 cover the public README behavior.",
+  "tasks": [
+    {
+      "id": "T1",
+      "scope": [
+        "queue_store.py",
+        "tests"
+      ],
+      "depends": []
+    }
+  ],
+  "reviews": [
+    {
+      "id": "R1",
+      "tasks": [
+        "T1"
+      ],
+      "whole": true
+    }
+  ],
+  "acceptance": [
+    {
+      "id": "A1",
+      "tasks": [
+        "T1"
+      ],
+      "required": true,
+      "method": "command",
+      "command": [
+        "/Users/cm/workspace/github/ppt-master/.venv/bin/python3",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests",
+        "-v"
+      ],
+      "criteria": "All README queue requirements, including stale completion rejection without state mutation, and existing tests hold on the actual product.",
+      "environment": "isolated controlled local Python queue project; explicit clocks"
+    }
+  ],
+  "source_authors": {
+    "plan": [
+      {
+        "id": "/root",
+        "context": "delivery-fix-combined-control"
+      }
+    ],
+    "mapping": [
+      {
+        "id": "/root",
+        "context": "delivery-fix-combined-control"
+      }
+    ]
+  },
+  "requirements": [
+    {
+      "id": "Q1",
+      "source": {
+        "path": ".delivery/2026-10-16-queue-repair/plan.md",
+        "quote": "Requirement Q1"
+      },
+      "tasks": [
+        "T1"
+      ],
+      "acceptance": [
+        "A1"
+      ]
+    }
+  ],
+  "admission_policy": {
+    "plan_review": false,
+    "design_review": false,
+    "reason": "Small bounded repair with explicit API and acceptance; independent mapping and route-change review remain required.",
+    "scale": "small",
+    "significant_replan": false
+  },
+  "change": {
+    "category": "initial",
+    "reason": "Initial bounded queue repair"
+  },
+  "monitor": {
+    "roots": [
+      "."
+    ],
+    "exclude": [
+      {
+        "path": ".agents",
+        "reason": "Frozen skill inputs are explicitly pinned; copied package files are not queue product."
+      }
+    ]
+  },
+  "skill_sources": [
+    {
+      "name": "delivery-orchestrate",
+      "root": "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-fix-combined-k4hy9hln/.agents/skills/delivery-orchestrate",
+      "contract_version": 2
+    },
+    {
+      "name": "delivery-plan",
+      "root": "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-fix-combined-k4hy9hln/.agents/skills/delivery-plan",
+      "contract_version": 1
+    },
+    {
+      "name": "delivery-implement",
+      "root": "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-fix-combined-k4hy9hln/.agents/skills/delivery-implement",
+      "contract_version": 1
+    },
+    {
+      "name": "delivery-review",
+      "root": "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-fix-combined-k4hy9hln/.agents/skills/delivery-review",
+      "contract_version": 1
+    },
+    {
+      "name": "delivery-verify",
+      "root": "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-fix-combined-k4hy9hln/.agents/skills/delivery-verify",
+      "contract_version": 1
+    }
+  ]
+}

@@ -63,6 +63,70 @@ requirements 逐条绑定来源摘录、任务和验收；它不是自动需求�
 
 monitor.roots 首版固定 `["."]`。自动排除 `.git` 和当前 work，但 work 内专业来源/报告仍单独绑定；不能一概排除 `.delivery`。额外 exclude 是 `{path,reason}` 数组，仅限明确缓存/生成物或其他隔离任务派生材料，不得重叠真实产品、context 或需求来源，也不得包含当前 work 的父目录。不使用 gitignore 静默忽略未知文件。
 
+### 可选复杂修复接入：实施子契约 1
+
+实施默认仍由 `delivery-implement` 完成；复杂故障可以选择 `delivery-fix`。顶层请求保持 2/2，fix 专业契约为 1，实施子契约也为 1；三者分别标识不同边界。普通工作不用启用扩展、不加路线、不安装 fix，旧请求继续有效。v1 不接入该扩展。
+
+新 v2 工作可在配置前启用；已有活动工作先按第 6 节合法接纳当前实际编排源码，再显式启用。不能因 plan/authorization 漂移而绕过来源接纳，也不能通过启用消除未核查运行。关闭工作须先 reopen。
+
+```bash
+python3 -B CLI enable-fix --work W --input /项目路径/.delivery/日期-主题/admission/enable-fix-001.json --op enable-fix-001
+```
+
+```json
+{
+  "schema_version": 2,
+  "contract_version": 2,
+  "actor": {"id": "coordinator", "context": "main-session"},
+  "implementation_contract_version": 1,
+  "reason": "T1 的偶发故障需要专门诊断与多轮修复记录。"
+}
+```
+
+该命令持久登记 `implementation-protocol` 事件，旧引擎因未知事件拒绝读取，不能忽略新字段后把 fix 当成旧 implement。事件只启用接入语义，不接纳计划、不授权执行、不放行任何 gate。中断后用相同 op 与请求确认原操作，按实际记录续接，不手改 journal。未知子契约版本拒绝。
+
+启用后，configure 可增加以下 `implementation_routes`；键必须是实际任务 ID。没有声明的任务默认 implement。即使显式写 implement 路线，也须先启用该扩展：
+
+```json
+{
+  "implementation_routes": {
+    "T1": {
+      "skill": "delivery-fix",
+      "bug_id": "BUG-001",
+      "bug_path": ".delivery/2026-10-16-settings/fixes/BUG-001-restart-loss"
+    },
+    "T2": {"skill": "delivery-implement"}
+  }
+}
+```
+
+示例是待合并的配置片段，不是完整请求；实际只保留存在的任务。选用 fix 时还须在 `skill_sources` 增加真实包：
+
+```json
+{"name": "delivery-fix", "root": "/实际路径/skills/delivery/delivery-fix", "contract_version": 1}
+```
+
+bug_path 相对项目根，遵守普通路径规则。按同一 bug 的既有目录承接，目录中的 `index.md` 只导航，`001/fix.md` 与 `001/evidence/` 等保存该轮材料。任务可以引用此前同 bug 的目录，不能因此重写另一流程 runtime 或历史结论。
+
+新增或改变路线属于正常配置变更：已有配置使用 `change.previous_config` 和实际分类，重新完成适用 mapping/change/plan/design gates。必要来源、未知运行、资源和范围监测门禁继续适用。选用 fix 不降低原验收要求，不能用旧 implement 成功结果直接代替新路线的修复结果。brief/next 返回该任务实际选用 skill、bug 身份和记录位置，执行者仍须读取正文与现场。
+
+fix 的专业报告直接作为实施报告接纳，record 的 kind 仍为 implementation；额外输入示例：
+
+```json
+{
+  "implementation_skill": "delivery-fix",
+  "implementation_authors": [
+    {"id": "original-builder", "context": "initial-implementation"},
+    {"id": "fixer", "context": "diagnosis-session"}
+  ],
+  "report": {"path": ".delivery/2026-10-16-settings/fixes/BUG-001-restart-loss/002/fix.md"}
+}
+```
+
+这仍是完整 record 的附加片段。fix 请求必须明确 `implementation_skill=delivery-fix` 和非空 `implementation_authors`，报告须位于所配 bug_path 下的数字轮次目录，以 `fix.md` 命名；记录绑定实际 fix pin。作者含本次 actor，并如实列出参与当前成果的全部实施者；引擎保守累积历史作者，重配置和转交不能消除。implement 的旧请求无需这两个字段；其他 kind 不接收它们。
+
+协调者核对报告和实际版本，不让专业执行者维护接纳 JSON 或 runtime，也不要求额外 implementation 正文。诊断进行中、未完成修复、缓解效果与修复自检分别表达；非完成结果不能因存在报告而登记 passed。相关独立 review 和来源兼容审阅排除完整实施作者集合，查真实原问题和修复影响；后续 run/verification/close 门槛沿用原规则。
+
 ## 3 独立门禁之后才能推进
 
 configure 成功只证明接纳结构存在；record、run、close（包括 limited）在当前必需 gate 未通过时全部拒绝。调用：
@@ -120,7 +184,7 @@ action 为 claim/release；read 可并行，任一 write 冲突拒绝。返回�
 - command run：产品/context 默认 read，计划明确会写的共享资源按 write；命令结束后明确 release。
 - close：不要求协调者持有前面作者的锁，但所有 write 已交还；正常 read claim 可共存。
 
-record 格式沿用 v1 的 kind/target/actor/report/result/summary/evidence 与可选 issues/resolutions/run_operation/confirmation/supersedes/reason，版本改 2/2，**去掉 skill_revision**。引擎自动绑定实际专业 pin 和执行 pin。实施不代替审查，审查排除覆盖任务全部历史实施者，问题只能原 owner 凭证据关闭。
+record 格式沿用 v1 的 kind/target/actor/report/result/summary/evidence 与可选 issues/resolutions/run_operation/confirmation/supersedes/reason，版本改 2/2，**去掉 skill_revision**。引擎按任务已接纳路线自动绑定实际专业 pin 和执行 pin；fix 的附加字段与报告位置见 [实施子契约 1](#可选复杂修复接入实施子契约-1)。实施不代替审查，审查排除覆盖任务全部历史实施者，问题只能原 owner 凭证据关闭。
 
 ```bash
 python3 -B CLI record --work W --input /项目路径/.delivery/日期-主题/admission/implementation-001.json --op impl-T1-001

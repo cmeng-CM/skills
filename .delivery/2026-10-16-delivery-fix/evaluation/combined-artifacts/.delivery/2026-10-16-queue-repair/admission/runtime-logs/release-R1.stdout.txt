@@ -1,0 +1,29 @@
+{
+  "seq": 19,
+  "at": "2026-10-16T07:13:04.276795+00:00",
+  "kind": "resource",
+  "op": "release-R1",
+  "request_hash": "99a2833afef396dbab67e6bbdf9bae0ecad0ebf1ad56297a861c3329e08282a5",
+  "payload": {
+    "schema_version": 2,
+    "contract_version": 2,
+    "actor": {
+      "id": "/root/fix_independent_review",
+      "context": "delivery-fix-combined-admission-review-001"
+    },
+    "action": "release",
+    "resources": [
+      {
+        "id": "path:queue_store.py",
+        "mode": "read"
+      },
+      {
+        "id": "path:tests",
+        "mode": "read"
+      }
+    ],
+    "reason": "Actual bounded queue exercise resource handoff"
+  },
+  "previous": "2e30a5a8ce88b5d2e1dbdf9353ec41dee00b796e3cce013c0984e54bddbb3bdb",
+  "hash": "46ae262ace965d93f86669d7f0aa4690eec5f15e6b1c9b9ae83dda12aa58634c"
+}

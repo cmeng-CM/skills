@@ -10,19 +10,20 @@ from delivery import Engine, DeliveryError, actor, canonical, digest, fail, safe
 from delivery_sources import SourcesMixin
 from delivery_monitor import MonitorMixin
 from delivery_recovery import RecoveryMixin
+from delivery_implementation import ImplementationMixin
 
 KINDS = {"implementation": "implement", "review": "review", "verification": "verify"}
 GATES = {"plan_review", "design_review", "mapping_review", "change_review"}
 CONFIG_EXTRA = ("source_authors", "requirements", "admission_policy", "change", "monitor", "skill_sources")
-CONFIG_OPTIONAL = ("resources", "transition", "recovery_transfers")
+CONFIG_OPTIONAL = ("resources", "transition", "recovery_transfers", "implementation_routes")
 CONFIG_CORE = ("actor", "plan", "authorization", "mapping_reason", "tasks", "reviews", "acceptance")
 RECORD_CORE = ("kind", "target", "actor", "report", "result", "summary", "evidence")
-RECORD_OPTIONAL = ("issues", "resolutions", "run_operation", "confirmation", "supersedes", "reason")
+RECORD_OPTIONAL = ("issues", "resolutions", "run_operation", "confirmation", "supersedes", "reason", "implementation_skill", "implementation_authors")
 
 
 LOADED_SOURCE_BYTES = Path(__file__).read_bytes()
 
-class EngineV2(SourcesMixin, MonitorMixin, RecoveryMixin, Engine):
+class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, Engine):
     def __init__(self, work):
         super().__init__(work)
         self._original = None
@@ -33,9 +34,10 @@ class EngineV2(SourcesMixin, MonitorMixin, RecoveryMixin, Engine):
         super().load()
         if self.data["events"][0]["payload"].get("contract_version") != 2:
             fail("v2 engine cannot operate a v1 work")
-        allowed = {"init", "configure", "record", "run-started", "run", "close", "reopen", "gate", "impact", "source-update", "resource", "attempt", "run-resolution", "run-investigation"}
+        allowed = {"init", "configure", "record", "run-started", "run", "close", "reopen", "gate", "impact", "source-update", "resource", "attempt", "run-resolution", "run-investigation", "implementation-protocol"}
         if any(e["kind"] not in allowed for e in self.data["events"]):
             fail("unknown v2 journal event kind")
+        self.validate_implementation_protocol()
 
     @staticmethod
     def v2(request):
@@ -82,6 +84,8 @@ class EngineV2(SourcesMixin, MonitorMixin, RecoveryMixin, Engine):
         if not prior and self._activity:
             kind, target, who = self._activity
             self.assert_ready(kind, target, who)
+            if kind in KINDS:
+                self.validate_implementation_record(self._original, self.current_config())
         return key, prior
 
     def init(self, project, title, op):
@@ -98,7 +102,8 @@ class EngineV2(SourcesMixin, MonitorMixin, RecoveryMixin, Engine):
             payload.pop("skill_revision", None)
             payload["schema_version"] = payload["contract_version"] = 2
             config = self.current_config(False)
-            name = "delivery-" + KINDS[payload["kind"]]
+            name = self.activity_skill(config, payload["kind"], payload["target"])
+            payload.update(self.implementation_record_fields(self._original, config))
             payload["skill_pin"] = self.effective_pins(config)[name]
             payload["orchestrate_pin"] = self.effective_pins(config)["delivery-orchestrate"]["tree_hash"]
         return super().append(kind, op, request_hash, payload)
@@ -234,13 +239,18 @@ class EngineV2(SourcesMixin, MonitorMixin, RecoveryMixin, Engine):
         payload.pop("skill_revision", None)
         payload.update(contract_version=2, source_authors=merged, admission_policy=policy,
                        change=change, requirements=requirements, resources=resources)
+        self.validate_implementation_routes(payload, request)
         payload["monitor"] = self.validate_monitor(request["monitor"], payload)
         payload["skill_pins"] = self.collect_sources(request["skill_sources"])
+        if "delivery-fix" in payload["skill_pins"] and not self.fix_enabled():
+            fail("delivery-fix source requires explicit enable-fix")
         if old:
             accepted_pins = self.effective_pins(old[-1])
             if any(name in accepted_pins and pin["tree_hash"] != accepted_pins[name]["tree_hash"] for name, pin in payload["skill_pins"].items()):
                 fail("skill source changed: explicit compatible source-update or linked new work required")
-        for name in ("delivery-implement", "delivery-review", "delivery-verify", "delivery-plan"):
+        used = {"delivery-review", "delivery-verify", "delivery-plan"}
+        used.update(self.implementation_route(payload, task["id"])["skill"] for task in payload["spec"]["tasks"])
+        for name in sorted(used):
             if name not in payload["skill_pins"]:
                 fail("missing used professional source: " + name)
         if "design" in request and "delivery-design" not in payload["skill_pins"]:
@@ -323,7 +333,8 @@ class EngineV2(SourcesMixin, MonitorMixin, RecoveryMixin, Engine):
     def record(self, request, op):
         shape(request, ("schema_version", "contract_version") + RECORD_CORE, RECORD_OPTIONAL)
         self.v2(request)
-        core = {**request, "schema_version": 1, "contract_version": 1, "skill_revision": "actual source pin captured by v2"}
+        core = {k: v for k, v in request.items() if k not in ("implementation_skill", "implementation_authors")}
+        core.update(schema_version=1, contract_version=1, skill_revision="actual source pin captured by v2")
         with self.adapting(request, (request["kind"], request["target"], request["actor"])):
             return super().record(core, op)
 
@@ -422,7 +433,7 @@ class EngineV2(SourcesMixin, MonitorMixin, RecoveryMixin, Engine):
             fail("outside changes/unsupported entries require explicit assessment")
         relevant_sources = {"delivery-orchestrate"}
         if kind in KINDS:
-            relevant_sources.add("delivery-" + KINDS[kind])
+            relevant_sources.add(self.activity_skill(config, kind, target))
         if any(d["name"] in relevant_sources for d in state["skill_drift"]):
             fail("actual skill source drift; restore source or explicitly accept update")
         if any(kind == "close" or (d["kind"], d["id"]) == (kind, target) for d in state["diagnosis_required"]):
@@ -450,8 +461,15 @@ class EngineV2(SourcesMixin, MonitorMixin, RecoveryMixin, Engine):
                     status = state[kind][item["id"]]["status"]
                     if status == "passed":
                         continue
+                    selected = self.activity_skill(config, kind, item["id"])
                     row = {"kind": kind, "target": item["id"], "status": status, "resources": self.required_resources(config, kind, item["id"])}
-                    specific = any(d["name"] in ("delivery-orchestrate", "delivery-" + KINDS[kind]) for d in state["skill_drift"]) or any((d["kind"], d["id"]) == (kind, item["id"]) for d in state["diagnosis_required"])
+                    if self.fix_enabled():
+                        row["skill"] = selected
+                        if kind == "implementation":
+                            row["implementation_route"] = self.implementation_route(config, item["id"])
+                            if selected == "delivery-fix":
+                                row["report_location"] = row["implementation_route"]["bug_path"] + "/NNN/fix.md"
+                    specific = any(d["name"] in ("delivery-orchestrate", selected) for d in state["skill_drift"]) or any((d["kind"], d["id"]) == (kind, item["id"]) for d in state["diagnosis_required"])
                     try:
                         self.recovery_for(config, kind, item["id"])
                     except DeliveryError:

@@ -1,0 +1,54 @@
+{
+  "checks": [
+    {
+      "name": "regression",
+      "command": [
+        "/Users/cm/workspace/github/ppt-master/.venv/bin/python3",
+        "-B",
+        "-m",
+        "unittest",
+        "test_delivery_fix.FixCase.test_routes_need_enable_and_valid_sources",
+        "test_delivery_fix.FixCase.test_fix_uses_actual_pin_report_and_full_author_exclusions",
+        "test_delivery_fix.FixCase.test_invalid_fix_record_and_partial_diagnosis_cannot_close",
+        "test_delivery_fix.FixCase.test_fix_source_and_evidence_changes_invalidate",
+        "test_delivery_fix.FixCase.test_transfer_preserves_authors_and_rejects_old_result_reuse",
+        "test_delivery_fix.FixCase.test_fix_real_command_close_and_frozen_rounds",
+        "test_delivery_fix.PackageCase.test_optional_package_absence_and_explicit_requirement",
+        "test_delivery_v2.V2Case.test_all_execution_entrypoints_block_without_gates",
+        "test_delivery_v2.V2Case.test_gate_source_author_and_same_context_rejected",
+        "test_delivery_v2.V2Case.test_professional_drift_blocks_only_relevant_activity",
+        "test_delivery_v2.V2Case.test_compatible_source_explicit_readmission_preserves_original_report_pin_provenance",
+        "test_delivery_v2.V2Case.test_configure_full_v2_request_is_bound_to_operation_id",
+        "test_delivery_v2.V2Case.test_release_does_not_unlock_unknown_run",
+        "test_delivery_v2.V2Case.test_evidenced_resolution_then_replacement_and_verdict_allows_close",
+        "test_delivery_v2.V2Case.test_FR001_gate_pin_expiry_blocks_until_valid_recheck",
+        "test_delivery_v2.V2Case.test_FR002_transfer_requires_current_evidence_and_preserved_owner",
+        "test_delivery_v2.V2Case.test_FR002_source_assessment_can_repair_stale_admission_without_executing",
+        "test_delivery.RuntimeCase.test_full_inspection_delivery_and_close",
+        "test_delivery.RuntimeCase.test_independence_covers_all_historical_authors",
+        "test_evaluate_suite.HarnessTests.test_optional_fix_is_a_single_standalone_professional",
+        "test_evaluate_suite.HarnessTests.test_prepare_freezes_only_one_skill_and_excludes_oracle",
+        "-v"
+      ],
+      "cwd": "/Users/cm/workspace/github/skills/delivery/delivery-orchestrate/tests",
+      "exit_code": 1,
+      "seconds": 4.355
+    },
+    {
+      "name": "packaging",
+      "command": [
+        "/Users/cm/workspace/github/ppt-master/.venv/bin/python3",
+        "-B",
+        "/Users/cm/workspace/github/skills/delivery/delivery-orchestrate/scripts/check_suite.py",
+        "--skills-root",
+        "/Users/cm/workspace/github/skills/delivery",
+        "--require-fix",
+        "--json"
+      ],
+      "cwd": "/Users/cm/workspace/github/skills",
+      "exit_code": 0,
+      "seconds": 0.042
+    }
+  ],
+  "scope": "bounded deterministic checks, not semantic approval or actual agent execution"
+}

@@ -1,0 +1,21 @@
+{
+  "schema_version": 2,
+  "contract_version": 2,
+  "actor": {
+    "id": "/root",
+    "context": "delivery-fix-combined-control"
+  },
+  "kind": "verification",
+  "target": "A1",
+  "result": "passed",
+  "summary": "Read actual tests/product and seven collected passing results for configured required behavior.",
+  "report": {
+    "path": ".delivery/2026-10-16-queue-repair/verification/001.md"
+  },
+  "evidence": [
+    {
+      "path": ".delivery/2026-10-16-queue-repair/verification/001.md"
+    }
+  ],
+  "run_operation": "run-A1"
+}

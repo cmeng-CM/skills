@@ -1,0 +1,34 @@
+{
+  "before": {
+    "memory": {
+      "job": {
+        "state": "leased",
+        "owner": "worker-B",
+        "until": 20,
+        "result": null
+      }
+    },
+    "durable": "{\"job\": {\"owner\": \"worker-B\", \"result\": null, \"state\": \"leased\", \"until\": 20}}"
+  },
+  "stale_return": true,
+  "after_stale": {
+    "memory": {
+      "job": {
+        "state": "done",
+        "owner": "worker-B",
+        "until": 20,
+        "result": "stale"
+      }
+    },
+    "durable": "{\"job\": {\"owner\": \"worker-B\", \"result\": \"stale\", \"state\": \"done\", \"until\": 20}}"
+  },
+  "current_return": false,
+  "restart": {
+    "job": {
+      "owner": "worker-B",
+      "result": "stale",
+      "state": "done",
+      "until": 20
+    }
+  }
+}

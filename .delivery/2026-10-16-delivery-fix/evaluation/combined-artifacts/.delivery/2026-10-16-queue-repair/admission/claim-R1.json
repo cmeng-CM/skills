@@ -1,0 +1,20 @@
+{
+  "schema_version": 2,
+  "contract_version": 2,
+  "actor": {
+    "id": "/root/fix_independent_review",
+    "context": "delivery-fix-combined-admission-review-001"
+  },
+  "action": "claim",
+  "resources": [
+    {
+      "id": "path:queue_store.py",
+      "mode": "read"
+    },
+    {
+      "id": "path:tests",
+      "mode": "read"
+    }
+  ],
+  "reason": "Actual bounded queue exercise resource handoff"
+}

@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "/Applications/Xcode.app/Contents/Developer/usr/bin/python3",
+    "-B",
+    "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-fix-combined-k4hy9hln/.delivery/2026-10-16-queue-repair/fixes/BUG-001-stale-result/002/evidence/diagnostic_probe.py",
+    "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-fix-combined-k4hy9hln"
+  ],
+  "exit_code": 0
+}

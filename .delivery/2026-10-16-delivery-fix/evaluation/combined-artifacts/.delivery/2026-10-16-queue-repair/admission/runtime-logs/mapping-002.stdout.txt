@@ -1,0 +1,53 @@
+{
+  "seq": 9,
+  "at": "2026-10-16T07:02:52.725409+00:00",
+  "kind": "gate",
+  "op": "mapping-002",
+  "request_hash": "57e188770050b14c509f22f9c205c7124fbb3b3e4e42b19b26bcf1fe7bb1a228",
+  "payload": {
+    "schema_version": 2,
+    "contract_version": 2,
+    "actor": {
+      "id": "/root/fix_independent_review",
+      "context": "delivery-fix-combined-admission-review-001"
+    },
+    "config_operation": "configure-002",
+    "kind": "mapping_review",
+    "result": "passed",
+    "summary": "Actual independent review-001.md covers this exact mapping/route change.",
+    "report": {
+      "path": ".delivery/2026-10-16-queue-repair/admission/review-001.md"
+    },
+    "evidence": [
+      {
+        "path": ".delivery/2026-10-16-queue-repair/admission/review-001.md"
+      }
+    ],
+    "config_op": "configure-002",
+    "config_hash": "8442744c0d2c39d249b9ceeb0105656c65bc999e873f7571c6ebbec52f65a424",
+    "references": {
+      "report": {
+        "path": ".delivery/2026-10-16-queue-repair/admission/review-001.md",
+        "object_hash": "e20d129b5875004336b0487e3025cc834dcee271c1eb3b3c50c4e2041b1107c0",
+        "bytes": 4797
+      },
+      "evidence": [
+        {
+          "path": ".delivery/2026-10-16-queue-repair/admission/review-001.md",
+          "object_hash": "e20d129b5875004336b0487e3025cc834dcee271c1eb3b3c50c4e2041b1107c0",
+          "bytes": 4797
+        }
+      ]
+    },
+    "skill_pins": {
+      "delivery-fix": "1a782b462dcb930d6bb6ca0194ababbbf977499e4ae2f1f06170120a6d469297",
+      "delivery-implement": "377e09830986bbc09726564638b148a7c843dbde68306b976e24a2f104b58ba7",
+      "delivery-orchestrate": "ee71294b37cac95a3f42070132cb01704114549ead084cb4be4f7199b880b420",
+      "delivery-plan": "430daed35bf32c290ef094d14d4c676c40078cc8ba2f0111b555055d5b9f04b7",
+      "delivery-review": "fb6c7d41eff1b6001cb68c62d177ec255d3425257c9cfdd9ffbb9ce8c78ec15c",
+      "delivery-verify": "68b34ea8e1a3640875753c72feb99ed4406498fcf5acfb84e3685ab0ef303c0c"
+    }
+  },
+  "previous": "8442744c0d2c39d249b9ceeb0105656c65bc999e873f7571c6ebbec52f65a424",
+  "hash": "a2916e5b54007916d93454b9cf66b613f1bb609d95416c081c081b29d0ed6fb1"
+}

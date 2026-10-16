@@ -278,8 +278,8 @@ class RecoveryMixin:
             state = self.state()
             item = self.target(config["payload"], kind, target)
             tasks = [target] if kind == "implementation" else item["tasks"]
-            authors = [e["payload"]["actor"] for e in self.data["events"] if e["kind"] == "record" and e["payload"]["kind"] == "implementation" and e["payload"]["target"] in tasks]
-            return {"kind": kind, "target": target, "definition": item, "tasks": tasks,
+            authors = self.implementation_authors(tasks)
+            result = {"kind": kind, "target": target, "definition": item, "tasks": tasks,
                     "requirements": [r for r in config["payload"]["requirements"] if set(r["tasks"]) & set(tasks)],
                     "required_sources": config["payload"]["sources"],
                     "skill_pins": {name: {k: value for k, value in pin.items() if k != "files"} for name, pin in self.effective_pins(config).items()}, "excluded_implementation_authors": authors,
@@ -287,3 +287,10 @@ class RecoveryMixin:
                     "resources": self.required_resources(config, kind, target),
                     "report_location": {"implementation": "implementation/", "review": "review/", "verification": "verification/"}[kind],
                     "state": state, "note": "Read full referenced requirements and constraints; this derived brief is not a second task authority."}
+            if self.fix_enabled():
+                result["skill"] = self.activity_skill(config, kind, target)
+                if kind == "implementation":
+                    result["implementation_route"] = self.implementation_route(config, target)
+                    if result["skill"] == "delivery-fix":
+                        result["report_location"] = result["implementation_route"]["bug_path"] + "/NNN/fix.md"
+            return result

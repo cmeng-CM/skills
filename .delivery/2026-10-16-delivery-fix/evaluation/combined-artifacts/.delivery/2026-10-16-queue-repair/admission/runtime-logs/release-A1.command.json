@@ -1,0 +1,15 @@
+{
+  "argv": [
+    "/Users/cm/workspace/github/ppt-master/.venv/bin/python3",
+    "-B",
+    "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-fix-combined-k4hy9hln/.agents/skills/delivery-orchestrate/scripts/delivery.py",
+    "resource",
+    "--work",
+    "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-fix-combined-k4hy9hln/.delivery/2026-10-16-queue-repair",
+    "--op",
+    "release-A1",
+    "--input",
+    "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-fix-combined-k4hy9hln/.delivery/2026-10-16-queue-repair/admission/release-A1.json"
+  ],
+  "exit_code": 0
+}
