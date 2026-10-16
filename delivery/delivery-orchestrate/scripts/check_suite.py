@@ -11,6 +11,49 @@ NAMES = tuple('delivery-' + suffix for suffix in
 OPTIONAL = ('delivery-fix',)
 
 
+def implicit_policy(path):
+    """Validate the suite's bounded YAML policy spelling, without a YAML dependency.
+
+    Missing metadata/policy uses Codex's implicit-invocation default. Ambiguous
+    or unsupported policy syntax fails closed rather than being read as absent.
+    This is a packaging check, not a general YAML parser.
+    """
+    path = Path(path)
+    if not path.exists():
+        return 'default'
+    text = path.read_text(encoding='utf-8')
+    policy = None
+    seen_policy = False
+    value = None
+    for raw in text.splitlines():
+        line = raw.split('#', 1)[0].rstrip()
+        if not line.strip():
+            continue
+        if '\t' in line[:len(line) - len(line.lstrip())]:
+            raise ValueError('tabs in metadata indentation are unsupported')
+        if not line.startswith(' '):
+            if line.startswith('policy:'):
+                if seen_policy:
+                    raise ValueError('duplicate policy')
+                if line != 'policy:':
+                    raise ValueError('unsupported policy syntax')
+                policy = True
+                seen_policy = True
+            else:
+                if not re.match(r'^(interface|dependencies):(?:\s|$)', line):
+                    raise ValueError('unsupported metadata root syntax')
+                policy = False if policy is not None else None
+            continue
+        if policy is True:
+            match = re.fullmatch(r'  allow_implicit_invocation: *(true|false)', line)
+            if not match or value is not None:
+                raise ValueError('unsupported or duplicate implicit policy')
+            value = match.group(1)
+    if value == 'false':
+        raise ValueError('implicit invocation is disabled')
+    return value or 'default'
+
+
 def check(root, require_fix=False):
     errors = []
     counts = {'skills': 0, 'markdown': 0, 'json': 0, 'local_links': 0}
@@ -34,10 +77,10 @@ def check(root, require_fix=False):
             if f'## {heading}' not in body:
                 errors.append(f'{name}: missing {heading}')
         policy = folder / 'agents/openai.yaml'
-        if not policy.is_file() or not re.search(
-                r'(?m)^policy:\s*\n[ \t]+allow_implicit_invocation:\s*false\s*$',
-                policy.read_text(encoding='utf-8')):
-            errors.append(f'{name}: explicit invocation policy missing')
+        try:
+            implicit_policy(policy)
+        except (ValueError, OSError) as exc:
+            errors.append(f'{name}: invalid implicit invocation policy: {exc}')
         for path in sorted(folder.rglob('*')):
             if not path.is_file():
                 continue
@@ -68,7 +111,7 @@ def check(root, require_fix=False):
                 elif not resolved.exists():
                     errors.append(f'{relative}: broken local link: {target}')
     return {'ok': not errors, 'counts': counts, 'errors': errors,
-            'scope': 'Packaging, basic metadata, explicit-entry policy, JSON syntax and ordinary local Markdown links only; no semantic quality or behavioral guarantee.'}
+            'scope': 'Packaging, basic metadata, bounded implicit-invocation policy syntax, JSON syntax and ordinary local Markdown links only; no semantic quality or behavioral guarantee.'}
 
 
 def main():

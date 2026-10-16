@@ -3,4 +3,4 @@ interface:
   short_description: "独立或编排使用的任务实施，留存可阅读的依据、证据、结论与后续事项"
   default_prompt: "使用 $delivery-implement 完成本次任务实施，遵循已授权范围并留存真实记录。"
 policy:
-  allow_implicit_invocation: false
+  allow_implicit_invocation: true
