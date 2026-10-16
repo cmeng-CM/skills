@@ -1,0 +1,25 @@
+{
+  "reviewer": "/root/independent_delivery_review",
+  "at": "2026-10-16T01:27:37.134121+00:00",
+  "hashes": {
+    "delivery.py": "0f6abc46533af6ce78df08bb7bdd186d18ebb3b135ae11bbf5cb778e438c1180",
+    "delivery_v2.py": "09182c450904cc0fc5a774277d2f07c93d4f608b32843a13e4d9a3c9ae58926a",
+    "delivery_sources.py": "635b19e6486c1e9b00d7c74339a578f0ea34edf3f13dce458d69d3c204006cfb",
+    "delivery_monitor.py": "c90c7c0d39e7a6e62e5b5396f8b1e8652766ee263761d37ac8dbb8bdbd71a3c4",
+    "delivery_recovery.py": "64e48224cae1a6299e725faa7feef893686316fba5e54993b59197c70dc27a4a"
+  },
+  "actual_command": [
+    "python3",
+    "-B",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "delivery/delivery-orchestrate/tests",
+    "-p",
+    "test_delivery*.py",
+    "-v"
+  ],
+  "actual_result": "98 tests passed; 63 v1 and 35 v2; does not cover the independent failing recovery probes",
+  "probe_evidence": "005-core-probes.json"
+}

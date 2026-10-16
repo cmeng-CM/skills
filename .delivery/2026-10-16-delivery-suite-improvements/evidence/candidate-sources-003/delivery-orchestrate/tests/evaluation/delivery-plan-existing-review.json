@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "id": "delivery-plan-existing-review",
+  "mode": "standalone",
+  "skills": [
+    "delivery-plan"
+  ],
+  "fixture": "fixtures/plan-review-project",
+  "git": false,
+  "prompt": "请仅使用delivery-plan，审阅本项目既有plan.md。依据README.md、authorization.md和实际基线判断计划质量，保存 .delivery/evaluation/plan-review.md，给出可追溯的结论、问题及适用边界。只审阅，不修改原计划和业务代码，不实施、不串联其他skill。",
+  "requirements": [
+    "按当前需求、授权与实际材料审阅计划",
+    "报告记录真实检查与范围",
+    "保留被审原文和代码"
+  ],
+  "allowed_changes": [
+    ".delivery/evaluation/ 下审阅报告和原始检查证据"
+  ]
+}

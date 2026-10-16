@@ -1,0 +1,81 @@
+test_any_accessible_old_fixture_or_global_history_fails_canary_gate (test_external_seatbelt.ExternalSeatbeltTests.test_any_accessible_old_fixture_or_global_history_fails_canary_gate) ... ok
+test_commentary_only_is_not_final (test_external_seatbelt.ExternalSeatbeltTests.test_commentary_only_is_not_final) ... ok
+test_current_state_cannot_be_reused_or_symlinked (test_external_seatbelt.ExternalSeatbeltTests.test_current_state_cannot_be_reused_or_symlinked) ... ok
+test_empty_cursor_cannot_hide_incomplete_inventory (test_external_seatbelt.ExternalSeatbeltTests.test_empty_cursor_cannot_hide_incomplete_inventory) ... ok
+test_existing_identity_required_and_protected_changes_detected (test_external_seatbelt.ExternalSeatbeltTests.test_existing_identity_required_and_protected_changes_detected) ... ok
+test_foreign_thread_final_usage_and_completion_cannot_finish_root (test_external_seatbelt.ExternalSeatbeltTests.test_foreign_thread_final_usage_and_completion_cannot_finish_root) ... ok
+test_historical_rows_in_real_startup_db_block_model_turn (test_external_seatbelt.ExternalSeatbeltTests.test_historical_rows_in_real_startup_db_block_model_turn) ... ok
+test_history_roots_and_all_sqlite_versions_denied_without_home_blanket (test_external_seatbelt.ExternalSeatbeltTests.test_history_roots_and_all_sqlite_versions_denied_without_home_blanket) ... ok
+test_history_symlink_targets_are_denied_and_fixture_overlap_rejected (test_external_seatbelt.ExternalSeatbeltTests.test_history_symlink_targets_are_denied_and_fixture_overlap_rejected) ... ok
+test_malformed_mcp_shapes_cannot_start_model (test_external_seatbelt.ExternalSeatbeltTests.test_malformed_mcp_shapes_cannot_start_model) ... ok
+test_malformed_message_cannot_pass (test_external_seatbelt.ExternalSeatbeltTests.test_malformed_message_cannot_pass) ... ok
+test_missing_database_cannot_be_interpreted_as_no_history (test_external_seatbelt.ExternalSeatbeltTests.test_missing_database_cannot_be_interpreted_as_no_history) ... ok
+test_normal_zsh_temp_environment_reaches_child_without_replacing_user_homes (test_external_seatbelt.ExternalSeatbeltTests.test_normal_zsh_temp_environment_reaches_child_without_replacing_user_homes) ... ok
+test_outside_write_success_invalidates_boundary (test_external_seatbelt.ExternalSeatbeltTests.test_outside_write_success_invalidates_boundary) ... ok
+test_prior_fixture_state_denied_except_current_run_child (test_external_seatbelt.ExternalSeatbeltTests.test_prior_fixture_state_denied_except_current_run_child) ... ok
+test_process_crash_is_not_completion (test_external_seatbelt.ExternalSeatbeltTests.test_process_crash_is_not_completion) ... ok
+test_profile_grants_no_auth_config_or_home_directory_write (test_external_seatbelt.ExternalSeatbeltTests.test_profile_grants_no_auth_config_or_home_directory_write) ... ok
+test_profile_rejects_fixture_inside_denied_root (test_external_seatbelt.ExternalSeatbeltTests.test_profile_rejects_fixture_inside_denied_root) ... ok
+test_root_notifications_before_start_response_are_replayed (test_external_seatbelt.ExternalSeatbeltTests.test_root_notifications_before_start_response_are_replayed) ... ok
+test_runtime_injected_mcp_tools_still_block_model_turn (test_external_seatbelt.ExternalSeatbeltTests.test_runtime_injected_mcp_tools_still_block_model_turn) ... ok
+test_stable_external_capability_features_explicitly_disabled (test_external_seatbelt.ExternalSeatbeltTests.test_stable_external_capability_features_explicitly_disabled) ... ok
+test_startup_only_never_sends_model_turn (test_external_seatbelt.ExternalSeatbeltTests.test_startup_only_never_sends_model_turn) ... ok
+test_state_audit_fails_closed_missing_schema_and_poisoned_database (test_external_seatbelt.ExternalSeatbeltTests.test_state_audit_fails_closed_missing_schema_and_poisoned_database) ... ok
+test_stdin_protocol_complete_is_execution_only (test_external_seatbelt.ExternalSeatbeltTests.test_stdin_protocol_complete_is_execution_only) ... ok
+test_three_canaries_must_all_pass (test_external_seatbelt.ExternalSeatbeltTests.test_three_canaries_must_all_pass) ... ok
+test_timeout_preserves_raw_partial_protocol (test_external_seatbelt.ExternalSeatbeltTests.test_timeout_preserves_raw_partial_protocol) ... /opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/_weakrefset.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x105b034c0>
+  self.data.add(ref(item, self._remove))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/_weakrefset.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x105b031f0>
+  self.data.add(ref(item, self._remove))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/_weakrefset.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x105dbd4e0>
+  self.data.add(ref(item, self._remove))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/_weakrefset.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x105b02a70>
+  self.data.add(ref(item, self._remove))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/_weakrefset.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x105dbff10>
+  self.data.add(ref(item, self._remove))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/_weakrefset.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x105dbd030>
+  self.data.add(ref(item, self._remove))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/_weakrefset.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x105b02f20>
+  self.data.add(ref(item, self._remove))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/_weakrefset.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x1060e4040>
+  self.data.add(ref(item, self._remove))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/_weakrefset.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x1060e4220>
+  self.data.add(ref(item, self._remove))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/_weakrefset.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x1060e4130>
+  self.data.add(ref(item, self._remove))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/_weakrefset.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x1060e4400>
+  self.data.add(ref(item, self._remove))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/_weakrefset.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x105dbfe20>
+  self.data.add(ref(item, self._remove))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/_weakrefset.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x105b02110>
+  self.data.add(ref(item, self._remove))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/_weakrefset.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x105dbfd30>
+  self.data.add(ref(item, self._remove))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/_weakrefset.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x105b02c50>
+  self.data.add(ref(item, self._remove))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/_weakrefset.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x1060e47c0>
+  self.data.add(ref(item, self._remove))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_well_formed_empty_inventory_and_server_can_proceed (test_external_seatbelt.ExternalSeatbeltTests.test_well_formed_empty_inventory_and_server_can_proceed) ... ok
+test_wrong_turn_completion_without_root_completion_times_out (test_external_seatbelt.ExternalSeatbeltTests.test_wrong_turn_completion_without_root_completion_times_out) ... ok
+
+----------------------------------------------------------------------
+Ran 28 tests in 8.743s
+
+OK

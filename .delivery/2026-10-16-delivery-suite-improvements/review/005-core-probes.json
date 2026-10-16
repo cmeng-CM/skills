@@ -1,0 +1,64 @@
+{
+  "resolved_unknown_after_reconfigure": {
+    "old_config": "op-1",
+    "new_config": "op-19",
+    "old_state": [
+      {
+        "operation": "interrupted",
+        "acceptance": "A1",
+        "tasks": [
+          "T1"
+        ],
+        "config_op": "op-1",
+        "resolution": "op-12",
+        "replacement": "op-14"
+      }
+    ],
+    "new_state": [
+      {
+        "operation": "interrupted",
+        "acceptance": "A1",
+        "tasks": [
+          "T1"
+        ],
+        "config_op": "op-1",
+        "resolution": null,
+        "replacement": null
+      }
+    ],
+    "new_record": "incomplete run requires evidenced resolve-run; releasing resources is insufficient",
+    "resolve_old_unknown_under_new_config": "incomplete run belongs to another admission; use original admission recovery"
+  },
+  "source_reassessment_after_stale_prior_review": {
+    "first_update": "op-4",
+    "renewed_update": "op-5",
+    "renewed_pin": "3930e7ac355a353432d4cec09e094c6740afedb10787dffc4dfb693fb4069ecf",
+    "effective_pin": "bc004a38357369ee1347578b1b715874e37b94d28736b5c5ec324b88201d485a",
+    "drift": [
+      {
+        "name": "delivery-implement",
+        "expected": "bc004a38357369ee1347578b1b715874e37b94d28736b5c5ec324b88201d485a",
+        "actual": "3930e7ac355a353432d4cec09e094c6740afedb10787dffc4dfb693fb4069ecf",
+        "root": "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/tmp4sj8476c/.delivery/example/implement-copy"
+      }
+    ],
+    "new_record": "actual skill source drift; restore source or explicitly accept update"
+  },
+  "impact_reassessment_after_stale_prior_review": {
+    "first_impact": "op-13",
+    "renewed_impact": "op-14",
+    "new_event_current_evidence": true,
+    "unassessed_after_renewal": [
+      {
+        "path": "unrelated-notes.md",
+        "before": null,
+        "after": {
+          "type": "file",
+          "hash": "9d3d4c2cb5cb27ecf153a1ad62ed434a3b872a6b134a91ed2676ba256819d837",
+          "executable": false
+        }
+      }
+    ],
+    "new_record": "outside changes/unsupported entries require explicit assessment"
+  }
+}

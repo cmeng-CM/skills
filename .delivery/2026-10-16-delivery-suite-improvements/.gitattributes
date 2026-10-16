@@ -1,0 +1,2 @@
+# 原始unified diff的空上下文行必须保留一个空格，不作为源文档尾空格处理。
+review/010-root-navigation.diff -whitespace

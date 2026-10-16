@@ -1,0 +1,58 @@
+{
+  "checks": [
+    {
+      "argv": [
+        "/Users/cm/workspace/github/ppt-master/.venv/bin/python3",
+        "-B",
+        "/Users/cm/workspace/github/skills/.delivery/2026-10-16-delivery-suite-improvements/evidence/behavior/candidate-full-01/runs/002/harness-source/evaluate_suite.py",
+        "prepare",
+        "--case",
+        "/Users/cm/workspace/github/skills/delivery/delivery-orchestrate/tests/evaluation/delivery-mapping-existing-review.json",
+        "--skills-root",
+        "/Users/cm/workspace/github/skills/.delivery/2026-10-16-delivery-suite-improvements/evidence/candidate-sources-001",
+        "--variant",
+        "candidate",
+        "--output",
+        "/Users/cm/workspace/github/skills/.delivery/2026-10-16-delivery-suite-improvements/review/022-mapping-preflight"
+      ],
+      "exit": 0,
+      "stdout": "{\"status\": \"prepared\", \"output\": \"/Users/cm/workspace/github/skills/.delivery/2026-10-16-delivery-suite-improvements/review/022-mapping-preflight\"}\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "/Users/cm/workspace/github/ppt-master/.venv/bin/python3",
+        "-B",
+        "/Users/cm/workspace/github/skills/delivery/delivery-orchestrate/tests/evaluation/prepare_mapping_case.py",
+        "--output",
+        "/Users/cm/workspace/github/skills/.delivery/2026-10-16-delivery-suite-improvements/review/022-mapping-preflight"
+      ],
+      "exit": 0,
+      "stdout": "{\"output\": \"/Users/cm/workspace/github/skills/.delivery/2026-10-16-delivery-suite-improvements/review/022-mapping-preflight\", \"workspace\": \"/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-eval-work-4cw9_3m3\", \"work\": \"/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-eval-work-4cw9_3m3/.delivery/mapping\", \"status\": \"pending-independent-review\", \"model_runs\": 0}\n",
+      "stderr": ""
+    }
+  ],
+  "workspace": "/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-eval-work-4cw9_3m3",
+  "model_runs": [],
+  "events": [
+    "init",
+    "configure"
+  ],
+  "acceptance_ids": [
+    "AC-01",
+    "AC-02"
+  ],
+  "requirements_ids": [
+    "REQ-01",
+    "REQ-02"
+  ],
+  "copied_private_names": [],
+  "skills": [
+    "delivery-review",
+    "delivery-orchestrate",
+    "delivery-implement",
+    "delivery-verify",
+    "delivery-plan",
+    "delivery-design"
+  ]
+}

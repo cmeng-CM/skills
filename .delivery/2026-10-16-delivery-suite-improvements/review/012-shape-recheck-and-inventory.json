@@ -1,0 +1,224 @@
+{
+  "reviewer": "/root/independent_delivery_review",
+  "adapter_sha256": "f8cf882162ada74dbfbeaf382e3e20133ccc8b9c384f2304a06ea91e447b9f92",
+  "scope": "Controlled parser recheck and independent actual initial preflight inventory audit; not complete case evaluation",
+  "controlled_rechecks": [
+    {
+      "inventory": {},
+      "status": "execution-failed",
+      "turn_started": false
+    },
+    {
+      "inventory": {
+        "data": [
+          {}
+        ]
+      },
+      "status": "execution-failed",
+      "turn_started": false
+    },
+    {
+      "inventory": {
+        "data": []
+      },
+      "status": "executed",
+      "turn_started": true
+    },
+    {
+      "inventory": {
+        "data": [
+          {
+            "name": "disabled",
+            "authStatus": "unsupported",
+            "tools": {},
+            "resources": [],
+            "resourceTemplates": []
+          }
+        ]
+      },
+      "status": "executed",
+      "turn_started": true
+    }
+  ],
+  "actual_preflights": [
+    {
+      "case": "environment-review-smoke",
+      "run": "001",
+      "source": ".delivery/2026-10-16-delivery-suite-improvements/evidence/behavior/environment-review-smoke/runs/001/appserver.jsonl",
+      "observed_inventory": {
+        "server_count": 3
+      },
+      "judgement": "MCP inventory exposes external capabilities or incomplete pagination despite configured disables; model not started",
+      "turn_started": false,
+      "limit": "Only initial inventory/turn preflight audited; no model quality or leakage verdict"
+    },
+    {
+      "case": "environment-review-smoke",
+      "run": "002",
+      "source": ".delivery/2026-10-16-delivery-suite-improvements/evidence/behavior/environment-review-smoke/runs/002/appserver.jsonl",
+      "observed_inventory": {
+        "data": [
+          {
+            "name": "node_repl",
+            "runtimeStatus": "disabled",
+            "pluginId": null,
+            "serverInfo": null,
+            "tools": {},
+            "toolsError": null,
+            "resources": [],
+            "resourceTemplates": [],
+            "authStatus": "unsupported"
+          }
+        ],
+        "nextCursor": null
+      },
+      "judgement": "complete-empty-capabilities",
+      "turn_started": true,
+      "limit": "Only initial inventory/turn preflight audited; no model quality or leakage verdict"
+    },
+    {
+      "case": "baseline-full-01",
+      "run": "001",
+      "source": ".delivery/2026-10-16-delivery-suite-improvements/evidence/behavior/baseline-full-01/runs/001/appserver.jsonl",
+      "observed_inventory": {
+        "data": [
+          {
+            "name": "node_repl",
+            "runtimeStatus": "disabled",
+            "pluginId": null,
+            "serverInfo": null,
+            "tools": {},
+            "toolsError": null,
+            "resources": [],
+            "resourceTemplates": [],
+            "authStatus": "unsupported"
+          }
+        ],
+        "nextCursor": null
+      },
+      "judgement": "complete-empty-capabilities",
+      "turn_started": true,
+      "limit": "Only initial inventory/turn preflight audited; no model quality or leakage verdict"
+    },
+    {
+      "case": "baseline-resume-01",
+      "run": "001",
+      "source": ".delivery/2026-10-16-delivery-suite-improvements/evidence/behavior/baseline-resume-01/runs/001/appserver.jsonl",
+      "observed_inventory": {
+        "data": [
+          {
+            "name": "node_repl",
+            "runtimeStatus": "disabled",
+            "pluginId": null,
+            "serverInfo": null,
+            "tools": {},
+            "toolsError": null,
+            "resources": [],
+            "resourceTemplates": [],
+            "authStatus": "unsupported"
+          }
+        ],
+        "nextCursor": null
+      },
+      "judgement": "complete-empty-capabilities",
+      "turn_started": true,
+      "limit": "Only initial inventory/turn preflight audited; no model quality or leakage verdict"
+    },
+    {
+      "case": "candidate-full-01",
+      "run": "001",
+      "source": ".delivery/2026-10-16-delivery-suite-improvements/evidence/behavior/candidate-full-01/runs/001/appserver.jsonl",
+      "observed_inventory": {
+        "data": [
+          {
+            "name": "node_repl",
+            "runtimeStatus": "disabled",
+            "pluginId": null,
+            "serverInfo": null,
+            "tools": {},
+            "toolsError": null,
+            "resources": [],
+            "resourceTemplates": [],
+            "authStatus": "unsupported"
+          }
+        ],
+        "nextCursor": null
+      },
+      "judgement": "complete-empty-capabilities",
+      "turn_started": true,
+      "limit": "Only initial inventory/turn preflight audited; no model quality or leakage verdict"
+    },
+    {
+      "case": "candidate-resume-01",
+      "run": "001",
+      "source": ".delivery/2026-10-16-delivery-suite-improvements/evidence/behavior/candidate-resume-01/runs/001/appserver.jsonl",
+      "observed_inventory": {
+        "data": [
+          {
+            "name": "node_repl",
+            "runtimeStatus": "disabled",
+            "pluginId": null,
+            "serverInfo": null,
+            "tools": {},
+            "toolsError": null,
+            "resources": [],
+            "resourceTemplates": [],
+            "authStatus": "unsupported"
+          }
+        ],
+        "nextCursor": null
+      },
+      "judgement": "complete-empty-capabilities",
+      "turn_started": true,
+      "limit": "Only initial inventory/turn preflight audited; no model quality or leakage verdict"
+    },
+    {
+      "case": "legacy-full-01",
+      "run": "001",
+      "source": ".delivery/2026-10-16-delivery-suite-improvements/evidence/behavior/legacy-full-01/runs/001/appserver.jsonl",
+      "observed_inventory": {
+        "data": [
+          {
+            "name": "node_repl",
+            "runtimeStatus": "disabled",
+            "pluginId": null,
+            "serverInfo": null,
+            "tools": {},
+            "toolsError": null,
+            "resources": [],
+            "resourceTemplates": [],
+            "authStatus": "unsupported"
+          }
+        ],
+        "nextCursor": null
+      },
+      "judgement": "complete-empty-capabilities",
+      "turn_started": true,
+      "limit": "Only initial inventory/turn preflight audited; no model quality or leakage verdict"
+    },
+    {
+      "case": "legacy-resume-01",
+      "run": "001",
+      "source": ".delivery/2026-10-16-delivery-suite-improvements/evidence/behavior/legacy-resume-01/runs/001/appserver.jsonl",
+      "observed_inventory": {
+        "data": [
+          {
+            "name": "node_repl",
+            "runtimeStatus": "disabled",
+            "pluginId": null,
+            "serverInfo": null,
+            "tools": {},
+            "toolsError": null,
+            "resources": [],
+            "resourceTemplates": [],
+            "authStatus": "unsupported"
+          }
+        ],
+        "nextCursor": null
+      },
+      "judgement": "complete-empty-capabilities",
+      "turn_started": true,
+      "limit": "Only initial inventory/turn preflight audited; no model quality or leakage verdict"
+    }
+  ]
+}

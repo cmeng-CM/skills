@@ -1,0 +1,16 @@
+{
+  "argv": [
+    "/Users/cm/workspace/github/ppt-master/.venv/bin/python3",
+    "-B",
+    "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-eval-work-4cw9_3m3/.agents/skills/delivery-orchestrate/scripts/delivery.py",
+    "check",
+    "--work",
+    "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-eval-work-4cw9_3m3/.delivery/mapping"
+  ],
+  "cwd": "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-eval-work-4cw9_3m3",
+  "started_at": "2026-10-16T03:28:34.721539+00:00",
+  "completed_at": "2026-10-16T03:28:34.842196+00:00",
+  "exit_code": 0,
+  "stdout": "{\n  \"journal_integrity\": \"passed\",\n  \"contract_version\": 2,\n  \"configuration\": \"current\",\n  \"lifecycle\": \"active\",\n  \"note\": \"Mechanical integrity only; not semantic approval or delivery success.\"\n}\n",
+  "stderr": ""
+}

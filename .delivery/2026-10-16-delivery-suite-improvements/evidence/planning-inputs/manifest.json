@@ -1,0 +1,57 @@
+{
+  "skill": "delivery-plan",
+  "contract_version": 1,
+  "source": "/Users/cm/workspace/github/skills/delivery-plan",
+  "head": "15aabb99b2666d213ea83dcaa7b16855b4f128b5",
+  "tree_sha256": "a2e18865c6a77118481f61c4574984e76141aaadb7b7b60fa5bafba927914078",
+  "algorithm": "sorted relative POSIX path bytes + NUL + raw SHA-256 digest of file contents",
+  "excludes": [
+    "__pycache__"
+  ],
+  "files": [
+    {
+      "path": "SKILL.md",
+      "sha256": "cd3e84da54b9bd2829d7d0b7eaea6a18f4f668c2e1ec52282d6ed9941c664011"
+    },
+    {
+      "path": "agents/openai.yaml",
+      "sha256": "a1499d95abd8447558c535fe5554adcc3c9b988a0a39264a6283d430effe1e94"
+    },
+    {
+      "path": "assets/plan-template.md",
+      "sha256": "cbe310cd5aa358ff9e8cec8e8990eb278fbb2d3b01e44259048bc4d6fff09816"
+    },
+    {
+      "path": "references/delivery-contract.md",
+      "sha256": "1b33b1f7fc013852e7e8cd3718c3038594e6de196858ba519ce345966beedb7a"
+    },
+    {
+      "path": "references/example-plan.md",
+      "sha256": "2a540543e31d6b668210afaa9d167a5664661ecd896ddabb6048d810d6342274"
+    },
+    {
+      "path": "references/plan-standard.md",
+      "sha256": "d9a381d52c20f9f44dfe3d14341ff4f19936fb9b5cda7d4a0103abd5a49c3ba7"
+    },
+    {
+      "path": "references/preparation.md",
+      "sha256": "55e63a132bea24c4e0830358a6c437b88d6a98d59ca804859247107913eed606"
+    },
+    {
+      "path": "references/review.md",
+      "sha256": "0dfb6ef694cd6aa93aa4d525eb65b27502ce8085be421ba0377ce05983cb532d"
+    },
+    {
+      "path": "scripts/check_plan.py",
+      "sha256": "641f61a0f17cea38536f02e6355ca0577f38b483bdf19485bdcbd2d376f50ad5"
+    },
+    {
+      "path": "tests/behavior-cases.json",
+      "sha256": "45506caf1cd03940f227bb54d8637be1395f9b0d0b47ca14d7b1d73186a5d1f3"
+    },
+    {
+      "path": "tests/test_check_plan.py",
+      "sha256": "de10dc7a87b87974f0278864e83532b75c2b00ef63f376c6c27f568ababed0ed"
+    }
+  ]
+}

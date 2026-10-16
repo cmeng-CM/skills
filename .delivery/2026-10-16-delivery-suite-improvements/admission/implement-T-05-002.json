@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "contract_version": 1,
+  "skill_revision": "delivery-implement professional contract1; actual source commit 197b989; stable v1 control",
+  "kind": "implementation",
+  "target": "T-05",
+  "actor": {
+    "id": "contract_runtime",
+    "context": "delegated-runtime-author"
+  },
+  "report": {
+    "path": ".delivery/2026-10-16-delivery-suite-improvements/implementation/008-runtime-reuse.md"
+  },
+  "result": "passed",
+  "summary": "T05新增实际回归范围后按当前核心及55项v2测试重新接纳，未复用旧descriptor；核心内容仍为独立009审阅版本。",
+  "evidence": [
+    {
+      "path": ".delivery/2026-10-16-delivery-suite-improvements/implementation/004-runtime.md"
+    },
+    {
+      "path": ".delivery/2026-10-16-delivery-suite-improvements/implementation/006-runtime-repair.md"
+    },
+    {
+      "path": ".delivery/2026-10-16-delivery-suite-improvements/implementation/007-runtime-recovery-set.md"
+    },
+    {
+      "path": ".delivery/2026-10-16-delivery-suite-improvements/review/009-core-reuse-recheck.md"
+    },
+    {
+      "path": ".delivery/2026-10-16-delivery-suite-improvements/evidence/runtime/repair-003-manifest.json"
+    },
+    {
+      "path": ".delivery/2026-10-16-delivery-suite-improvements/evidence/final-mechanical-003/result.json"
+    }
+  ]
+}

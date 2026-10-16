@@ -1,0 +1,62 @@
+{
+  ".agents/skills/delivery-review/SKILL.md": {
+    "sha256": "ff7ae29d213da40a9301fe133969021309dad3d6a6eb5f7b725345f4b3782e50",
+    "bytes": 4446
+  },
+  ".agents/skills/delivery-review/agents/openai.yaml": {
+    "sha256": "0fb3fed7b7379ddfa1f938cd87b698da06363d1e2d053816b98c7e71a313aea3",
+    "bytes": 331
+  },
+  ".agents/skills/delivery-review/assets/review-template.md": {
+    "sha256": "70d1d804454523b5cdb72f88c7c548fd446a2a273184b90f22a534feb1d77de6",
+    "bytes": 2178
+  },
+  ".agents/skills/delivery-review/references/delivery-contract.md": {
+    "sha256": "d209ef71cec3fbd1fb312b0758f0603f2359219efccf827e1d217cb2b0e4532f",
+    "bytes": 5827
+  },
+  ".agents/skills/delivery-review/references/example-review.md": {
+    "sha256": "4f9af8de0563115c83843a26fcf9e6cf2e3cf46ade19ed5cf6b5562c903d3ba6",
+    "bytes": 3966
+  },
+  ".agents/skills/delivery-review/references/review-standard.md": {
+    "sha256": "a1f41b2076391f6fa2ff5e67c43f387d74f3573c313a4c7241412710d4cb4030",
+    "bytes": 7244
+  },
+  ".agents/skills/delivery-review/references/work-rules.md": {
+    "sha256": "3953e8c9afddf33afb63af8beae42d1f8fe3f3ae087613f7d5da87054f69a432",
+    "bytes": 3766
+  },
+  "README.md": {
+    "sha256": "d7ba32123e85a92ae6be93322e84169d87a2b65c692cd02897c7fd150efd508b",
+    "bytes": 825
+  },
+  "app.py": {
+    "sha256": "fb0c004ac4f989acb5b85ef489b2af0d98141cd9131fed52a337a1b5e8be72f4",
+    "bytes": 504
+  },
+  "history/money_before.py": {
+    "sha256": "6bc7946e1751b1a8663b4ccb9d9a1528487eaf55152c6439941bbb2f73e5c1b8",
+    "bytes": 56
+  },
+  "implementation.md": {
+    "sha256": "00a21b595b0076f5f0edbefdcf05072b0f46e18d948b4f0833cf331874736bfa",
+    "bytes": 525
+  },
+  "money.py": {
+    "sha256": "d925057995a7cc9fca7e4243eb7cbf1cc0cf2f8c9296bb1014b7f20ac9cfdbe8",
+    "bytes": 1559
+  },
+  "review/001.md": {
+    "sha256": "dfab3217dadcc3ba515e887d5c539d8efa7cf47aabba5ed41783f9e2bdc8696c",
+    "bytes": 958
+  },
+  "tests/test_money.py": {
+    "sha256": "88b3e6f0bfb3258ca218ffa0657e5b2a20939274129e4e9a140dca7040c4bb05",
+    "bytes": 2017
+  },
+  "transactions.json": {
+    "sha256": "a070d06e43328943e9bd52b83266b7b708e5e57bd41b7e3bb7a06439dec8c115",
+    "bytes": 105
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "argv": [
+    "/Users/cm/workspace/github/ppt-master/.venv/bin/python3",
+    "-B",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "delivery/delivery-orchestrate/tests",
+    "-p",
+    "test_delivery*.py",
+    "-v"
+  ],
+  "returncode": 0,
+  "before": {
+    "delivery/delivery-orchestrate/scripts/delivery.py": "0f6abc46533af6ce78df08bb7bdd186d18ebb3b135ae11bbf5cb778e438c1180",
+    "delivery/delivery-orchestrate/scripts/delivery_v2.py": "ada3c78a178b424512ae9d0cfe918b56ad71de6672740f5a249a9211dd0f9f59",
+    "delivery/delivery-orchestrate/scripts/delivery_sources.py": "b688a789ecba332e0f318d44722ea9f046f9aa95553da22961e9980c990e4a80",
+    "delivery/delivery-orchestrate/scripts/delivery_monitor.py": "1d1b00407720d0ba076906b311499430ec47c81209e6132baab8f1fd44ad8b58",
+    "delivery/delivery-orchestrate/scripts/delivery_recovery.py": "5ad248ff22cf94b1fdfceca5b895cbe708305e81f94d036bb2c85ac5037a4122"
+  },
+  "after": {
+    "delivery/delivery-orchestrate/scripts/delivery.py": "0f6abc46533af6ce78df08bb7bdd186d18ebb3b135ae11bbf5cb778e438c1180",
+    "delivery/delivery-orchestrate/scripts/delivery_v2.py": "ada3c78a178b424512ae9d0cfe918b56ad71de6672740f5a249a9211dd0f9f59",
+    "delivery/delivery-orchestrate/scripts/delivery_sources.py": "b688a789ecba332e0f318d44722ea9f046f9aa95553da22961e9980c990e4a80",
+    "delivery/delivery-orchestrate/scripts/delivery_monitor.py": "1d1b00407720d0ba076906b311499430ec47c81209e6132baab8f1fd44ad8b58",
+    "delivery/delivery-orchestrate/scripts/delivery_recovery.py": "5ad248ff22cf94b1fdfceca5b895cbe708305e81f94d036bb2c85ac5037a4122"
+  },
+  "sources_stable": true
+}

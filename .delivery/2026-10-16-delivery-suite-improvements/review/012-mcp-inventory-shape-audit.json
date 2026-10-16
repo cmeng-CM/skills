@@ -1,0 +1,73 @@
+{
+  "author": "/root/behavior_harness",
+  "purpose": "IR013 source evidence shape audit; no model reruns and no behavioral regrading",
+  "adapter_sha256": "f8cf882162ada74dbfbeaf382e3e20133ccc8b9c384f2304a06ea91e447b9f92",
+  "results": [
+    {
+      "case": "baseline-full-01",
+      "run": "001",
+      "source": ".delivery/2026-10-16-delivery-suite-improvements/evidence/behavior/baseline-full-01/runs/001/appserver.jsonl",
+      "sha256": "15dba1c2e98bfb64e9216deabaf76a6c45174ecc9918b167aa0df48c8466e174",
+      "shape_valid": true,
+      "empty_capabilities": true
+    },
+    {
+      "case": "baseline-resume-01",
+      "run": "001",
+      "source": ".delivery/2026-10-16-delivery-suite-improvements/evidence/behavior/baseline-resume-01/runs/001/appserver.jsonl",
+      "sha256": "cc8e5cef897951498c0f2d9de62b9360e6f8341e21a80b8729fec3bb681aa291",
+      "shape_valid": true,
+      "empty_capabilities": true
+    },
+    {
+      "case": "candidate-full-01",
+      "run": "001",
+      "source": ".delivery/2026-10-16-delivery-suite-improvements/evidence/behavior/candidate-full-01/runs/001/appserver.jsonl",
+      "sha256": "089b837156d566d823a092831240610d2ea343ba0096ee5c6eb8a67033251df7",
+      "shape_valid": true,
+      "empty_capabilities": true
+    },
+    {
+      "case": "candidate-resume-01",
+      "run": "001",
+      "source": ".delivery/2026-10-16-delivery-suite-improvements/evidence/behavior/candidate-resume-01/runs/001/appserver.jsonl",
+      "sha256": "8519d18ce3fec0445430fb2a3df111f7ecb6bee5ca3d29d768b0b654c1fa0e46",
+      "shape_valid": true,
+      "empty_capabilities": true
+    },
+    {
+      "case": "environment-review-smoke",
+      "run": "001",
+      "source": ".delivery/2026-10-16-delivery-suite-improvements/evidence/behavior/environment-review-smoke/runs/001/appserver-result.json",
+      "sha256": "bb4a1355b7ecf00ec22c1785af0a04a48312d6f315448d2f3e2c80aeedfb7e7c",
+      "shape_valid": true,
+      "empty_capabilities": false,
+      "reason": "MCP inventory exposes external capabilities or incomplete pagination despite configured disables; model not started"
+    },
+    {
+      "case": "environment-review-smoke",
+      "run": "002",
+      "source": ".delivery/2026-10-16-delivery-suite-improvements/evidence/behavior/environment-review-smoke/runs/002/appserver-result.json",
+      "sha256": "ebf454b7b08f734ba50e91c34118a7ce7e21b8d5876f0dec6298f6b4c29ec1a3",
+      "shape_valid": true,
+      "empty_capabilities": true
+    },
+    {
+      "case": "legacy-full-01",
+      "run": "001",
+      "source": ".delivery/2026-10-16-delivery-suite-improvements/evidence/behavior/legacy-full-01/runs/001/appserver.jsonl",
+      "sha256": "5d56eb1ee4f97c2b95dff9b225a056edc78c2ba42b9667b77bef48a1384bc495",
+      "shape_valid": true,
+      "empty_capabilities": true
+    },
+    {
+      "case": "legacy-resume-01",
+      "run": "001",
+      "source": ".delivery/2026-10-16-delivery-suite-improvements/evidence/behavior/legacy-resume-01/runs/001/appserver.jsonl",
+      "sha256": "c9cdea05376e430acb226f097cd14d5d14f664aefa0c0d8b1110c98786f78b09",
+      "shape_valid": true,
+      "empty_capabilities": true
+    }
+  ],
+  "checked_at": "2026-10-16T01:46:04.095792+00:00"
+}

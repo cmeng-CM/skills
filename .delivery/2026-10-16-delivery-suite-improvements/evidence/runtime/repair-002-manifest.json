@@ -1,0 +1,45 @@
+{
+  "author": "/root/contract_runtime",
+  "findings": [
+    "IR-008",
+    "IR-009"
+  ],
+  "files": [
+    {
+      "path": "delivery/delivery-orchestrate/scripts/delivery.py",
+      "sha256": "0f6abc46533af6ce78df08bb7bdd186d18ebb3b135ae11bbf5cb778e438c1180"
+    },
+    {
+      "path": "delivery/delivery-orchestrate/scripts/delivery_v2.py",
+      "sha256": "ada3c78a178b424512ae9d0cfe918b56ad71de6672740f5a249a9211dd0f9f59"
+    },
+    {
+      "path": "delivery/delivery-orchestrate/scripts/delivery_sources.py",
+      "sha256": "b688a789ecba332e0f318d44722ea9f046f9aa95553da22961e9980c990e4a80"
+    },
+    {
+      "path": "delivery/delivery-orchestrate/scripts/delivery_monitor.py",
+      "sha256": "1d1b00407720d0ba076906b311499430ec47c81209e6132baab8f1fd44ad8b58"
+    },
+    {
+      "path": "delivery/delivery-orchestrate/scripts/delivery_recovery.py",
+      "sha256": "5ad248ff22cf94b1fdfceca5b895cbe708305e81f94d036bb2c85ac5037a4122"
+    },
+    {
+      "path": "delivery/delivery-orchestrate/tests/test_delivery_v2.py",
+      "sha256": "2f0b45bbad2e4e664099c59384bb7eae919639ace988f5ffc2316a458d3565a8"
+    },
+    {
+      "path": "delivery/delivery-orchestrate/references/contracts.md",
+      "sha256": "dcf263e349c096a07a283d4c6682c817a3a70aec338776abf2933bfe1a8cd565"
+    },
+    {
+      "path": "delivery/delivery-orchestrate/references/runtime-api.md",
+      "sha256": "15889b31f0c4bb7609c6b3f7f72d3c64e681e38a6c9aa678ac66f156a624bd33"
+    },
+    {
+      "path": "delivery/delivery-orchestrate/references/runtime-api-v2.md",
+      "sha256": "90004d47670b4c018b3334a3b553d316256fa8ab00e273cb61cf95a458d663b6"
+    }
+  ]
+}

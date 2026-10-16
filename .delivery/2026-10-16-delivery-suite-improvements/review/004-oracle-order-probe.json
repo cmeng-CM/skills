@@ -1,0 +1,16 @@
+{
+  "reviewer": "/root/independent_delivery_review",
+  "oracle_sha256": "53b4e0dc144bf93ae2fe0c5010dee0c617c858939088c48022d152e2fc817fdb",
+  "mutation": "Equivalent amount computation; emit currency keys in reversed insertion order instead of sorted order",
+  "oracle_verdict": "pass",
+  "mixed_stdout": "{\"USD\": {\"income\": \"3.00\", \"expense\": \"0.00\", \"net\": \"3.00\"}, \"CNY\": {\"income\": \"10.10\", \"expense\": \"2.05\", \"net\": \"8.05\"}}\n",
+  "parsed_currency_order": [
+    "USD",
+    "CNY"
+  ],
+  "required_currency_order": [
+    "CNY",
+    "USD"
+  ],
+  "gap": "JSON object equality ignores member order although public README requires sorted currency keys"
+}

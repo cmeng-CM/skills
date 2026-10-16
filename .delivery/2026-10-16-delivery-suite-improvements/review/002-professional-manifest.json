@@ -1,0 +1,112 @@
+{
+  "reviewer": "/root/independent_delivery_review",
+  "at": "2026-10-16T01:18:55.994391+00:00",
+  "tree_algorithm": "sorted relative file path + NUL + file SHA256 + newline, UTF8; exclude __pycache__",
+  "packages": {
+    "delivery-design": {
+      "files": {
+        "SKILL.md": "9b55dfb526eb7146671e6dbeed9ba6aee2051f6152d7b7a95287a3cfafb651d6",
+        "agents/openai.yaml": "a1499d95abd8447558c535fe5554adcc3c9b988a0a39264a6283d430effe1e94",
+        "references/delivery-contract.md": "c9d09f2c6c1e15486bd4968ef429b3e8616f15aa1ee9f846724ac5cf55cd3e3e",
+        "references/document-standard.md": "33717eaf1f2c3e390c2004f8aa8b41a20b2ddba609cb6b8ca024000db24c523a",
+        "references/preparation.md": "1e093acffc41ff13aca68edda2256336eff5362e25208923aea9921710f5e0d8",
+        "references/review.md": "2cfcadc7eb611fefe7adf7789d380df73a47c7349f66f9d33ebc11c31139a29f",
+        "scripts/check_doc.py": "04b243c0f440d3a01f88d7f683c456add273f7559bcb27542cb161f1afc20512",
+        "tests/behavior-cases.json": "278f97ba76552b16ece8b8092712523a4413c0759b356e345186579789260838",
+        "tests/test_check_doc.py": "147cc3671a9a865d7d9b93e51a9da8c4766d69fe0b988b44e631d185d47ed8b6"
+      },
+      "tree_sha256": "9339f8800ad7b20d534c2ca7e5e3f44c60d69a38fff25a7536edc8c4604c3087"
+    },
+    "delivery-plan": {
+      "files": {
+        "SKILL.md": "4302e89fe56ac6be9b1d2f3d7b1c277f788deb9e18ce7800ab7c9744677a032f",
+        "agents/openai.yaml": "a1499d95abd8447558c535fe5554adcc3c9b988a0a39264a6283d430effe1e94",
+        "assets/plan-template.md": "cbf0524bcc26c32a3829cfe6b7a2434ce186081bc38685cb444469d660f9794a",
+        "references/delivery-contract.md": "1b33b1f7fc013852e7e8cd3718c3038594e6de196858ba519ce345966beedb7a",
+        "references/example-plan.md": "8a4a8b719ca7fa76cc7a43e10a6382089b5ced9db8dace19fc47d45e813bced8",
+        "references/plan-standard.md": "ad9c42ed46ff1fe1aacb3917a787bd07e1b1a163698338885a70f313e126a64e",
+        "references/preparation.md": "55e63a132bea24c4e0830358a6c437b88d6a98d59ca804859247107913eed606",
+        "references/review.md": "de88962be84fbbc7ec96d2aaa1f0428fab0d5b48f5ca1ed894671114a4a9356f",
+        "scripts/check_plan.py": "641f61a0f17cea38536f02e6355ca0577f38b483bdf19485bdcbd2d376f50ad5",
+        "tests/behavior-cases.json": "f2b0408001c63f92ba92ab28d4bbe0d7817346209e403bdd8b5a80e44b4de606",
+        "tests/test_check_plan.py": "de10dc7a87b87974f0278864e83532b75c2b00ef63f376c6c27f568ababed0ed"
+      },
+      "tree_sha256": "8ed676f3b45ebe36c8fa73148ca219fe7fdb4c4797ca194b9bf6738e158bd4d2"
+    },
+    "delivery-implement": {
+      "files": {
+        "SKILL.md": "5df2b269f14173912fe730076d24c3e97fff81fde3f5413ee18da88008052bee",
+        "agents/openai.yaml": "d48433ebc66a1b2961a14458fc90c6c342f942527e6a6328902411e46eee29a9",
+        "assets/implementation-template.md": "a42c9ca9e62c441f730176fc00d0e795a2264b1f2591c9b1bc01c8de07b2af96",
+        "references/delivery-contract.md": "2ee99a1f6f60c097a72455c57aab41791a321d353a72dab9f72fd007584712aa",
+        "references/example-implementation.md": "65d201668df3206288a2bab2bc328bf47fbb58684ea8c593fe340010241ce472",
+        "references/implementation-standard.md": "3fd73462006c06e7101f707b004078521aaeab14faf61eb41a3dbd4f41143dad",
+        "references/work-rules.md": "4d1a5e438d0334c311d15adc31d764b5a8c4b3d30057883559bc87ab9cb5305c",
+        "tests/behavior-cases.json": "e75d852ce8a1f4f9078ce79e5452718745008b04ee7b4fa28a40099408278d89"
+      },
+      "tree_sha256": "1a9057524715eab75a9aada6a63cd3b703fa8a3ae614635443fe3d447d5d1a4d"
+    },
+    "delivery-review": {
+      "files": {
+        "SKILL.md": "ff7ae29d213da40a9301fe133969021309dad3d6a6eb5f7b725345f4b3782e50",
+        "agents/openai.yaml": "0fb3fed7b7379ddfa1f938cd87b698da06363d1e2d053816b98c7e71a313aea3",
+        "assets/review-template.md": "70d1d804454523b5cdb72f88c7c548fd446a2a273184b90f22a534feb1d77de6",
+        "references/delivery-contract.md": "d209ef71cec3fbd1fb312b0758f0603f2359219efccf827e1d217cb2b0e4532f",
+        "references/example-review.md": "4f9af8de0563115c83843a26fcf9e6cf2e3cf46ade19ed5cf6b5562c903d3ba6",
+        "references/review-standard.md": "a1f41b2076391f6fa2ff5e67c43f387d74f3573c313a4c7241412710d4cb4030",
+        "references/work-rules.md": "3953e8c9afddf33afb63af8beae42d1f8fe3f3ae087613f7d5da87054f69a432",
+        "tests/behavior-cases.json": "5830e63088cf0c247940dadb446a190de27bfb8361033b6531e90b567cd70fd4"
+      },
+      "tree_sha256": "a9d52dff1d6d4ce618d23207ff8a42d8f1a1e8c31f5c4a9fd85bb49f95d3adc0"
+    },
+    "delivery-verify": {
+      "files": {
+        "SKILL.md": "aa6e08fdf8a6dde613439a7d9edfe8808567f84c9ed3f4f99c77763cfa45a9a9",
+        "agents/openai.yaml": "85f1870427a86fa35b1b24ba78666995126ce3af09aee87b169750d70e9b06f6",
+        "assets/verification-template.md": "6cb0d1f1959f4665973f94eeed6e2caafa7187a4d0f5f41efb070a8db1b9b9be",
+        "references/delivery-contract.md": "9c7ca24a0fba55a101155ada5905be2fa64e262d3fe470d43164631038957226",
+        "references/example-verification.md": "4ba567d08144c235276f10f15170cba7cd339b9bb1ff72665fb0f977e099953f",
+        "references/verification-standard.md": "f2127ea38e97c108787fddec583e18029b5d7320056fb83784fecd3a251c5e99",
+        "references/work-rules.md": "a627fab46215ae8370cf440340160a55eab0181ff69fb2a5d412d76171791f47",
+        "tests/behavior-cases.json": "ed9bb86bc18a34c87fa5c28253cb1410aab92baa50955f6c5232c36c74354d7f"
+      },
+      "tree_sha256": "29acbfd8e8f82e4a5ef385156d9447ae835f629afdecce31ff3fab46f3415896"
+    }
+  },
+  "changed_professional_files": [
+    "delivery/delivery-design/SKILL.md",
+    "delivery/delivery-design/references/review.md",
+    "delivery/delivery-design/tests/behavior-cases.json",
+    "delivery/delivery-plan/SKILL.md",
+    "delivery/delivery-plan/assets/plan-template.md",
+    "delivery/delivery-plan/references/example-plan.md",
+    "delivery/delivery-plan/references/plan-standard.md",
+    "delivery/delivery-plan/references/review.md",
+    "delivery/delivery-plan/tests/behavior-cases.json",
+    "delivery/delivery-implement/SKILL.md",
+    "delivery/delivery-implement/assets/implementation-template.md",
+    "delivery/delivery-implement/references/example-implementation.md",
+    "delivery/delivery-implement/references/implementation-standard.md",
+    "delivery/delivery-implement/references/work-rules.md",
+    "delivery/delivery-implement/tests/behavior-cases.json",
+    "delivery/delivery-review/SKILL.md",
+    "delivery/delivery-review/assets/review-template.md",
+    "delivery/delivery-review/references/example-review.md",
+    "delivery/delivery-review/references/review-standard.md",
+    "delivery/delivery-review/references/work-rules.md",
+    "delivery/delivery-review/tests/behavior-cases.json",
+    "delivery/delivery-verify/SKILL.md",
+    "delivery/delivery-verify/assets/verification-template.md",
+    "delivery/delivery-verify/references/example-verification.md",
+    "delivery/delivery-verify/references/verification-standard.md",
+    "delivery/delivery-verify/references/work-rules.md",
+    "delivery/delivery-verify/tests/behavior-cases.json"
+  ],
+  "other_read_sources": {
+    "delivery/README.md": "8a7b69379192e19fae438238520aaeb2882061171c07ff24b00298a0a1969aa4",
+    "delivery/delivery-orchestrate/scripts/validate_suite.py": "b7a034ef10e0256d9275ad4183f53cdcda7e3d82d1d14e189cd7063ef95621fb",
+    "delivery/delivery-orchestrate/scripts/evaluate_suite.py": "ae29dc2ecbfb8191c1a63525762cab7f576e537cc2b867d178349a6b76b6f6e0",
+    "delivery/delivery-orchestrate/tests/evaluation/README.md": "8b89f976198edd45b4af18d8a02387932f3d622c66d6b5ffcc8a2ed7faf0fb40"
+  },
+  "limits": "Other sources are partially authored; this report is not final harness/runtime approval."
+}

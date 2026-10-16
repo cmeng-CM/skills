@@ -1,0 +1,24 @@
+{
+  "argv": [
+    "/Users/cm/workspace/github/ppt-master/.venv/bin/python3",
+    "-B",
+    "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-eval-work-4cw9_3m3/.agents/skills/delivery-orchestrate/scripts/delivery.py",
+    "init",
+    "--project",
+    "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-eval-work-4cw9_3m3",
+    "--work",
+    "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-eval-work-4cw9_3m3/.delivery/mapping",
+    "--title",
+    "账本控制映射独立审阅",
+    "--contract-version",
+    "2",
+    "--op",
+    "trusted-init-001"
+  ],
+  "cwd": "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-eval-work-4cw9_3m3",
+  "started_at": "2026-10-16T03:28:34.570734+00:00",
+  "completed_at": "2026-10-16T03:28:34.628444+00:00",
+  "exit_code": 0,
+  "stdout": "{\n  \"seq\": 1,\n  \"at\": \"2026-10-16T03:28:34.622969+00:00\",\n  \"kind\": \"init\",\n  \"op\": \"trusted-init-001\",\n  \"request_hash\": \"4ba3c16ff8eb157ade246ea2862bba17d9ae692c2ccfe0ab686a54d0abda48be\",\n  \"payload\": {\n    \"title\": \"账本控制映射独立审阅\",\n    \"contract_version\": 2\n  },\n  \"previous\": \"0000000000000000000000000000000000000000000000000000000000000000\",\n  \"hash\": \"fe537dd95e7a1e44d6a02d20b62c5f59b4c3176b8aef74ac6d5312d7d9716650\"\n}\n",
+  "stderr": ""
+}

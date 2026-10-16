@@ -1,0 +1,16 @@
+{
+  "argv": [
+    "/Users/cm/workspace/github/ppt-master/.venv/bin/python3",
+    "-B",
+    "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-eval-work-4cw9_3m3/.agents/skills/delivery-orchestrate/scripts/delivery.py",
+    "status",
+    "--work",
+    "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-eval-work-4cw9_3m3/.delivery/mapping"
+  ],
+  "cwd": "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-eval-work-4cw9_3m3",
+  "started_at": "2026-10-16T03:28:34.846613+00:00",
+  "completed_at": "2026-10-16T03:28:34.973232+00:00",
+  "exit_code": 0,
+  "stdout": "{\n  \"configuration\": \"current\",\n  \"config_operation\": \"trusted-config-001\",\n  \"implementation\": {\n    \"T-01\": {\n      \"status\": \"pending\",\n      \"operation_id\": null\n    },\n    \"T-02\": {\n      \"status\": \"pending\",\n      \"operation_id\": null\n    }\n  },\n  \"review\": {\n    \"R-01\": {\n      \"status\": \"pending\",\n      \"operation_id\": null\n    }\n  },\n  \"verification\": {\n    \"AC-01\": {\n      \"status\": \"pending\",\n      \"operation_id\": null\n    },\n    \"AC-02\": {\n      \"status\": \"pending\",\n      \"operation_id\": null\n    }\n  },\n  \"issues\": {},\n  \"lifecycle\": \"active\",\n  \"closure\": null,\n  \"runs\": {},\n  \"contract_version\": 2,\n  \"admission\": {\n    \"plan_review\": {\n      \"status\": \"pending\",\n      \"operation\": null\n    },\n    \"mapping_review\": {\n      \"status\": \"pending\",\n      \"operation\": null\n    }\n  },\n  \"unassessed_changes\": [],\n  \"change_set_hash\": \"4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945\",\n  \"unsupported_entries\": [],\n  \"skill_drift\": [],\n  \"resources\": [],\n  \"diagnosis_required\": [],\n  \"unknown_runs\": [],\n  \"diagnostics\": [\n    {\n      \"code\": \"admission_pending\",\n      \"target\": null,\n      \"sources\": [\n        \"plan_review\"\n      ],\n      \"evidence_needed\": [\n        \"current independent report and evidence\"\n      ],\n      \"next_action\": \"gate plan_review\"\n    },\n    {\n      \"code\": \"admission_pending\",\n      \"target\": null,\n      \"sources\": [\n        \"mapping_review\"\n      ],\n      \"evidence_needed\": [\n        \"current independent report and evidence\"\n      ],\n      \"next_action\": \"gate mapping_review\"\n    }\n  ]\n}\n",
+  "stderr": ""
+}

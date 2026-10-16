@@ -1,0 +1,472 @@
+{
+  "reviewer": "/root/independent_delivery_review",
+  "at": "2026-10-16T01:42:18.323889+00:00",
+  "files": {
+    "README.md": "26c35806879de5e82d76a89916eabddf9201f161d60a82831e638719dcd8f42f",
+    "CLAUDE.md": "e4567530d6c8bd157a7d85c5d6ceac78d343f4acb01436cfc1a3d5480b8527d1",
+    "delivery/README.md": "8a7b69379192e19fae438238520aaeb2882061171c07ff24b00298a0a1969aa4",
+    "delivery/delivery-orchestrate/SKILL.md": "819594ad9557f2e3c81deb1db6e292827e8e1c9b329ea3c9b8141fb135e1c3cb",
+    "delivery/delivery-orchestrate/references/orchestration.md": "951080c85a43fabbf331bdb2cc9dee747e81b1e0dda93a21ceb4bfea21d2788d",
+    "delivery/delivery-orchestrate/references/contracts.md": "a114086c6426dd138f01f7a136d9962f82751da2dad1f542aaac585248247c1d",
+    "delivery/delivery-orchestrate/references/runtime-api.md": "15889b31f0c4bb7609c6b3f7f72d3c64e681e38a6c9aa678ac66f156a624bd33",
+    "delivery/delivery-orchestrate/references/runtime-api-v2.md": "64ac5d91e3a06c69f7381c4ff91e6973cf83a7a86f17ce977c0bfbea825ea8d4",
+    "delivery/delivery-orchestrate/references/maintenance.md": "3268ac1e785deac8c003601b7ee605a64c5b997535bbf2be0ef720cc44dc614f",
+    "delivery/delivery-orchestrate/assets/dispatch-template.md": "ed19bb8bfd2188bd3a62c4bfac22de959eecf5eea90a6a977a38eed4a349d7ab",
+    "delivery/delivery-design/SKILL.md": "9b55dfb526eb7146671e6dbeed9ba6aee2051f6152d7b7a95287a3cfafb651d6",
+    "delivery/delivery-design/references/delivery-contract.md": "c9d09f2c6c1e15486bd4968ef429b3e8616f15aa1ee9f846724ac5cf55cd3e3e",
+    "delivery/delivery-design/agents/openai.yaml": "a1499d95abd8447558c535fe5554adcc3c9b988a0a39264a6283d430effe1e94",
+    "delivery/delivery-plan/SKILL.md": "4302e89fe56ac6be9b1d2f3d7b1c277f788deb9e18ce7800ab7c9744677a032f",
+    "delivery/delivery-plan/references/delivery-contract.md": "1b33b1f7fc013852e7e8cd3718c3038594e6de196858ba519ce345966beedb7a",
+    "delivery/delivery-plan/agents/openai.yaml": "a1499d95abd8447558c535fe5554adcc3c9b988a0a39264a6283d430effe1e94",
+    "delivery/delivery-implement/SKILL.md": "5df2b269f14173912fe730076d24c3e97fff81fde3f5413ee18da88008052bee",
+    "delivery/delivery-implement/references/delivery-contract.md": "2ee99a1f6f60c097a72455c57aab41791a321d353a72dab9f72fd007584712aa",
+    "delivery/delivery-implement/agents/openai.yaml": "d48433ebc66a1b2961a14458fc90c6c342f942527e6a6328902411e46eee29a9",
+    "delivery/delivery-review/SKILL.md": "ff7ae29d213da40a9301fe133969021309dad3d6a6eb5f7b725345f4b3782e50",
+    "delivery/delivery-review/references/delivery-contract.md": "d209ef71cec3fbd1fb312b0758f0603f2359219efccf827e1d217cb2b0e4532f",
+    "delivery/delivery-review/agents/openai.yaml": "0fb3fed7b7379ddfa1f938cd87b698da06363d1e2d053816b98c7e71a313aea3",
+    "delivery/delivery-verify/SKILL.md": "aa6e08fdf8a6dde613439a7d9edfe8808567f84c9ed3f4f99c77763cfa45a9a9",
+    "delivery/delivery-verify/references/delivery-contract.md": "9c7ca24a0fba55a101155ada5905be2fa64e262d3fe470d43164631038957226",
+    "delivery/delivery-verify/agents/openai.yaml": "85f1870427a86fa35b1b24ba78666995126ce3af09aee87b169750d70e9b06f6"
+  },
+  "local_links": [
+    {
+      "source": "README.md",
+      "target": "模板.md",
+      "exists": true
+    },
+    {
+      "source": "README.md",
+      "target": "delivery/README.md",
+      "exists": true
+    },
+    {
+      "source": "README.md",
+      "target": "install-skill.sh",
+      "exists": true
+    },
+    {
+      "source": "README.md",
+      "target": "uninstall-skill.sh",
+      "exists": true
+    },
+    {
+      "source": "README.md",
+      "target": "CLAUDE.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/README.md",
+      "target": "delivery-design/SKILL.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/README.md",
+      "target": "delivery-plan/SKILL.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/README.md",
+      "target": "delivery-implement/SKILL.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/README.md",
+      "target": "delivery-review/SKILL.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/README.md",
+      "target": "delivery-verify/SKILL.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/README.md",
+      "target": "delivery-orchestrate/SKILL.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/README.md",
+      "target": "delivery-orchestrate/references/runtime-api.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/README.md",
+      "target": "delivery-orchestrate/references/runtime-api-v2.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/README.md",
+      "target": "delivery-orchestrate/tests/evaluation/README.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/README.md",
+      "target": "delivery-orchestrate/references/maintenance.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-orchestrate/SKILL.md",
+      "target": "references/orchestration.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-orchestrate/SKILL.md",
+      "target": "references/contracts.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-orchestrate/SKILL.md",
+      "target": "references/runtime-api-v2.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-orchestrate/SKILL.md",
+      "target": "references/runtime-api.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-orchestrate/SKILL.md",
+      "target": "assets/dispatch-template.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-orchestrate/SKILL.md",
+      "target": "references/orchestration.md#中断与恢复",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-orchestrate/SKILL.md",
+      "target": "scripts/validate_suite.py",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-orchestrate/SKILL.md",
+      "target": "tests/evaluation/README.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-orchestrate/SKILL.md",
+      "target": "references/maintenance.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-orchestrate/references/contracts.md",
+      "target": "runtime-api-v2.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-orchestrate/references/contracts.md",
+      "target": "runtime-api.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-orchestrate/references/contracts.md",
+      "target": "runtime-api-v2.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-orchestrate/references/contracts.md",
+      "target": "runtime-api.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-orchestrate/references/runtime-api.md",
+      "target": "runtime-api-v2.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-orchestrate/references/runtime-api-v2.md",
+      "target": "runtime-api.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-orchestrate/references/maintenance.md",
+      "target": "../tests/evaluation/README.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-design/SKILL.md",
+      "target": "references/delivery-contract.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-design/SKILL.md",
+      "target": "references/preparation.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-design/SKILL.md",
+      "target": "references/document-standard.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-design/SKILL.md",
+      "target": "references/review.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-design/SKILL.md",
+      "target": "scripts/check_doc.py",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-design/SKILL.md",
+      "target": "tests/behavior-cases.json",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-plan/SKILL.md",
+      "target": "references/delivery-contract.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-plan/SKILL.md",
+      "target": "references/preparation.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-plan/SKILL.md",
+      "target": "references/plan-standard.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-plan/SKILL.md",
+      "target": "assets/plan-template.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-plan/SKILL.md",
+      "target": "references/review.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-plan/SKILL.md",
+      "target": "scripts/check_plan.py",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-plan/SKILL.md",
+      "target": "references/example-plan.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-plan/SKILL.md",
+      "target": "tests/behavior-cases.json",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-implement/SKILL.md",
+      "target": "references/delivery-contract.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-implement/SKILL.md",
+      "target": "references/work-rules.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-implement/SKILL.md",
+      "target": "references/implementation-standard.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-implement/SKILL.md",
+      "target": "assets/implementation-template.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-implement/SKILL.md",
+      "target": "references/example-implementation.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-implement/SKILL.md",
+      "target": "tests/behavior-cases.json",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-implement/references/delivery-contract.md",
+      "target": "implementation-standard.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-review/SKILL.md",
+      "target": "references/delivery-contract.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-review/SKILL.md",
+      "target": "references/work-rules.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-review/SKILL.md",
+      "target": "references/review-standard.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-review/SKILL.md",
+      "target": "assets/review-template.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-review/SKILL.md",
+      "target": "references/example-review.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-review/SKILL.md",
+      "target": "tests/behavior-cases.json",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-review/references/delivery-contract.md",
+      "target": "review-standard.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-verify/SKILL.md",
+      "target": "references/delivery-contract.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-verify/SKILL.md",
+      "target": "references/work-rules.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-verify/SKILL.md",
+      "target": "references/verification-standard.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-verify/SKILL.md",
+      "target": "assets/verification-template.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-verify/SKILL.md",
+      "target": "references/example-verification.md",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-verify/SKILL.md",
+      "target": "tests/behavior-cases.json",
+      "exists": true
+    },
+    {
+      "source": "delivery/delivery-verify/references/delivery-contract.md",
+      "target": "verification-standard.md",
+      "exists": true
+    }
+  ],
+  "installed": [
+    {
+      "link": "/Users/cm/.agents/skills/delivery-design",
+      "is_symlink": true,
+      "actual": "/Users/cm/workspace/github/skills/delivery/delivery-design",
+      "expected": "/Users/cm/workspace/github/skills/delivery/delivery-design",
+      "valid": true
+    },
+    {
+      "link": "/Users/cm/.agents/skills/delivery-plan",
+      "is_symlink": true,
+      "actual": "/Users/cm/workspace/github/skills/delivery/delivery-plan",
+      "expected": "/Users/cm/workspace/github/skills/delivery/delivery-plan",
+      "valid": true
+    },
+    {
+      "link": "/Users/cm/.agents/skills/delivery-implement",
+      "is_symlink": true,
+      "actual": "/Users/cm/workspace/github/skills/delivery/delivery-implement",
+      "expected": "/Users/cm/workspace/github/skills/delivery/delivery-implement",
+      "valid": true
+    },
+    {
+      "link": "/Users/cm/.agents/skills/delivery-review",
+      "is_symlink": true,
+      "actual": "/Users/cm/workspace/github/skills/delivery/delivery-review",
+      "expected": "/Users/cm/workspace/github/skills/delivery/delivery-review",
+      "valid": true
+    },
+    {
+      "link": "/Users/cm/.agents/skills/delivery-verify",
+      "is_symlink": true,
+      "actual": "/Users/cm/workspace/github/skills/delivery/delivery-verify",
+      "expected": "/Users/cm/workspace/github/skills/delivery/delivery-verify",
+      "valid": true
+    },
+    {
+      "link": "/Users/cm/.agents/skills/delivery-orchestrate",
+      "is_symlink": true,
+      "actual": "/Users/cm/workspace/github/skills/delivery/delivery-orchestrate",
+      "expected": "/Users/cm/workspace/github/skills/delivery/delivery-orchestrate",
+      "valid": true
+    },
+    {
+      "link": "/Users/cm/.claude/skills/delivery-design",
+      "is_symlink": true,
+      "actual": "/Users/cm/workspace/github/skills/delivery/delivery-design",
+      "expected": "/Users/cm/workspace/github/skills/delivery/delivery-design",
+      "valid": true
+    },
+    {
+      "link": "/Users/cm/.claude/skills/delivery-plan",
+      "is_symlink": true,
+      "actual": "/Users/cm/workspace/github/skills/delivery/delivery-plan",
+      "expected": "/Users/cm/workspace/github/skills/delivery/delivery-plan",
+      "valid": true
+    },
+    {
+      "link": "/Users/cm/.claude/skills/delivery-implement",
+      "is_symlink": true,
+      "actual": "/Users/cm/workspace/github/skills/delivery/delivery-implement",
+      "expected": "/Users/cm/workspace/github/skills/delivery/delivery-implement",
+      "valid": true
+    },
+    {
+      "link": "/Users/cm/.claude/skills/delivery-review",
+      "is_symlink": true,
+      "actual": "/Users/cm/workspace/github/skills/delivery/delivery-review",
+      "expected": "/Users/cm/workspace/github/skills/delivery/delivery-review",
+      "valid": true
+    },
+    {
+      "link": "/Users/cm/.claude/skills/delivery-verify",
+      "is_symlink": true,
+      "actual": "/Users/cm/workspace/github/skills/delivery/delivery-verify",
+      "expected": "/Users/cm/workspace/github/skills/delivery/delivery-verify",
+      "valid": true
+    },
+    {
+      "link": "/Users/cm/.claude/skills/delivery-orchestrate",
+      "is_symlink": true,
+      "actual": "/Users/cm/workspace/github/skills/delivery/delivery-orchestrate",
+      "expected": "/Users/cm/workspace/github/skills/delivery/delivery-orchestrate",
+      "valid": true
+    }
+  ],
+  "limits": "Ordinary local links and real installed targets only; no semantic or model behavior proof; harness adapter not frozen/reviewed here",
+  "professional_sources_unchanged_from_002": {
+    "delivery-design": {
+      "same_source_files": true,
+      "files": 9
+    },
+    "delivery-plan": {
+      "same_source_files": true,
+      "files": 11
+    },
+    "delivery-implement": {
+      "same_source_files": true,
+      "files": 8
+    },
+    "delivery-review": {
+      "same_source_files": true,
+      "files": 8
+    },
+    "delivery-verify": {
+      "same_source_files": true,
+      "files": 8
+    }
+  }
+}

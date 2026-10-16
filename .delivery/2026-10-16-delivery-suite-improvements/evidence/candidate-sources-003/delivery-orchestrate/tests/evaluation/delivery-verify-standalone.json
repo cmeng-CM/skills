@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "id": "delivery-verify-standalone",
+  "mode": "standalone",
+  "skills": [
+    "delivery-verify"
+  ],
+  "fixture": "fixtures/ledger",
+  "git": false,
+  "prompt": "请仅使用 delivery-verify，对实际 app.py 交付对象按 README.md 所列公开要求验证，写 .delivery/evaluation/verification.md。现有测试通过并不证明需求已交付，逐项说明实际证据、失败和未验证。不得修复产品代码，不得因为报告存在就全部通过。不要调用其他技能。",
+  "requirements": [
+    "README.md 中全部公开需求",
+    "只执行点名专业能力",
+    "无其他技能、Git和.workflow仍可工作",
+    "不默认提交、不push"
+  ],
+  "allowed_changes": [
+    "专业报告；仅 implement 可修改业务代码和测试"
+  ]
+}

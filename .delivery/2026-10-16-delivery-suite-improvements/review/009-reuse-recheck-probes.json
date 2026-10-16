@@ -1,0 +1,81 @@
+{
+  "reviewer": "/root/independent_delivery_review",
+  "scope": "Actual pinned-package core execution; not model behavior",
+  "fixed_source": "/Users/cm/workspace/github/skills/.delivery/2026-10-16-delivery-suite-improvements/evidence/runtime/frozen-repair-003/delivery",
+  "impact": {
+    "rejected": true,
+    "reason": "cannot reuse stale latest rebound result from current admission",
+    "config_unchanged": true,
+    "old_status": {
+      "implementation": {
+        "T1": {
+          "status": "stale",
+          "operation_id": "op-5"
+        }
+      },
+      "review": {
+        "R1": {
+          "status": "stale",
+          "operation_id": "op-8"
+        }
+      },
+      "verification": {
+        "A1": {
+          "status": "stale",
+          "operation_id": "op-11"
+        }
+      }
+    }
+  },
+  "source-update": {
+    "rejected": true,
+    "reason": "cannot reuse stale latest rebound result from current admission",
+    "config_unchanged": true,
+    "old_status": {
+      "implementation": {
+        "T1": {
+          "status": "stale",
+          "operation_id": "op-5"
+        }
+      },
+      "review": {
+        "R1": {
+          "status": "stale",
+          "operation_id": "op-8"
+        }
+      },
+      "verification": {
+        "A1": {
+          "status": "stale",
+          "operation_id": "op-11"
+        }
+      }
+    }
+  },
+  "repaired_then_reused": {
+    "context": [
+      "shared.cfg",
+      "src"
+    ],
+    "before_change": "passed",
+    "after_change": "stale"
+  },
+  "legitimate_plan_refinement": {
+    "close": "closed"
+  },
+  "exclude_known_context": {
+    "reason": "monitor exclusion overlaps product/context/real source or contains current work"
+  },
+  "runtime_source_matches_current": {
+    "scripts/delivery.py": true,
+    "scripts/delivery_v2.py": true,
+    "scripts/delivery_sources.py": true,
+    "scripts/delivery_monitor.py": true,
+    "scripts/delivery_recovery.py": true,
+    "tests/test_delivery.py": true,
+    "tests/test_delivery_v2.py": true,
+    "references/contracts.md": true,
+    "references/runtime-api.md": true,
+    "references/runtime-api-v2.md": true
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "argv": [
+    "python3",
+    "-B",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests",
+    "-v"
+  ],
+  "cwd": "/Users/cm/workspace/github/skills/delivery/delivery-orchestrate/tests/evaluation/fixtures/money-review-project",
+  "exit": 0,
+  "stdout": "",
+  "stderr": "test_actual_cli_and_order (test_money.MoneyTests.test_actual_cli_and_order) ... ok\ntest_decimal_boundary_and_large_amount (test_money.MoneyTests.test_decimal_boundary_and_large_amount) ... ok\ntest_empty_and_expense_only (test_money.MoneyTests.test_empty_and_expense_only) ... ok\ntest_failures_have_no_partial_stdout (test_money.MoneyTests.test_failures_have_no_partial_stdout) ... ok\n\n----------------------------------------------------------------------\nRan 4 tests in 0.120s\n\nOK\n"
+}

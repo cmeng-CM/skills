@@ -1,0 +1,22 @@
+{
+  "reviewer": "/root/independent_delivery_review",
+  "adapter_snapshot_matches_original_reviewed_source": true,
+  "profile_sha256_matches": true,
+  "canary_count": 47,
+  "read_canaries_with_unexpected_success": [],
+  "requests": [
+    "initialize",
+    "initialized",
+    "thread/start",
+    "mcpServerStatus/list"
+  ],
+  "no_model_turn": true,
+  "startup_audit": {
+    "database": "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-history-isolation-probe-v1ogpdpu/.evaluation-state/run-startup-history-isolation-diagnostic-024/state_5.sqlite",
+    "thread_row_count": 0,
+    "passed": true,
+    "method": "read-only COUNT(*) before any model turn; no thread contents exported"
+  },
+  "status": "initialized",
+  "current_limit": "real source-diff improvements and happy-path init valid; not final IR014 close while unknown schema/cross-fixture counterexamples remain"
+}

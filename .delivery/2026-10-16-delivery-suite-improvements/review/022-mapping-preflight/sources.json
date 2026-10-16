@@ -1,0 +1,284 @@
+{
+  "delivery-orchestrate": {
+    "source": "/Users/cm/workspace/github/skills/.delivery/2026-10-16-delivery-suite-improvements/evidence/candidate-sources-001/delivery-orchestrate",
+    "loaded_snapshot": {
+      "SKILL.md": {
+        "sha256": "819594ad9557f2e3c81deb1db6e292827e8e1c9b329ea3c9b8141fb135e1c3cb",
+        "bytes": 9172
+      },
+      "agents/openai.yaml": {
+        "sha256": "a1499d95abd8447558c535fe5554adcc3c9b988a0a39264a6283d430effe1e94",
+        "bytes": 43
+      },
+      "assets/dispatch-template.md": {
+        "sha256": "ed19bb8bfd2188bd3a62c4bfac22de959eecf5eea90a6a977a38eed4a349d7ab",
+        "bytes": 2159
+      },
+      "references/contracts.md": {
+        "sha256": "a114086c6426dd138f01f7a136d9962f82751da2dad1f542aaac585248247c1d",
+        "bytes": 7390
+      },
+      "references/maintenance.md": {
+        "sha256": "3268ac1e785deac8c003601b7ee605a64c5b997535bbf2be0ef720cc44dc614f",
+        "bytes": 3414
+      },
+      "references/orchestration.md": {
+        "sha256": "951080c85a43fabbf331bdb2cc9dee747e81b1e0dda93a21ceb4bfea21d2788d",
+        "bytes": 13084
+      },
+      "references/runtime-api-v2.md": {
+        "sha256": "64ac5d91e3a06c69f7381c4ff91e6973cf83a7a86f17ce977c0bfbea825ea8d4",
+        "bytes": 17963
+      },
+      "references/runtime-api.md": {
+        "sha256": "15889b31f0c4bb7609c6b3f7f72d3c64e681e38a6c9aa678ac66f156a624bd33",
+        "bytes": 22866
+      },
+      "scripts/check_suite.py": {
+        "sha256": "fde302a4a2bbd545a04caabd08885356e2362908887a80173a90e7779fe0e8ee",
+        "bytes": 4009
+      },
+      "scripts/delivery.py": {
+        "sha256": "0f6abc46533af6ce78df08bb7bdd186d18ebb3b135ae11bbf5cb778e438c1180",
+        "bytes": 52113
+      },
+      "scripts/delivery_monitor.py": {
+        "sha256": "c80fa258ca3581a79f433b12521dc3324a719e7e101536698ae2953cd642ba8f",
+        "bytes": 14037
+      },
+      "scripts/delivery_recovery.py": {
+        "sha256": "5ad248ff22cf94b1fdfceca5b895cbe708305e81f94d036bb2c85ac5037a4122",
+        "bytes": 12158
+      },
+      "scripts/delivery_sources.py": {
+        "sha256": "b688a789ecba332e0f318d44722ea9f046f9aa95553da22961e9980c990e4a80",
+        "bytes": 10023
+      },
+      "scripts/delivery_v2.py": {
+        "sha256": "080782ab8efe199cb5069c1140f69def05d0d91f2902c9b8cad9d2efe19a677b",
+        "bytes": 30829
+      },
+      "scripts/evaluate_suite.py": {
+        "sha256": "1d586b2d868b4a46fe6925e3c6e4b3e397233097bab5c17f19f752ba8a700acc",
+        "bytes": 29336
+      },
+      "scripts/external_seatbelt.py": {
+        "sha256": "b73c1f98f3ff7afa5de06e428fcb3ead850e579f95f3021036978191f41bc48b",
+        "bytes": 20140
+      },
+      "scripts/validate_suite.py": {
+        "sha256": "b16da837ff328ca43e82222aca52fccb8d8f75b8d49a24ad9cd3fb4f111131d5",
+        "bytes": 4733
+      }
+    },
+    "excluded": [
+      "tests/",
+      ".git/",
+      "__pycache__/",
+      "*.pyc"
+    ]
+  },
+  "delivery-design": {
+    "source": "/Users/cm/workspace/github/skills/.delivery/2026-10-16-delivery-suite-improvements/evidence/candidate-sources-001/delivery-design",
+    "loaded_snapshot": {
+      "SKILL.md": {
+        "sha256": "9b55dfb526eb7146671e6dbeed9ba6aee2051f6152d7b7a95287a3cfafb651d6",
+        "bytes": 6590
+      },
+      "agents/openai.yaml": {
+        "sha256": "a1499d95abd8447558c535fe5554adcc3c9b988a0a39264a6283d430effe1e94",
+        "bytes": 43
+      },
+      "references/delivery-contract.md": {
+        "sha256": "c9d09f2c6c1e15486bd4968ef429b3e8616f15aa1ee9f846724ac5cf55cd3e3e",
+        "bytes": 6101
+      },
+      "references/document-standard.md": {
+        "sha256": "33717eaf1f2c3e390c2004f8aa8b41a20b2ddba609cb6b8ca024000db24c523a",
+        "bytes": 23993
+      },
+      "references/preparation.md": {
+        "sha256": "1e093acffc41ff13aca68edda2256336eff5362e25208923aea9921710f5e0d8",
+        "bytes": 5535
+      },
+      "references/review.md": {
+        "sha256": "2cfcadc7eb611fefe7adf7789d380df73a47c7349f66f9d33ebc11c31139a29f",
+        "bytes": 7930
+      },
+      "scripts/check_doc.py": {
+        "sha256": "04b243c0f440d3a01f88d7f683c456add273f7559bcb27542cb161f1afc20512",
+        "bytes": 16442
+      }
+    },
+    "excluded": [
+      "tests/",
+      ".git/",
+      "__pycache__/",
+      "*.pyc"
+    ]
+  },
+  "delivery-plan": {
+    "source": "/Users/cm/workspace/github/skills/.delivery/2026-10-16-delivery-suite-improvements/evidence/candidate-sources-001/delivery-plan",
+    "loaded_snapshot": {
+      "SKILL.md": {
+        "sha256": "4302e89fe56ac6be9b1d2f3d7b1c277f788deb9e18ce7800ab7c9744677a032f",
+        "bytes": 7814
+      },
+      "agents/openai.yaml": {
+        "sha256": "a1499d95abd8447558c535fe5554adcc3c9b988a0a39264a6283d430effe1e94",
+        "bytes": 43
+      },
+      "assets/plan-template.md": {
+        "sha256": "cbf0524bcc26c32a3829cfe6b7a2434ce186081bc38685cb444469d660f9794a",
+        "bytes": 7073
+      },
+      "references/delivery-contract.md": {
+        "sha256": "1b33b1f7fc013852e7e8cd3718c3038594e6de196858ba519ce345966beedb7a",
+        "bytes": 6366
+      },
+      "references/example-plan.md": {
+        "sha256": "8a4a8b719ca7fa76cc7a43e10a6382089b5ced9db8dace19fc47d45e813bced8",
+        "bytes": 37609
+      },
+      "references/plan-standard.md": {
+        "sha256": "ad9c42ed46ff1fe1aacb3917a787bd07e1b1a163698338885a70f313e126a64e",
+        "bytes": 25835
+      },
+      "references/preparation.md": {
+        "sha256": "55e63a132bea24c4e0830358a6c437b88d6a98d59ca804859247107913eed606",
+        "bytes": 4237
+      },
+      "references/review.md": {
+        "sha256": "de88962be84fbbc7ec96d2aaa1f0428fab0d5b48f5ca1ed894671114a4a9356f",
+        "bytes": 6523
+      },
+      "scripts/check_plan.py": {
+        "sha256": "641f61a0f17cea38536f02e6355ca0577f38b483bdf19485bdcbd2d376f50ad5",
+        "bytes": 13077
+      }
+    },
+    "excluded": [
+      "tests/",
+      ".git/",
+      "__pycache__/",
+      "*.pyc"
+    ]
+  },
+  "delivery-implement": {
+    "source": "/Users/cm/workspace/github/skills/.delivery/2026-10-16-delivery-suite-improvements/evidence/candidate-sources-001/delivery-implement",
+    "loaded_snapshot": {
+      "SKILL.md": {
+        "sha256": "5df2b269f14173912fe730076d24c3e97fff81fde3f5413ee18da88008052bee",
+        "bytes": 4486
+      },
+      "agents/openai.yaml": {
+        "sha256": "d48433ebc66a1b2961a14458fc90c6c342f942527e6a6328902411e46eee29a9",
+        "bytes": 334
+      },
+      "assets/implementation-template.md": {
+        "sha256": "a42c9ca9e62c441f730176fc00d0e795a2264b1f2591c9b1bc01c8de07b2af96",
+        "bytes": 2218
+      },
+      "references/delivery-contract.md": {
+        "sha256": "2ee99a1f6f60c097a72455c57aab41791a321d353a72dab9f72fd007584712aa",
+        "bytes": 5873
+      },
+      "references/example-implementation.md": {
+        "sha256": "65d201668df3206288a2bab2bc328bf47fbb58684ea8c593fe340010241ce472",
+        "bytes": 4279
+      },
+      "references/implementation-standard.md": {
+        "sha256": "3fd73462006c06e7101f707b004078521aaeab14faf61eb41a3dbd4f41143dad",
+        "bytes": 7430
+      },
+      "references/work-rules.md": {
+        "sha256": "4d1a5e438d0334c311d15adc31d764b5a8c4b3d30057883559bc87ab9cb5305c",
+        "bytes": 4188
+      }
+    },
+    "excluded": [
+      "tests/",
+      ".git/",
+      "__pycache__/",
+      "*.pyc"
+    ]
+  },
+  "delivery-review": {
+    "source": "/Users/cm/workspace/github/skills/.delivery/2026-10-16-delivery-suite-improvements/evidence/candidate-sources-001/delivery-review",
+    "loaded_snapshot": {
+      "SKILL.md": {
+        "sha256": "ff7ae29d213da40a9301fe133969021309dad3d6a6eb5f7b725345f4b3782e50",
+        "bytes": 4446
+      },
+      "agents/openai.yaml": {
+        "sha256": "0fb3fed7b7379ddfa1f938cd87b698da06363d1e2d053816b98c7e71a313aea3",
+        "bytes": 331
+      },
+      "assets/review-template.md": {
+        "sha256": "70d1d804454523b5cdb72f88c7c548fd446a2a273184b90f22a534feb1d77de6",
+        "bytes": 2178
+      },
+      "references/delivery-contract.md": {
+        "sha256": "d209ef71cec3fbd1fb312b0758f0603f2359219efccf827e1d217cb2b0e4532f",
+        "bytes": 5827
+      },
+      "references/example-review.md": {
+        "sha256": "4f9af8de0563115c83843a26fcf9e6cf2e3cf46ade19ed5cf6b5562c903d3ba6",
+        "bytes": 3966
+      },
+      "references/review-standard.md": {
+        "sha256": "a1f41b2076391f6fa2ff5e67c43f387d74f3573c313a4c7241412710d4cb4030",
+        "bytes": 7244
+      },
+      "references/work-rules.md": {
+        "sha256": "3953e8c9afddf33afb63af8beae42d1f8fe3f3ae087613f7d5da87054f69a432",
+        "bytes": 3766
+      }
+    },
+    "excluded": [
+      "tests/",
+      ".git/",
+      "__pycache__/",
+      "*.pyc"
+    ]
+  },
+  "delivery-verify": {
+    "source": "/Users/cm/workspace/github/skills/.delivery/2026-10-16-delivery-suite-improvements/evidence/candidate-sources-001/delivery-verify",
+    "loaded_snapshot": {
+      "SKILL.md": {
+        "sha256": "aa6e08fdf8a6dde613439a7d9edfe8808567f84c9ed3f4f99c77763cfa45a9a9",
+        "bytes": 4432
+      },
+      "agents/openai.yaml": {
+        "sha256": "85f1870427a86fa35b1b24ba78666995126ce3af09aee87b169750d70e9b06f6",
+        "bytes": 331
+      },
+      "assets/verification-template.md": {
+        "sha256": "6cb0d1f1959f4665973f94eeed6e2caafa7187a4d0f5f41efb070a8db1b9b9be",
+        "bytes": 2132
+      },
+      "references/delivery-contract.md": {
+        "sha256": "9c7ca24a0fba55a101155ada5905be2fa64e262d3fe470d43164631038957226",
+        "bytes": 6455
+      },
+      "references/example-verification.md": {
+        "sha256": "4ba567d08144c235276f10f15170cba7cd339b9bb1ff72665fb0f977e099953f",
+        "bytes": 4340
+      },
+      "references/verification-standard.md": {
+        "sha256": "f2127ea38e97c108787fddec583e18029b5d7320056fb83784fecd3a251c5e99",
+        "bytes": 7326
+      },
+      "references/work-rules.md": {
+        "sha256": "a627fab46215ae8370cf440340160a55eab0181ff69fb2a5d412d76171791f47",
+        "bytes": 3856
+      }
+    },
+    "excluded": [
+      "tests/",
+      ".git/",
+      "__pycache__/",
+      "*.pyc"
+    ]
+  }
+}

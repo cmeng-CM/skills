@@ -1,0 +1,33 @@
+{
+  "reviewer": "/root/independent_delivery_review",
+  "real_filesystem_collector_only": true,
+  "model_started": false,
+  "links": {
+    ".workflow": ".delivery/workflow",
+    "cycle-a": "cycle-b",
+    "cycle-b": "cycle-a",
+    "dangling": "missing",
+    "external": "/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/review023-collector-k943hcd5/must-not-read"
+  },
+  "artifact_has_any_symlink": false,
+  "ordinary_product_bytes": "actual product evidence",
+  "external_content_copied": false,
+  "source_unchanged": true,
+  "source_symlink_inventory": {
+    ".workflow": {
+      "symlink": ".delivery/workflow"
+    },
+    "cycle-a": {
+      "symlink": "cycle-b"
+    },
+    "cycle-b": {
+      "symlink": "cycle-a"
+    },
+    "dangling": {
+      "symlink": "missing"
+    },
+    "external": {
+      "symlink": "/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/review023-collector-k943hcd5/must-not-read"
+    }
+  }
+}

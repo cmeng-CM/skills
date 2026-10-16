@@ -1,0 +1,29 @@
+{
+  "ok": true,
+  "findings": [],
+  "scope": [
+    "识别本地 ID 30 个、外部声明 0 个；跨表汇总允许重复引用。",
+    "核对已声明已细化的任务卡 7 张；只检查已支持字段非空，不判断实际可执行性。",
+    "识别依赖表 1 张、关系 31 条；仅对这些关系检查循环。",
+    "未检查语义覆盖、关键决策确认的真实性、图文一致性、外部材料与实际证据；未展开 ID 区间或自然语言依赖。"
+  ],
+  "counts": {
+    "local_ids": 30,
+    "external_ids": 0,
+    "detailed_tasks": 7,
+    "dependency_edges": 31
+  },
+  "path": ".delivery/2026-10-16-delivery-suite-improvements/plan.md",
+  "evidence": {
+    "command": [
+      "python3",
+      "-B",
+      "delivery-plan/scripts/check_plan.py",
+      ".delivery/2026-10-16-delivery-suite-improvements/plan.md",
+      "--json"
+    ],
+    "exit_code": 0,
+    "plan_sha256": "f91746a52cfe0f73fcc9c90d84bcd5a5a395970542cac8c6f9d787aed8ee60c8",
+    "scope_note": "Plan structure only; no implementation, migration, runtime tests or agent behavior evaluation was executed."
+  }
+}

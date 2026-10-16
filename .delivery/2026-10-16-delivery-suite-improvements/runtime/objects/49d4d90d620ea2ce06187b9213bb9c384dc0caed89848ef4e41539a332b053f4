@@ -1,0 +1,64 @@
+{
+  "at": "2026-10-16T03:35:20.386093+00:00",
+  "reason": "Final frozen cases and evaluation repairs; migration/protected boundaries rechecked without repeating move",
+  "protected_total": 439,
+  "unchanged": 437,
+  "authorized_navigation_changes": [
+    "CLAUDE.md",
+    "README.md"
+  ],
+  "unexpected_changes": [],
+  "unexpected_missing": [],
+  "active_root_delivery_duplicates": [],
+  "links": [
+    {
+      "path": "/Users/cm/.agents/skills/delivery-design",
+      "correct": true
+    },
+    {
+      "path": "/Users/cm/.agents/skills/delivery-plan",
+      "correct": true
+    },
+    {
+      "path": "/Users/cm/.agents/skills/delivery-implement",
+      "correct": true
+    },
+    {
+      "path": "/Users/cm/.agents/skills/delivery-review",
+      "correct": true
+    },
+    {
+      "path": "/Users/cm/.agents/skills/delivery-verify",
+      "correct": true
+    },
+    {
+      "path": "/Users/cm/.agents/skills/delivery-orchestrate",
+      "correct": true
+    },
+    {
+      "path": "/Users/cm/.claude/skills/delivery-design",
+      "correct": true
+    },
+    {
+      "path": "/Users/cm/.claude/skills/delivery-plan",
+      "correct": true
+    },
+    {
+      "path": "/Users/cm/.claude/skills/delivery-implement",
+      "correct": true
+    },
+    {
+      "path": "/Users/cm/.claude/skills/delivery-review",
+      "correct": true
+    },
+    {
+      "path": "/Users/cm/.claude/skills/delivery-verify",
+      "correct": true
+    },
+    {
+      "path": "/Users/cm/.claude/skills/delivery-orchestrate",
+      "correct": true
+    }
+  ],
+  "installer_unchanged": true
+}

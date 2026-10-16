@@ -1,0 +1,33 @@
+{
+  "generator": "/Users/cm/workspace/github/skills/delivery/delivery-orchestrate/tests/evaluation/prepare_mapping_case.py",
+  "generator_sha256": "9b211b6e373851e6a94f9811d20ea2602ccf1806364aa9bfbfe83d1d16b28fe4",
+  "generated_at": "2026-10-16T03:28:34.973739+00:00",
+  "source_authors": {
+    "plan": [
+      {
+        "id": "behavior-harness-asset-author",
+        "context": "/root/behavior_harness"
+      }
+    ],
+    "mapping": [
+      {
+        "id": "trusted-case-preparer",
+        "context": "script:prepare_mapping_case.py"
+      }
+    ]
+  },
+  "actor": {
+    "id": "trusted-case-preparer",
+    "context": "script:prepare_mapping_case.py"
+  },
+  "config_sha256": "54831d6acc29c34906e713408bd43f7f70f262f5d2df26833c75d4f455f3efbb",
+  "original_snapshots_unchanged": {
+    "sources.json": "06380966b3ea32d4ab8b5a13f4b60817d97fae704b59a03173ab6572049884a5",
+    "before.json": "0c12bac1653f3b3952bb4767c84870a1128036d8b76caea018aa2d23c88ecf7b"
+  },
+  "model_runs": 0,
+  "review_results_registered": 0,
+  "commands": 4,
+  "workspace": "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-eval-work-4cw9_3m3",
+  "work": "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-eval-work-4cw9_3m3/.delivery/mapping"
+}

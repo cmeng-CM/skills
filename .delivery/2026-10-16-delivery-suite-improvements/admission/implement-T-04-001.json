@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "contract_version": 1,
+  "skill_revision": "delivery-implement professional contract1; actual source commit 197b989; stable v1 control",
+  "kind": "implementation",
+  "target": "T-04",
+  "actor": {
+    "id": "professional_skills",
+    "context": "delegated-professional-author"
+  },
+  "report": {
+    "path": ".delivery/2026-10-16-delivery-suite-improvements/implementation/003-professional.md"
+  },
+  "result": "passed",
+  "summary": "真实产物与自检/交接已形成；证据范围见专业报告。实现接纳不等同最终真实模型评测或整体验收。",
+  "evidence": [
+    {
+      "path": ".delivery/2026-10-16-delivery-suite-improvements/review/002-professional.md"
+    },
+    {
+      "path": ".delivery/2026-10-16-delivery-suite-improvements/review/002-professional-manifest.json"
+    }
+  ]
+}

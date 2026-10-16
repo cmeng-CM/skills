@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "id": "delivery-design-standalone",
+  "mode": "standalone",
+  "skills": [
+    "delivery-design"
+  ],
+  "fixture": "fixtures/ledger",
+  "git": false,
+  "prompt": "请仅使用 delivery-design，为 README.md 中公开需求编写技术方案并保存 .delivery/evaluation/design.md。先核对现有项目。已授权按质量优先选择局部实现细节，关键范围不变。不要写业务代码、实现计划或自动启动其他阶段。",
+  "requirements": [
+    "README.md 中全部公开需求",
+    "只执行点名专业能力",
+    "无其他技能、Git和.workflow仍可工作",
+    "不默认提交、不push"
+  ],
+  "allowed_changes": [
+    "专业报告；仅 implement 可修改业务代码和测试"
+  ]
+}

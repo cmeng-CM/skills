@@ -1,0 +1,411 @@
+{
+  "schema_version": 1,
+  "contract_version": 1,
+  "actor": {
+    "id": "root",
+    "context": "implementation-controller"
+  },
+  "skill_revision": "stable source 035ee216eb6eb46468c4d626bf79de76eb499a25c2f4190ac57c9d519561ae92",
+  "plan": {
+    "path": ".delivery/2026-10-16-delivery-suite-improvements/plan.md",
+    "quote": "T-01"
+  },
+  "authorization": {
+    "path": ".delivery/2026-10-16-delivery-suite-improvements/authorization.md",
+    "quote": "可以，按这份计划直接执行，直到完成。",
+    "scope": "T-01—T-11；质量优先；本地提交不push"
+  },
+  "mapping_reason": "计划v1.1→稳定v1控制配置003：映射所有可表达的实施依赖（含T06→T07资源交接的保守实施顺序）、真实产品范围和7组验证覆盖/前提；R-all与V07绑定根README/CLAUDE及delivery导航。专业设计/计划及harness提前审阅等新语义门禁由独立报告和实际调度留据，v1不能机器表达的部分不得声称已自动保证。T03目录内容快照保守绑定全包，后续授权修改将使其过期，最终需重新核对迁移边界后接纳；不因此全重做专业活动。V01统一机械命令复用其他组的原始回归结果，其余专业判断独立报告。 最后对计划中的检查时点与控制映射限制补充说明，未改变任务、依赖或验收。",
+  "tasks": [
+    {
+      "id": "T-01",
+      "scope": [
+        "install-skill.sh"
+      ],
+      "depends": []
+    },
+    {
+      "id": "T-02",
+      "scope": [
+        "delivery/delivery-orchestrate/references/contracts.md",
+        "delivery/delivery-orchestrate/references/runtime-api-v2.md"
+      ],
+      "depends": [
+        {
+          "kind": "implementation",
+          "id": "T-01"
+        }
+      ]
+    },
+    {
+      "id": "T-03",
+      "scope": [
+        "delivery",
+        "install-skill.sh"
+      ],
+      "depends": [
+        {
+          "kind": "implementation",
+          "id": "T-01"
+        }
+      ]
+    },
+    {
+      "id": "T-04",
+      "scope": [
+        "delivery/delivery-design",
+        "delivery/delivery-plan",
+        "delivery/delivery-implement",
+        "delivery/delivery-review",
+        "delivery/delivery-verify"
+      ],
+      "depends": [
+        {
+          "kind": "implementation",
+          "id": "T-02"
+        },
+        {
+          "kind": "implementation",
+          "id": "T-03"
+        }
+      ]
+    },
+    {
+      "id": "T-05",
+      "scope": [
+        "delivery/delivery-orchestrate/scripts/delivery.py",
+        "delivery/delivery-orchestrate/scripts/delivery_v2.py"
+      ],
+      "depends": [
+        {
+          "kind": "implementation",
+          "id": "T-02"
+        },
+        {
+          "kind": "implementation",
+          "id": "T-03"
+        }
+      ]
+    },
+    {
+      "id": "T-06",
+      "scope": [
+        "delivery/delivery-orchestrate/scripts/delivery_monitor.py",
+        "delivery/delivery-orchestrate/scripts/delivery_v2.py"
+      ],
+      "depends": [
+        {
+          "kind": "implementation",
+          "id": "T-05"
+        }
+      ]
+    },
+    {
+      "id": "T-07",
+      "scope": [
+        "delivery/delivery-orchestrate/scripts/delivery_sources.py",
+        "delivery/delivery-orchestrate/scripts/delivery_v2.py"
+      ],
+      "depends": [
+        {
+          "kind": "implementation",
+          "id": "T-05"
+        },
+        {
+          "kind": "implementation",
+          "id": "T-06"
+        }
+      ]
+    },
+    {
+      "id": "T-08",
+      "scope": [
+        "delivery/delivery-orchestrate/scripts/delivery_recovery.py",
+        "delivery/delivery-orchestrate/scripts/delivery_v2.py"
+      ],
+      "depends": [
+        {
+          "kind": "implementation",
+          "id": "T-06"
+        },
+        {
+          "kind": "implementation",
+          "id": "T-07"
+        }
+      ]
+    },
+    {
+      "id": "T-09",
+      "scope": [
+        "delivery/delivery-orchestrate/scripts/evaluate_suite.py",
+        "delivery/delivery-orchestrate/scripts/external_seatbelt.py",
+        "delivery/delivery-orchestrate/tests/test_evaluate_suite.py"
+      ],
+      "depends": [
+        {
+          "kind": "implementation",
+          "id": "T-01"
+        },
+        {
+          "kind": "implementation",
+          "id": "T-03"
+        }
+      ]
+    },
+    {
+      "id": "T-10",
+      "scope": [
+        "delivery/delivery-orchestrate/tests/evaluation",
+        "delivery/delivery-orchestrate/tests/test_ledger_oracle.py",
+        "delivery/delivery-design/tests/behavior-cases.json",
+        "delivery/delivery-plan/tests/behavior-cases.json",
+        "delivery/delivery-implement/tests/behavior-cases.json",
+        "delivery/delivery-review/tests/behavior-cases.json",
+        "delivery/delivery-verify/tests/behavior-cases.json"
+      ],
+      "depends": [
+        {
+          "kind": "implementation",
+          "id": "T-01"
+        },
+        {
+          "kind": "implementation",
+          "id": "T-04"
+        },
+        {
+          "kind": "implementation",
+          "id": "T-09"
+        }
+      ]
+    },
+    {
+      "id": "T-11",
+      "scope": [
+        "README.md",
+        "CLAUDE.md",
+        "delivery/README.md",
+        "delivery/delivery-orchestrate/SKILL.md",
+        "delivery/delivery-orchestrate/assets/dispatch-template.md",
+        "delivery/delivery-orchestrate/references/orchestration.md",
+        "delivery/delivery-orchestrate/references/maintenance.md",
+        "delivery/delivery-orchestrate/scripts/validate_suite.py"
+      ],
+      "depends": [
+        {
+          "kind": "implementation",
+          "id": "T-03"
+        },
+        {
+          "kind": "implementation",
+          "id": "T-04"
+        },
+        {
+          "kind": "implementation",
+          "id": "T-05"
+        },
+        {
+          "kind": "implementation",
+          "id": "T-06"
+        },
+        {
+          "kind": "implementation",
+          "id": "T-07"
+        },
+        {
+          "kind": "implementation",
+          "id": "T-08"
+        },
+        {
+          "kind": "implementation",
+          "id": "T-09"
+        },
+        {
+          "kind": "implementation",
+          "id": "T-10"
+        }
+      ]
+    }
+  ],
+  "reviews": [
+    {
+      "id": "R-all",
+      "tasks": [
+        "T-01",
+        "T-02",
+        "T-03",
+        "T-04",
+        "T-05",
+        "T-06",
+        "T-07",
+        "T-08",
+        "T-09",
+        "T-10",
+        "T-11"
+      ],
+      "whole": true,
+      "context_scope": [
+        "README.md",
+        "CLAUDE.md",
+        "delivery/README.md"
+      ]
+    }
+  ],
+  "acceptance": [
+    {
+      "id": "V-01",
+      "tasks": [
+        "T-01",
+        "T-03"
+      ],
+      "required": true,
+      "method": "command",
+      "criteria": "按已确认计划第5章 V-01 实际核对通过，不以脚本绿替代语义。",
+      "environment": "本机隔离fixture与精确版本来源；原始证据留存",
+      "waivable": false,
+      "command": [
+        "/Users/cm/workspace/github/ppt-master/.venv/bin/python3",
+        "-B",
+        "/Users/cm/workspace/github/skills/delivery/delivery-orchestrate/scripts/validate_suite.py",
+        "--skills-root",
+        "/Users/cm/workspace/github/skills/delivery",
+        "--output",
+        "/Users/cm/workspace/github/skills/.delivery/2026-10-16-delivery-suite-improvements/evidence/final-mechanical"
+      ]
+    },
+    {
+      "id": "V-02",
+      "tasks": [
+        "T-02",
+        "T-04"
+      ],
+      "required": true,
+      "method": "inspection",
+      "criteria": "按已确认计划第5章 V-02 实际核对通过，不以脚本绿替代语义。",
+      "environment": "本机隔离fixture与精确版本来源；原始证据留存",
+      "waivable": false
+    },
+    {
+      "id": "V-03",
+      "tasks": [
+        "T-05",
+        "T-06"
+      ],
+      "required": true,
+      "method": "inspection",
+      "criteria": "按已确认计划第5章 V-03 实际核对通过，不以脚本绿替代语义。",
+      "environment": "本机隔离fixture与精确版本来源；原始证据留存",
+      "waivable": false
+    },
+    {
+      "id": "V-04",
+      "tasks": [
+        "T-07",
+        "T-08"
+      ],
+      "required": true,
+      "method": "inspection",
+      "criteria": "按已确认计划第5章 V-04 实际核对通过，不以脚本绿替代语义。",
+      "environment": "本机隔离fixture与精确版本来源；原始证据留存",
+      "waivable": false
+    },
+    {
+      "id": "V-05",
+      "tasks": [
+        "T-09",
+        "T-10"
+      ],
+      "required": true,
+      "method": "inspection",
+      "criteria": "按已确认计划第5章 V-05 实际核对通过，不以脚本绿替代语义。",
+      "environment": "本机隔离fixture与精确版本来源；原始证据留存",
+      "waivable": false
+    },
+    {
+      "id": "V-06",
+      "tasks": [
+        "T-01",
+        "T-03",
+        "T-04",
+        "T-05",
+        "T-06",
+        "T-07",
+        "T-08",
+        "T-09",
+        "T-10"
+      ],
+      "required": true,
+      "method": "inspection",
+      "criteria": "按已确认计划第5章 V-06 实际核对通过，不以脚本绿替代语义。",
+      "environment": "本机隔离fixture与精确版本来源；原始证据留存",
+      "waivable": false,
+      "depends": [
+        {
+          "kind": "acceptance",
+          "id": "V-01"
+        },
+        {
+          "kind": "acceptance",
+          "id": "V-02"
+        },
+        {
+          "kind": "acceptance",
+          "id": "V-03"
+        },
+        {
+          "kind": "acceptance",
+          "id": "V-04"
+        },
+        {
+          "kind": "acceptance",
+          "id": "V-05"
+        }
+      ]
+    },
+    {
+      "id": "V-07",
+      "tasks": [
+        "T-01",
+        "T-02",
+        "T-03",
+        "T-04",
+        "T-05",
+        "T-06",
+        "T-07",
+        "T-08",
+        "T-09",
+        "T-10",
+        "T-11"
+      ],
+      "required": true,
+      "method": "inspection",
+      "criteria": "按已确认计划第5章 V-07 实际核对通过，不以脚本绿替代语义。",
+      "environment": "本机隔离fixture与精确版本来源；原始证据留存",
+      "waivable": false,
+      "depends": [
+        {
+          "kind": "acceptance",
+          "id": "V-06"
+        },
+        {
+          "kind": "review",
+          "id": "R-all"
+        }
+      ],
+      "context_scope": [
+        "README.md",
+        "CLAUDE.md",
+        "delivery/README.md"
+      ]
+    }
+  ],
+  "design": {
+    "path": ".delivery/2026-10-16-delivery-suite-improvements/design.md",
+    "quote": "编排准入由 1 升为 2"
+  },
+  "reuse": [
+    {
+      "operation_id": "implement-T-01-001",
+      "reason": "T01产品/基线/报告/约束未变，最新来源重接纳，仅细化其他任务和覆盖。"
+    }
+  ]
+}

@@ -1,0 +1,107 @@
+{
+  "reviewer": "/root/independent_delivery_review",
+  "time": "2026-10-16T02:51:46.582971+00:00",
+  "before": {
+    "delivery/delivery-orchestrate/scripts/external_seatbelt.py": "d56ffded286a8834ed8d7c871ce287487880fe234ae3683f5f1d62e2465da783",
+    "delivery/delivery-orchestrate/scripts/evaluate_suite.py": "6d9d6f60d89669a244db7d6913a0e6cd0f248e2ce1cf70436ca0280d9b5c9679",
+    "delivery/delivery-orchestrate/tests/test_external_seatbelt.py": "4b3716b633bd9a6b4277e28af5b27e715230667e31729490d466c27658826b23",
+    "delivery/delivery-orchestrate/tests/test_evaluate_suite.py": "a36900a853da2bbc39c1b984b20577358bd6948d093ef6e4e77e6541067d8d51"
+  },
+  "checks": [
+    {
+      "argv": [
+        "python3",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "delivery/delivery-orchestrate/tests",
+        "-p",
+        "test_external_seatbelt.py",
+        "-v"
+      ],
+      "returncode": 0,
+      "log": "014-test_external_seatbelt.py.log",
+      "last_lines": [
+        "",
+        "----------------------------------------------------------------------",
+        "Ran 19 tests in 4.487s",
+        "",
+        "OK"
+      ]
+    },
+    {
+      "argv": [
+        "python3",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "delivery/delivery-orchestrate/tests",
+        "-p",
+        "test_evaluate_suite.py",
+        "-v"
+      ],
+      "returncode": 0,
+      "log": "014-test_evaluate_suite.py.log",
+      "last_lines": [
+        "",
+        "----------------------------------------------------------------------",
+        "Ran 24 tests in 0.192s",
+        "",
+        "OK"
+      ]
+    }
+  ],
+  "after": {
+    "delivery/delivery-orchestrate/scripts/external_seatbelt.py": "d56ffded286a8834ed8d7c871ce287487880fe234ae3683f5f1d62e2465da783",
+    "delivery/delivery-orchestrate/scripts/evaluate_suite.py": "6d9d6f60d89669a244db7d6913a0e6cd0f248e2ce1cf70436ca0280d9b5c9679",
+    "delivery/delivery-orchestrate/tests/test_external_seatbelt.py": "4b3716b633bd9a6b4277e28af5b27e715230667e31729490d466c27658826b23",
+    "delivery/delivery-orchestrate/tests/test_evaluate_suite.py": "a36900a853da2bbc39c1b984b20577358bd6948d093ef6e4e77e6541067d8d51"
+  },
+  "source_stable": true,
+  "inputs": {
+    "delivery/delivery-orchestrate/tests/evaluation/README.md": {
+      "sha256": "41a6b86701ba066496da56be511c61b3f13c4ffac51274cbbc573a4bafe66946",
+      "bytes": 13791
+    },
+    ".delivery/2026-10-16-delivery-suite-improvements/plan.md": {
+      "sha256": "d20baf9befb8566e0bcb91c108b9d616c4b5b273876aecf552fe78a25f3affb6",
+      "bytes": 63579
+    },
+    ".delivery/2026-10-16-delivery-suite-improvements/evidence/behavior/zsh-tmpprefix-validation/result.json": {
+      "sha256": "44041425adda80bc8493209ed11c5b06bd5a87e0a556375a86dc4e7292cb88ba",
+      "bytes": 3668
+    },
+    ".delivery/2026-10-16-delivery-suite-improvements/evidence/behavior/zsh-tmpprefix-validation/process-audit.json": {
+      "sha256": "b089a8df67fecc90dd8a299bf7ec4660bc50aa5a06d7efaf36e54bcf8e84eb18",
+      "bytes": 289
+    },
+    ".delivery/2026-10-16-delivery-suite-improvements/evidence/behavior/resource-check-013/evaluation.json": {
+      "sha256": "258d7294f222e4c00c58062d2631c3906c6086b10d394581507ee1f6aedf4917",
+      "bytes": 19071
+    },
+    ".delivery/2026-10-16-delivery-suite-improvements/evidence/behavior/resource-check-013/runs/001/appserver-result.json": {
+      "sha256": "cd7a17e352d21509a55fcab15788a4e80b7b441cdca764f490871e2fccdcf25e",
+      "bytes": 6025
+    },
+    ".delivery/2026-10-16-delivery-suite-improvements/evidence/behavior/baseline-full-01/infrastructure-resume.txt": {
+      "sha256": "b740a11340e636506776325bf75f2f305f4a57c638ed05fb227365a020add968",
+      "bytes": 1130
+    },
+    ".delivery/2026-10-16-delivery-suite-improvements/evidence/behavior/candidate-full-01/infrastructure-resume.txt": {
+      "sha256": "b740a11340e636506776325bf75f2f305f4a57c638ed05fb227365a020add968",
+      "bytes": 1130
+    },
+    ".delivery/2026-10-16-delivery-suite-improvements/evidence/behavior/legacy-full-01/infrastructure-resume.txt": {
+      "sha256": "417bb129deffd8fda73c131c20321587db236ee3eafc13f5c20028fd38467dcd",
+      "bytes": 1144
+    },
+    ".delivery/2026-10-16-delivery-suite-improvements/evidence/behavior/candidate-full-01/runs/002/prompt.txt": {
+      "sha256": "73247d0fd4439e8677de8204408ae547d10ceae4638cdbf73127682255d140fc",
+      "bytes": 2977
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "reviewer": "/root/independent_delivery_review",
+  "profile": "startup-history-isolation-diagnostic-025/external-seatbelt.sb",
+  "original_counterexample_path": "/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-eval-work-um_9jv6n/.evaluation-state/state_5.sqlite",
+  "cwd": "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-eval-work-pefon98g",
+  "returncode": 1,
+  "stdout": "",
+  "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\nsqlite3.DatabaseError: authorization denied\n",
+  "closed": true,
+  "model_started": false,
+  "initial_literal_marker_result": false,
+  "interpretation": "Original sqlite read/count now rejected with SQLite authorization denied and no count output; initial narrow Operation-not-permitted marker was not the appropriate SQLite error spelling. Raw stdout/stderr retained unchanged."
+}

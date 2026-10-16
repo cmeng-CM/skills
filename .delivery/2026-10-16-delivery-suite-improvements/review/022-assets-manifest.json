@@ -1,0 +1,54 @@
+{
+  "reviewer": "/root/independent_delivery_review",
+  "freeze_checks": [
+    {
+      "freeze": ".delivery/2026-10-16-delivery-suite-improvements/evidence/behavior/focused-case-assets/freeze.json",
+      "freeze_sha256": "494eb1ce5b27dd6f34595e0fa577b4a7ae566e9bb9c26f1e2eb86464fd4c0e9b",
+      "assets": 17,
+      "differences": []
+    },
+    {
+      "freeze": ".delivery/2026-10-16-delivery-suite-improvements/evidence/behavior/mapping-case-preflight-002/asset-freeze.json",
+      "freeze_sha256": "37d173fc412b4a3b6095c53ef98d3be2ef7018941ac434f30d65ac8e0cf02d2b",
+      "assets": 9,
+      "differences": []
+    },
+    {
+      "freeze": ".delivery/2026-10-16-delivery-suite-improvements/evidence/behavior/repeated-failure-case-preflight/asset-freeze.json",
+      "freeze_sha256": "510cdf2689a1335f89b466b425287401f55af91b622688b8c0881bfd6ae1d75b",
+      "assets": 12,
+      "differences": []
+    }
+  ],
+  "commands": [
+    {
+      "name": "plan-review-check",
+      "exit": 0,
+      "record": "022-plan-review-check.json"
+    },
+    {
+      "name": "mapping-plan-check",
+      "exit": 0,
+      "record": "022-mapping-plan-check.json"
+    },
+    {
+      "name": "money-unit",
+      "exit": 0,
+      "record": "022-money-unit.json"
+    }
+  ],
+  "completed_at": "2026-10-16T03:31:11.270567+00:00",
+  "post_check_drift": [
+    "delivery/delivery-orchestrate/tests/evaluation/README.md"
+  ],
+  "own_evidence_sha256": {
+    "022-equivalent-fix-probes.json": "5f6e7d9a0bbe91730a033632fe8da6d65c497e9c06ab454e9671be802685c524",
+    "022-mapping-plan-check.json": "7ad310ce08c4a51a1ce3765301cd6acdb4e45e16c67e3dc686bfb8e05648dcf4",
+    "022-mapping-preflight.json": "45a609099a9ad3c75e1131a9bed93234ff70a8730fdfc50fd4433339aeaf1121",
+    "022-money-unit.json": "0406eb13b99388307135e5f2958133d9aa61223d8e486c02593637df7398ce46",
+    "022-plan-review-check.json": "a7af5742fde58da11031027d42b017298be3d114f5857c33dc80f699a350f6a1",
+    "022-preparation-retry-rejections.json": "bcfbccfcb45efe5549ee803ba0ae79f3bb4e7587c6a71b45a3a19bf64f575c1d",
+    "022-repeated-failure-probe.json": "92f0d60ba5cd3ab7a6ade708fc21d4c04c52cb0998d29939b892bc025d4081ed",
+    "022-standalone-copy-preflight.json": "c088b35fd1a76a6c4da7ab0730b084674189310a132d30bfdcdd67cf29b1ebab"
+  }
+}

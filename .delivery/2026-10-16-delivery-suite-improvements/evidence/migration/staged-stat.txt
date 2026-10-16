@@ -1,0 +1,54 @@
+ .../delivery-design}/SKILL.md                      |  2 +-
+ .../delivery-design}/agents/openai.yaml            |  0
+ .../references/delivery-contract.md                |  3 +-
+ .../references/document-standard.md                |  0
+ .../delivery-design}/references/preparation.md     |  0
+ .../delivery-design}/references/review.md          |  0
+ .../delivery-design}/scripts/check_doc.py          |  0
+ .../delivery-design}/tests/behavior-cases.json     |  4 +-
+ .../delivery-design}/tests/test_check_doc.py       |  0
+ .../delivery-implement}/SKILL.md                   |  2 +-
+ .../delivery-implement}/agents/openai.yaml         |  0
+ .../assets/implementation-template.md              |  0
+ .../references/delivery-contract.md                |  3 +-
+ .../references/example-implementation.md           |  0
+ .../references/implementation-standard.md          |  0
+ .../delivery-implement}/references/work-rules.md   |  0
+ .../delivery-implement}/tests/behavior-cases.json  |  2 +-
+ .../delivery-orchestrate}/SKILL.md                 |  6 +-
+ .../delivery-orchestrate}/agents/openai.yaml       |  0
+ .../assets/dispatch-template.md                    |  0
+ .../delivery-orchestrate}/references/contracts.md  |  0
+ .../references/orchestration.md                    | 17 ++++-
+ .../references/runtime-api.md                      | 61 ++++++++---------
+ .../delivery-orchestrate}/scripts/check_suite.py   |  0
+ .../delivery-orchestrate}/scripts/delivery.py      |  0
+ .../delivery-orchestrate}/tests/test_delivery.py   | 76 +++++++++++++++++++++-
+ {delivery-plan => delivery/delivery-plan}/SKILL.md |  2 +-
+ .../delivery-plan}/agents/openai.yaml              |  0
+ .../delivery-plan}/assets/plan-template.md         |  0
+ .../delivery-plan}/references/delivery-contract.md |  3 +-
+ .../delivery-plan}/references/example-plan.md      |  2 +-
+ .../delivery-plan}/references/plan-standard.md     |  0
+ .../delivery-plan}/references/preparation.md       |  0
+ .../delivery-plan}/references/review.md            |  0
+ .../delivery-plan}/scripts/check_plan.py           |  0
+ .../delivery-plan}/tests/behavior-cases.json       |  2 +-
+ .../delivery-plan}/tests/test_check_plan.py        |  0
+ .../delivery-review}/SKILL.md                      |  2 +-
+ .../delivery-review}/agents/openai.yaml            |  0
+ .../delivery-review}/assets/review-template.md     |  0
+ .../references/delivery-contract.md                |  3 +-
+ .../delivery-review}/references/example-review.md  |  0
+ .../delivery-review}/references/review-standard.md |  0
+ .../delivery-review}/references/work-rules.md      |  0
+ .../delivery-review}/tests/behavior-cases.json     |  0
+ .../delivery-verify}/SKILL.md                      |  2 +-
+ .../delivery-verify}/agents/openai.yaml            |  0
+ .../assets/verification-template.md                |  0
+ .../references/delivery-contract.md                |  3 +-
+ .../references/example-verification.md             |  0
+ .../references/verification-standard.md            |  0
+ .../delivery-verify}/references/work-rules.md      |  0
+ .../delivery-verify}/tests/behavior-cases.json     |  0
+ 53 files changed, 146 insertions(+), 49 deletions(-)

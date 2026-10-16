@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "id": "delivery-review-standalone",
+  "mode": "standalone",
+  "skills": [
+    "delivery-review"
+  ],
+  "fixture": "fixtures/ledger",
+  "git": false,
+  "prompt": "请仅使用 delivery-review，审查实际项目是否满足 README.md 的交付需求，写 .delivery/evaluation/review.md。已有测试可以运行。只审阅，不修复被审源码；结论绑定实际代码和入口证据，区分要求缺失与风格偏好。不要调用其他技能。",
+  "requirements": [
+    "README.md 中全部公开需求",
+    "只执行点名专业能力",
+    "无其他技能、Git和.workflow仍可工作",
+    "不默认提交、不push"
+  ],
+  "allowed_changes": [
+    "专业报告；仅 implement 可修改业务代码和测试"
+  ]
+}

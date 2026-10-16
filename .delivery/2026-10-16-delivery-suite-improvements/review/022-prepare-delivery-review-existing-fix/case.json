@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "delivery-review-existing-fix",
+  "mode": "standalone",
+  "skills": [
+    "delivery-review"
+  ],
+  "prompt": "请仅使用delivery-review，对本项目既有review/001.md关联的修复做复审。结合README.md、implementation.md和实际代码，按必要范围检查原问题与修复影响，保存 .delivery/evaluation/review.md，逐项说明当前处置、证据与限制。只审阅，不修改产品代码、既有问题报告和正式测试，不串联其他skill。",
+  "requirements": [
+    "复审原问题和修复影响，结论绑定当前实物",
+    "保存真实检查与当前处置",
+    "保留被审原文和代码"
+  ],
+  "allowed_changes": [
+    ".delivery/evaluation/ 下复审报告和原始检查证据"
+  ]
+}

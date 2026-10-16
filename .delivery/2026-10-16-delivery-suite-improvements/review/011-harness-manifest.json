@@ -1,0 +1,53 @@
+{
+  "reviewer": "/root/independent_delivery_review",
+  "scope": "Controlled harness regressions; fake local RPC server and process mocks; not model quality",
+  "before": {
+    "delivery/delivery-orchestrate/scripts/external_seatbelt.py": "b73c1f98f3ff7afa5de06e428fcb3ead850e579f95f3021036978191f41bc48b",
+    "delivery/delivery-orchestrate/scripts/evaluate_suite.py": "1d586b2d868b4a46fe6925e3c6e4b3e397233097bab5c17f19f752ba8a700acc",
+    "delivery/delivery-orchestrate/tests/evaluation/README.md": "14c1855bda37201d235337ccc44a4afe443c91b5fca176a82a247b8feb2c5175",
+    "delivery/delivery-orchestrate/tests/test_external_seatbelt.py": "1d46f10baab6af72d7dfa35c71bbb006852661946ce550b3dc40ca3c7e8810a4",
+    "delivery/delivery-orchestrate/tests/test_evaluate_suite.py": "a36900a853da2bbc39c1b984b20577358bd6948d093ef6e4e77e6541067d8d51"
+  },
+  "after": {
+    "delivery/delivery-orchestrate/scripts/external_seatbelt.py": "b73c1f98f3ff7afa5de06e428fcb3ead850e579f95f3021036978191f41bc48b",
+    "delivery/delivery-orchestrate/scripts/evaluate_suite.py": "1d586b2d868b4a46fe6925e3c6e4b3e397233097bab5c17f19f752ba8a700acc",
+    "delivery/delivery-orchestrate/tests/evaluation/README.md": "14c1855bda37201d235337ccc44a4afe443c91b5fca176a82a247b8feb2c5175",
+    "delivery/delivery-orchestrate/tests/test_external_seatbelt.py": "1d46f10baab6af72d7dfa35c71bbb006852661946ce550b3dc40ca3c7e8810a4",
+    "delivery/delivery-orchestrate/tests/test_evaluate_suite.py": "a36900a853da2bbc39c1b984b20577358bd6948d093ef6e4e77e6541067d8d51"
+  },
+  "source_stable": true,
+  "checks": [
+    {
+      "argv": [
+        "/Users/cm/workspace/github/ppt-master/.venv/bin/python3",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "delivery/delivery-orchestrate/tests",
+        "-p",
+        "test_external_seatbelt.py",
+        "-v"
+      ],
+      "returncode": 0,
+      "summary": "mpletion_without_root_completion_times_out) ... ok\n\n----------------------------------------------------------------------\nRan 15 tests in 3.106s\n\nOK\n"
+    },
+    {
+      "argv": [
+        "/Users/cm/workspace/github/ppt-master/.venv/bin/python3",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "delivery/delivery-orchestrate/tests",
+        "-p",
+        "test_evaluate_suite.py",
+        "-v"
+      ],
+      "returncode": 0,
+      "summary": "s.test_version_mismatch_prevents_execution) ... ok\n\n----------------------------------------------------------------------\nRan 24 tests in 0.185s\n\nOK\n"
+    }
+  ]
+}
