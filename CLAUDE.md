@@ -12,9 +12,9 @@ Claude Code / Codex / OpenCode 的 skill 集合仓库。每个 skill 以 `SKILL.
 
 ## 结构与入口
 
-- 仓库根下一 skill 一目录，入口即 `SKILL.md`。写 skill 遵循 `模板.md` 的四段式：frontmatter → 一句话定场 → Working Protocol → Exit Criteria → Exit Protocol；正文超 500 行就拆到 `references/`
+- 通常仓库根下一 skill 一目录，入口即 `SKILL.md`；delivery 组合的六个自足 skill 统一放在 `delivery/delivery-*/`，安装仍传具体包目录。写 skill 遵循 `模板.md` 的四段式：frontmatter → 一句话定场 → Working Protocol → Exit Criteria → Exit Protocol；正文超 500 行就拆到 `references/`
 - 安装：`install-skill.sh <skill 目录>`（软链到 `~/.claude/skills` 与 `~/.agents/skills` 两个目录）；卸载：`uninstall-skill.sh <skill 名或路径>`
-- 无构建、无测试框架：质量验证靠各 skill 的 `test-prompts.json`（`[{id, prompt, expected}]` 格式）配合 darwin-skill 打分；验收标准与执行规程见 `基线测试.md`（≥80 合格，70-80 有短板，<70 需优化）
+- 通常无构建、无统一测试框架：既有 skill 的 `test-prompts.json`（`[{id, prompt, expected}]` 格式）配合 darwin-skill 打分，规程见 `基线测试.md`。delivery 使用自身的 unittest、真实行为评测和独立审查门槛，具体见 `delivery/README.md`；darwin 分数不能替代其验收。
 
 ## 坑点
 

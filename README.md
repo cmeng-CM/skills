@@ -2,6 +2,8 @@
 
 skill 集合仓库。每个 skill 以 `SKILL.md`（prompt-as-code）为主体、各自自包含，skill 之间无共享代码。写 skill 遵循 [`模板.md`](模板.md) 的四段式规范。
 
+Delivery 的五项独立能力与编排 skill 统一位于 [`delivery/`](delivery/README.md)，安装名称仍为 `delivery-*`。该目录保存源码；任务产物使用项目内 `.delivery/日期-主题/`。例如 `bash install-skill.sh delivery/delivery-plan`。
+
 ## 安装与卸载
 
 仓库提供两个脚本，把指定 skill 以**软链接**方式安装到两个目录：

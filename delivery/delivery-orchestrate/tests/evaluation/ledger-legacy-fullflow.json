@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "id": "ledger-legacy-fullflow",
+  "mode": "fullflow",
+  "skills": [
+    "task-workflow"
+  ],
+  "fixture": "fixtures/ledger",
+  "git": true,
+  "prompt": "请明确使用 task-workflow 完整流程，完成 README.md 中账本汇总需求，直到实际交付。请实际生成设计、计划、实施报告、由未参与实现的独立执行者审查、逐项验收与收尾，采用 task-workflow 稳定格式及实际 CLI 管理证据。已授权质量优先的局部技术决策和必要本地提交，不push。评审必须实际独立执行，不能只改身份标签。可调用本机 codex CLI 进行独立只读评审，沿用相同模型配置；如无法获得独立执行，保留待审并报告，不伪造通过。完整流程要包含共享交易契约、收入/支出两分支、真实消费者入口及联合验证。所有结果留存工作目录，禁止访问任何评测答案或其他候选。",
+  "requirements": [
+    "全部 README.md 公开功能与失败规则",
+    "五类专业产物及独立评审",
+    "真实消费者与联合验证",
+    "当前有效证据满足后方可收尾"
+  ],
+  "allowed_changes": [
+    "整个隔离项目中的业务实现、测试、.delivery记录"
+  ]
+}

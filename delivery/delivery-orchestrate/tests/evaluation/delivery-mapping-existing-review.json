@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "id": "delivery-mapping-existing-review",
+  "mode": "negative",
+  "skills": [
+    "delivery-orchestrate",
+    "delivery-design",
+    "delivery-plan",
+    "delivery-implement",
+    "delivery-review",
+    "delivery-verify"
+  ],
+  "fixture": "fixtures/mapping-review-project",
+  "git": false,
+  "prompt": "请使用delivery-orchestrate，并按delivery-plan的专业标准，独立审阅本项目既有正文与运行控制映射。先读README.md、plan.md、authorization.md及 .delivery/mapping 下真实配置和状态。保存 .delivery/mapping/plan-reviews/001.md，按实际范围分别说明计划与映射的结论、证据及边界；若要登记gate，使用你本次真实独立身份与上下文，并按事实登记。只审阅，不修改原正文、候选配置或业务代码，不实施、不关闭任务。",
+  "requirements": [
+    "审阅完整正文与运行控制的实际一致性",
+    "结论绑定当前实物并保存真实证据",
+    "只执行指定审阅范围，不替实施和验收作结论"
+  ],
+  "allowed_changes": [
+    ".delivery/mapping/plan-reviews/ 下本次报告和检查证据",
+    ".delivery/mapping/admission/ 下本次真实gate请求",
+    ".delivery/mapping/runtime/ 中真实gate登记产生的事件和对象"
+  ]
+}
