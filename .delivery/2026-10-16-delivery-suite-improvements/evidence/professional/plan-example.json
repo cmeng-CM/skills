@@ -1,7 +1,0 @@
-{
-  "chunk_id": "87b51a",
-  "wall_time_seconds": 0.000008708,
-  "exit_code": 0,
-  "original_token_count": 394,
-  "output": "{\n  \"ok\": true,\n  \"findings\": [\n    {\n      \"level\": \"warning\",\n      \"code\": \"unresolved-reference\",\n      \"line\": 100,\n      \"message\": \"P-01 没有可识别的本地定义或外部引用声明\"\n    },\n    {\n      \"level\": \"warning\",\n      \"code\": \"task-fields-unchecked\",\n      \"line\": 141,\n      \"message\": \"T-01 未显式声明细化状态，未按完整任务卡核查字段\"\n    },\n    {\n      \"level\": \"warning\",\n      \"code\": \"task-fields-unchecked\",\n      \"line\": 171,\n      \"message\": \"T-02 未显式声明细化状态，未按完整任务卡核查字段\"\n    },\n    {\n      \"level\": \"warning\",\n      \"code\": \"task-fields-unchecked\",\n      \"line\": 202,\n      \"message\": \"T-03 未显式声明细化状态，未按完整任务卡核查字段\"\n    },\n    {\n      \"level\": \"warning\",\n      \"code\": \"task-fields-unchecked\",\n      \"line\": 235,\n      \"message\": \"T-04 未显式声明细化状态，未按完整任务卡核查字段\"\n    }\n  ],\n  \"scope\": [\n    \"识别本地 ID 36 个、外部声明 0 个；跨表汇总允许重复引用。\",\n    \"核对已声明已细化的任务卡 0 张；只检查已支持字段非空，不判断实际可执行性。\",\n    \"未检查联合依赖循环：没有可识别的显式依赖表。\",\n    \"未检查语义覆盖、关键决策确认的真实性、图文一致性、外部材料与实际证据；未展开 ID 区间或自然语言依赖。\"\n  ],\n  \"counts\": {\n    \"local_ids\": 36,\n    \"external_ids\": 0,\n    \"detailed_tasks\": 0,\n    \"dependency_edges\": 0\n  },\n  \"path\": \"delivery/delivery-plan/references/example-plan.md\"\n}\n"
-}

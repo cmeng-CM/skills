@@ -1,6 +1,0 @@
-{
-  "before_exit": 0,
-  "after_exit": 2,
-  "after_error": "{\"error\": \"unknown v2 journal event kind\"}",
-  "passed": true
-}

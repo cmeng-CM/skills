@@ -1,7 +1,0 @@
-{
-  "chunk_id": "e12646",
-  "wall_time_seconds": 0.028534666,
-  "exit_code": 0,
-  "original_token_count": 58,
-  "output": "suite packaging: PASS\n{'skills': 6, 'markdown': 42, 'json': 22, 'local_links': 49}\nPackaging, basic metadata, explicit-entry policy, JSON syntax and ordinary local Markdown links only; no semantic quality or behavioral guarantee.\n"
-}

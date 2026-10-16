@@ -4,6 +4,10 @@ skill 集合仓库。每个 skill 以 `SKILL.md`（prompt-as-code）为主体、
 
 Delivery 的五项独立能力与编排 skill 统一位于 [`delivery/`](delivery/README.md)，安装名称仍为 `delivery-*`。该目录保存源码；任务产物使用项目内 `.delivery/日期-主题/`。例如 `bash install-skill.sh delivery/delivery-plan`。
 
+技术方案和实现规划分别统一使用 [`delivery-design`](delivery/delivery-design/SKILL.md) 与 [`delivery-plan`](delivery/delivery-plan/SKILL.md)，普通设计、规划请求即可使用，无需先启动完整编排。新目标分别保存为同一任务目录中的 `design.md`、`plan.md`；已有明确归属的目标继续沿用原目录。旧 `design-tech-doc`、`plan-implementation` 已退役，历史文档、快照和运行记录保留。
+
+`.delivery/`、`.workflow/` 是仅本地保留的任务材料和执行记录目录，不纳入 Git；已有历史提交不改写。
+
 ## 安装与卸载
 
 仓库提供两个脚本，把指定 skill 以**软链接**方式安装到两个目录：

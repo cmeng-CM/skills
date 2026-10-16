@@ -1,9 +1,0 @@
-{
-  "files": {
-    "evidence/baseline/source-working-tree.patch": {
-      "sha256": "6bd17ae4e773e44d5a75ac6f129c4e0dfc972b0c506ff551dd54dd1dfda38871",
-      "bytes": 45194,
-      "reason": "Baseline whole working-tree patch can contain unrelated pre-existing user edits; kept locally, not committed."
-    }
-  }
-}

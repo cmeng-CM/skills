@@ -1,9 +1,0 @@
-{
-  "source_manifest_current": true,
-  "changed_source_files": [],
-  "installation_links": {
-    "/Users/cm/.claude/skills/delivery-fix": "/Users/cm/workspace/github/skills/delivery/delivery-fix",
-    "/Users/cm/.agents/skills/delivery-fix": "/Users/cm/workspace/github/skills/delivery/delivery-fix"
-  },
-  "links_correct": true
-}

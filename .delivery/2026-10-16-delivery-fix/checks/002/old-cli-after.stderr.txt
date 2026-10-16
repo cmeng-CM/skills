@@ -1,1 +1,0 @@
-{"error": "unknown v2 journal event kind"}

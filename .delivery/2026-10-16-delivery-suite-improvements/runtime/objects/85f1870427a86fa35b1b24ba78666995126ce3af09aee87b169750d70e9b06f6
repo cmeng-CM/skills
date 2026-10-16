@@ -1,6 +1,0 @@
-interface:
-  display_name: "Delivery 交付验证"
-  short_description: "独立或编排使用的交付验证，留存可阅读的依据、证据、结论与后续事项"
-  default_prompt: "使用 $delivery-verify 完成本次交付验证，遵循已授权范围并留存真实记录。"
-policy:
-  allow_implicit_invocation: false

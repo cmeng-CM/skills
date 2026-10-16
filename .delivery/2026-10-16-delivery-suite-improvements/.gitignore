@@ -1,5 +1,0 @@
-# 原始会话、诊断数据库和大型产物仅在本机完整保留。
-# 逐文件摘要、可读结论、最终来源及稳定运行记录仍纳入Git。
-evidence/behavior/
-# 基线全树补丁含其他既有改动，只在本机留存及摘要。
-evidence/baseline/source-working-tree.patch

@@ -2,6 +2,16 @@
   "usage": "维护时将 request 和提供的原始材料交给使用本 skill 的模型；先保留输出，再对照 expected 审阅。列出用例本身不代表已运行。生成产物只能放入隔离临时目录。",
   "cases": [
     {
+      "id": "implicit-plan-reuses-task-directory",
+      "request": "请把已确认的前缀变更方案拆成实现计划并保存，本轮不实施。完整设计、真实源码基线和确认记录在测试工作区的 .delivery/2026-10-15-label-prefix/，已有 design.md 和 index.md。label(text, prefix='') 按已确认规则返回 prefix + text.strip()，只需修改函数及相关测试。没有指定 skill 名称，本次是同一目标的后续规划。",
+      "expected": [
+        "普通实现规划请求使用 delivery-plan，不要求用户再次点名",
+        "读取现有依据，在原任务目录保存 plan.md 并更新 index.md 导航",
+        "跨日沿用创建日期，不另建目录或写入 docs/plans",
+        "只维护计划，不改设计正文、产品代码或编排运行状态"
+      ]
+    },
+    {
       "id": "small-change-without-design-document",
       "request": "根据项目现有设置模块，为已确定的保存失败保留草稿规则编一份实现计划。用户明确要求显式保存成功才应用，不新增功能，只有对话结论，没有独立技术方案。先在对话交付。",
       "expected": [
@@ -101,8 +111,8 @@
       ]
     },
     {
-      "id": "delivery-legacy-unchanged",
-      "request": "维护 delivery-plan，新增审查门禁作为必需输入；原 plan-implementation 和旧 workflow 仍在使用，用户要求它们不变。先判断更新影响。",
+      "id": "delivery-unrelated-unchanged",
+      "request": "维护 delivery-plan，新增审查门禁作为必需输入；其他独立 skill 和旧 workflow 仍在使用，用户要求它们不变。先判断更新影响。",
       "expected": [
         "识别新增必需输入属于不兼容变化，评估新编排接入与契约版本",
         "不修改或自动同步原 skill、旧 workflow 和历史产物",

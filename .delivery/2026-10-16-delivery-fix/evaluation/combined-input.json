@@ -1,9 +1,0 @@
-{
-  "project": "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-fix-combined-k4hy9hln",
-  "work": "/private/var/folders/rp/10l3h8sd6mb_4z4lrwk4kk1c0000gn/T/delivery-fix-combined-k4hy9hln/.delivery/2026-10-16-queue-repair",
-  "skills": {
-    "delivery-fix": "7daff8e141e9646c1ea314dd9d61af7eb1b2083b2b5a503d9d17de93b7ce49d2",
-    "delivery-orchestrate": "e96be898e89b0c15f953e35d637a2c1054790231c366cd78cc655d0b2ea0e9be"
-  },
-  "scope": "controlled defect; real CLI, native agents and explicit diagnostic handoff"
-}

@@ -2,6 +2,8 @@
 
 每项专业能力有自己的内容标准、输入输出和 Markdown 产物。可以直接点名单项，也可以明确选择完整编排；是否组合不改变专业质量标准。
 
+技术设计与实现规划统一由 `delivery-design`、`delivery-plan` 承担，普通对应请求即可使用，单项请求不自动启动完整编排。旧 `design-tech-doc`、`plan-implementation` 已退役；已有历史产物与记录保留。
+
 | 入口 | 负责的结果 | 边界 |
 | --- | --- | --- |
 | [delivery-design](delivery-design/SKILL.md) | 机制、契约、关键决定、验收与设计审阅 | 不表示已经实施或实测 |
@@ -15,6 +17,8 @@
 ## 目录与安装
 
 `delivery/` 包含五项基础专业能力、可选的 `delivery-fix` 和编排 skill；`.delivery/YYYY-MM-DD-主题/` 是使用它们产生的任务材料。两者用途不同。已有同目标目录继续沿用，历史 `docs/delivery/` 与 `.workflow` 不自动迁移。
+
+项目根目录的 `.delivery/`、`.workflow/` 只保存在本地，不纳入 Git。取消既有跟踪不删除本地材料，也不改写历史提交。
 
 在仓库根执行：
 
@@ -51,4 +55,4 @@ python3 -B delivery/delivery-orchestrate/scripts/validate_suite.py --skills-root
 
 该脚本运行包结构与确定性回归，保存 JSON、可读报告和原始日志。真实模型行为评测另见[评测说明](delivery-orchestrate/tests/evaluation/README.md)。独立审查、确定性测试、真实模型执行和实际交付对象验证分别留证；通过其中一项不自动覆盖其他项。
 
-更新方法见编排的[维护与升级规则](delivery-orchestrate/references/maintenance.md)。原 task-workflow、design-tech-doc 和 plan-implementation 继续保留；本组不自动修改或同步它们。能力更新涉及必要输入、语义、独立性或门禁时先评估契约和活动流程，不因软链立即生效就让进行中的任务静默换规则。
+更新方法见编排的[维护与升级规则](delivery-orchestrate/references/maintenance.md)。原 task-workflow 继续独立保留，本组不自动修改其引擎、门禁或运行状态。能力更新涉及必要输入、语义、独立性或门禁时先评估契约和活动流程，不因软链立即生效就让进行中的任务静默换规则。
