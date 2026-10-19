@@ -238,7 +238,7 @@ python3 -B CLI run --work W --acceptance A1 --actor verifier --context verificat
 
 run 先持久 run-started，再释放日志锁执行真实 argv（非 shell），结束重新核对产品、配置、监测、资源和实际来源。超时保留输出并杀进程组。命令不是沙箱，先评估副作用。退出 0 仍须验证者报告和新的 verification record；有后续 run 时旧 verdict 过期，不能挑较早成功回执绕过后来的失败。manual 逐项真实人工确认与 limited 的严格例外规则沿用 v1，不新增快捷不适用或未知豁免。
 
-存在 Git 时采集初始已暂存条目内容摘要；后续执行准入检查它们未被替换。非 Git 不依赖 Git。脚本不替用户提交；协调者仍需按授权逐文件提交、保护既有 index，不使用全量暂存或 push。
+存在 Git 时采集初始已暂存条目内容摘要；后续执行准入检查它们未被替换。非 Git 不依赖 Git。脚本不替用户提交；仓库没有特殊要求时，协调者按功能完整性分批本地提交，不把无关改动混入，永不 push，并保护既有 index、不使用全量暂存。
 
 ## 5 范围外变化的明确判断
 
