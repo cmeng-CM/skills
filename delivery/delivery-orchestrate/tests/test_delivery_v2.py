@@ -28,6 +28,7 @@ class V2Case(unittest.TestCase):
         self.write("authorization.md", "User authorizes T1 implementation and local commits, no push.\n")
         self.write(".delivery/example/report.md", "Real activity report, trigger and observed result.\n")
         self.write(".delivery/example/evidence.txt", "Observed required behavior, actual evidence.\n")
+        self.write(".delivery/example/closeout.md", "Complete delivery evidence and residual risk.\n")
         self.engine = EngineV2(self.work)
         self.engine.init(self.project, "v2 fixture", "init")
         self.builder = {"id": "builder", "context": "implementation"}
@@ -101,7 +102,8 @@ class V2Case(unittest.TestCase):
         self.record("verification", "A1")
 
     def closing(self, mode="complete"):
-        return self.extra(actor=self.controller, mode=mode, summary="Current complete delivery evidence.", report=self.report()["report"], exceptions=[])
+        return self.extra(actor=self.controller, mode=mode, summary="Current complete delivery evidence.",
+                          report={"path": ".delivery/example/closeout.md"}, exceptions=[])
 
     def command(self, code=None):
         self.config["acceptance"][0].update(method="command", command=[sys.executable, "-c", code or "from pathlib import Path; assert Path('src/main.txt').read_text() == 'works\\n'; print('observed actual consumer')"])

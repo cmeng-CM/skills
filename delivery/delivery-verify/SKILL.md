@@ -28,6 +28,8 @@ description: 针对实际交付物按验收要求取得证据，区分符合、�
 
 复杂修复的报告可提供原故障条件和诊断证据。验证仍对照既定要求检查实际修复版本、原失败条件和受影响行为；诊断探针、缓解效果及修复者自检不能自动替代规定验收。无法稳定复现时说明所用证据及其证明边界，不能补造“修复前失败、修复后通过”。已有有效证据可按实际影响复用，不为使用 fix 重跑全部检查。
 
+编排内多项验收可以用 `verify-batch` 一次登记：每项有自己的唯一 `op` 和 `config_operation`（必须等于当前配置），其余字段同单条 verify；任一项不满足则整批拒绝、不写半批，全部已存在且请求一致并绑定当前配置时幂等返回。批次不改变验收标准；manual pending、缺少人工确认证据或最新 run 不匹配的项目不能借批量假通过。报告时间引用实际 run 事件时间，不手写成功时间；批量记录使用[批量验收模板](assets/verification-record-template.md)，逐项写 run op、command、exit code、证据对象 hash 与未验证范围。
+
 ### 3. 汇总、补验与交接
 
 读[验证记录规范](references/verification-standard.md)，使用[记录骨架](assets/verification-template.md)，必要时查看[完整示例](references/example-verification.md)。逐项使用符合、不符合、未验证、有依据的不适用；失败和缺证据可以同时存在，均须列出。

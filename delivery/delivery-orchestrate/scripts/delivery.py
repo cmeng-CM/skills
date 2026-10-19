@@ -11,6 +11,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import signal
 import subprocess
 import sys
@@ -22,11 +23,13 @@ if __name__ == "__main__":
 
 
 class DeliveryError(Exception):
-    pass
+    def __init__(self, message, code="invalid_request"):
+        super().__init__(message)
+        self.code = code
 
 
-def fail(message):
-    raise DeliveryError(message)
+def fail(message, code="invalid_request"):
+    raise DeliveryError(message, code)
 
 
 LOADED_SOURCE_BYTES = Path(__file__).read_bytes()
@@ -75,6 +78,21 @@ def actor(value):
     shape(value, ("id", "context"), name="actor")
     text(value["id"], "actor.id")
     text(value["context"], "actor.context")
+
+
+def validate_events(events):
+    """Validate the immutable event chain without requiring a live work path."""
+    previous = "0" * 64
+    if not isinstance(events, list) or not events:
+        fail("empty or invalid journal", "io_error")
+    for number, event in enumerate(events, 1):
+        shape(event, ("seq", "at", "kind", "op", "request_hash", "payload", "previous", "hash"), name="event")
+        if event["seq"] != number or event["previous"] != previous:
+            fail("journal chain broken", "io_error")
+        body = {k: v for k, v in event.items() if k != "hash"}
+        if digest(canonical(body)) != event["hash"]:
+            fail("journal event hash mismatch", "io_error")
+        previous = event["hash"]
 
 
 def now():
@@ -135,25 +153,16 @@ class Engine:
         except (OSError, ValueError) as exc:
             fail(f"journal cannot be read: {exc}")
         shape(self.data, ("schema_version", "project", "work", "events"), name="journal")
-        if self.data["schema_version"] != 1:
+        if type(self.data["schema_version"]) is not int or self.data["schema_version"] not in (1, 2):
             fail("unsupported journal schema")
         self.project = Path(self.data["project"])
         if not self.project.is_absolute() or self.project.resolve() != self.project:
             fail("invalid journal project")
         if safe_path(self.project, self.data["work"]) != self.work:
             fail("journal work identity mismatch")
-        previous = "0" * 64
-        if not isinstance(self.data["events"], list) or not self.data["events"]:
-            fail("empty or invalid journal")
-        for number, event in enumerate(self.data["events"], 1):
-            shape(event, ("seq", "at", "kind", "op", "request_hash", "payload", "previous", "hash"), name="event")
-            if event["seq"] != number or event["previous"] != previous:
-                fail("journal chain broken")
-            body = {k: v for k, v in event.items() if k != "hash"}
-            if digest(canonical(body)) != event["hash"]:
-                fail("journal event hash mismatch")
+        validate_events(self.data["events"])
+        for event in self.data["events"]:
             self.check_objects(event["payload"])
-            previous = event["hash"]
 
     def check_objects(self, value):
         if isinstance(value, dict):
@@ -204,15 +213,39 @@ class Engine:
             if os.path.exists(temporary):
                 os.unlink(temporary)
 
+    def new_event(self, kind, op, request_hash, payload, previous, seq=None):
+        event = {"seq": len(self.data["events"]) + 1 if seq is None else seq,
+                 "at": now(), "kind": kind, "op": op,
+                 "request_hash": request_hash, "payload": payload, "previous": previous}
+        event["hash"] = digest(canonical(event))
+        return event
+
     def append(self, kind, op, request_hash, payload):
         events = self.data["events"]
-        event = {"seq": len(events) + 1, "at": now(), "kind": kind, "op": op,
-                 "request_hash": request_hash, "payload": payload,
-                 "previous": events[-1]["hash"] if events else "0" * 64}
-        event["hash"] = digest(canonical(event))
+        event = self.new_event(kind, op, request_hash, payload, events[-1]["hash"] if events else "0" * 64)
         events.append(event)
         self.atomic(self.journal_path, canonical(self.data) + b"\n")
         return event
+
+    def append_many(self, items):
+        """Construct consecutive events from the current head and write once.
+
+        Each item is (kind, op, request_hash, payload). A crash leaves either
+        the previous journal or the complete batch, never a partial batch.
+        """
+        events = self.data["events"]
+        previous = events[-1]["hash"] if events else "0" * 64
+        appended = []
+        for kind, op, request_hash, payload in items:
+            event = self.new_event(kind, op, request_hash, payload, previous,
+                                   seq=len(events) + len(appended) + 1)
+            appended.append(event)
+            previous = event["hash"]
+        if not appended:
+            fail("empty batch")
+        events.extend(appended)
+        self.atomic(self.journal_path, canonical(self.data) + b"\n")
+        return appended
 
     def duplicate(self, op, request):
         text(op, "operation id")
@@ -334,7 +367,7 @@ class Engine:
         for item in config["spec"][group]:
             if item["id"] == target:
                 return item
-        fail(f"unknown {kind} target: {target}")
+        fail(f"unknown {kind} target: {target}", "unknown_target")
 
     def target_scope(self, config, kind, target):
         item = self.target(config, kind, target)
@@ -632,7 +665,7 @@ class Engine:
                         return False
         return True
 
-    def record(self, request, op):
+    def prepare_record(self, request, config=None):
         shape(request, ("schema_version", "contract_version", "skill_revision", "kind", "target", "actor", "report", "result", "summary", "evidence"),
               ("issues", "resolutions", "run_operation", "confirmation", "supersedes", "reason"))
         version(request)
@@ -643,74 +676,78 @@ class Engine:
             fail("unknown record kind")
         if not isinstance(request["evidence"], list) or not request["evidence"]:
             fail("nonempty evidence array required")
+        self.active()
+        config = config or self.current_config()
+        kind, target = request["kind"], request["target"]
+        item = self.target(config["payload"], kind, target)
+        state = self.state()
+        if not self.dependencies_pass(item, kind, state):
+            fail("prerequisite gate is not passed", "dependency_not_ready")
+        references = {"report": self.reference(request["report"]), "evidence": [self.reference(e) for e in request["evidence"]]}
+        snapshot = self.snapshot(self.target_scope(config["payload"], kind, target))
+        result = request["result"]
+        if kind == "review":
+            shape(result, ("spec", "quality"), name="review result")
+            if any(v not in ("passed", "failed", "unknown") for v in result.values()):
+                fail("invalid review result")
+            if not self.independent(request["actor"], item["tasks"]):
+                fail("reviewer id/context participated in implementation")
+        elif result not in ("passed", "failed", "unknown"):
+            fail("invalid result")
+        pair = self.records(config).get((kind, target))
+        if pair and pair[1]["result"] != result:
+            if request.get("supersedes") != pair[0] or not request.get("reason", "").strip():
+                fail("changed conclusion requires supersedes and reason")
+        if kind == "verification":
+            self.validate_verification(request, item, config, snapshot, references)
+        elif "run_operation" in request or "confirmation" in request:
+            fail("run_operation/confirmation are verification-only")
+        issues = request.get("issues", [])
+        resolutions = request.get("resolutions", [])
+        if not isinstance(issues, list) or not isinstance(resolutions, list):
+            fail("issues and resolutions must be arrays")
+        existing_issues = self.issues(config)
+        known_ids = set(existing_issues)
+        for issue in issues:
+            shape(issue, ("id", "summary", "severity", "blocking", "tasks"), name="issue")
+            for field in ("id", "summary", "severity"):
+                text(issue[field], f"issue.{field}")
+            if type(issue["blocking"]) is not bool:
+                fail("issue.blocking must be bool")
+            strings(issue["tasks"], "issue.tasks")
+            covered = {target} if kind == "implementation" else set(item["tasks"])
+            if not set(issue["tasks"]) <= covered:
+                fail("issue tasks outside record scope")
+            if issue["id"] in known_ids:
+                fail("issue id already exists; reference original and add explicit resolution")
+            known_ids.add(issue["id"])
+        resolution_ids = set()
+        for resolution in resolutions:
+            shape(resolution, ("id", "reason", "evidence"), name="resolution")
+            text(resolution["reason"], "resolution.reason")
+            original = existing_issues.get(resolution["id"])
+            if not original or original["owner_kind"] != kind or original["owner_target"] != target:
+                fail("resolution must be by original finding capability and target")
+            if resolution["id"] in resolution_ids:
+                fail("duplicate resolution")
+            resolution_ids.add(resolution["id"])
+            if not isinstance(resolution["evidence"], list) or not resolution["evidence"]:
+                fail("resolution requires evidence")
+            references.setdefault("resolutions", []).append({"id": resolution["id"], "evidence": [self.reference(e) for e in resolution["evidence"]]})
+        passed = all(v == "passed" for v in result.values()) if isinstance(result, dict) else result == "passed"
+        blockers = [i for i in existing_issues.values() if i["blocking"] and i["status"] == "open" and i["owner_kind"] == kind and i["owner_target"] == target and i["id"] not in resolution_ids]
+        if passed and (blockers or any(i["blocking"] for i in issues)):
+            fail("passed result cannot hide unresolved blocking issues")
+        payload = {k: v for k, v in request.items() if k not in ("report", "evidence", "confirmation")}
+        payload.update({"config_op": config["op"], "snapshot": snapshot, "references": references})
+        return payload
+
+    def record(self, request, op):
         with self.locked():
             key, existing = self.duplicate(op, {"kind": "record", "input": request})
             if existing:
                 return existing
-            self.active()
-            config = self.current_config()
-            kind, target = request["kind"], request["target"]
-            item = self.target(config["payload"], kind, target)
-            state = self.state()
-            if not self.dependencies_pass(item, kind, state):
-                fail("prerequisite gate is not passed")
-            references = {"report": self.reference(request["report"]), "evidence": [self.reference(e) for e in request["evidence"]]}
-            snapshot = self.snapshot(self.target_scope(config["payload"], kind, target))
-            result = request["result"]
-            if kind == "review":
-                shape(result, ("spec", "quality"), name="review result")
-                if any(v not in ("passed", "failed", "unknown") for v in result.values()):
-                    fail("invalid review result")
-                if not self.independent(request["actor"], item["tasks"]):
-                    fail("reviewer id/context participated in implementation")
-            elif result not in ("passed", "failed", "unknown"):
-                fail("invalid result")
-            pair = self.records(config).get((kind, target))
-            if pair and pair[1]["result"] != result:
-                if request.get("supersedes") != pair[0] or not request.get("reason", "").strip():
-                    fail("changed conclusion requires supersedes and reason")
-            if kind == "verification":
-                self.validate_verification(request, item, config, snapshot, references)
-            elif "run_operation" in request or "confirmation" in request:
-                fail("run_operation/confirmation are verification-only")
-            issues = request.get("issues", [])
-            resolutions = request.get("resolutions", [])
-            if not isinstance(issues, list) or not isinstance(resolutions, list):
-                fail("issues and resolutions must be arrays")
-            existing_issues = self.issues(config)
-            known_ids = set(existing_issues)
-            for issue in issues:
-                shape(issue, ("id", "summary", "severity", "blocking", "tasks"), name="issue")
-                for field in ("id", "summary", "severity"):
-                    text(issue[field], f"issue.{field}")
-                if type(issue["blocking"]) is not bool:
-                    fail("issue.blocking must be bool")
-                strings(issue["tasks"], "issue.tasks")
-                covered = {target} if kind == "implementation" else set(item["tasks"])
-                if not set(issue["tasks"]) <= covered:
-                    fail("issue tasks outside record scope")
-                if issue["id"] in known_ids:
-                    fail("issue id already exists; reference original and add explicit resolution")
-                known_ids.add(issue["id"])
-            resolution_ids = set()
-            for resolution in resolutions:
-                shape(resolution, ("id", "reason", "evidence"), name="resolution")
-                text(resolution["reason"], "resolution.reason")
-                original = existing_issues.get(resolution["id"])
-                if not original or original["owner_kind"] != kind or original["owner_target"] != target:
-                    fail("resolution must be by original finding capability and target")
-                if resolution["id"] in resolution_ids:
-                    fail("duplicate resolution")
-                resolution_ids.add(resolution["id"])
-                if not isinstance(resolution["evidence"], list) or not resolution["evidence"]:
-                    fail("resolution requires evidence")
-                references.setdefault("resolutions", []).append({"id": resolution["id"], "evidence": [self.reference(e) for e in resolution["evidence"]]})
-            passed = all(v == "passed" for v in result.values()) if isinstance(result, dict) else result == "passed"
-            blockers = [i for i in existing_issues.values() if i["blocking"] and i["status"] == "open" and i["owner_kind"] == kind and i["owner_target"] == target and i["id"] not in resolution_ids]
-            if passed and (blockers or any(i["blocking"] for i in issues)):
-                fail("passed result cannot hide unresolved blocking issues")
-            payload = {k: v for k, v in request.items() if k not in ("report", "evidence", "confirmation")}
-            payload.update({"config_op": config["op"], "snapshot": snapshot, "references": references})
+            payload = self.prepare_record(request)
             return self.append("record", op, key, payload)
 
     def validate_verification(self, request, item, config, snapshot, references):
@@ -791,7 +828,12 @@ class Engine:
                                                "exit_code": code, "timed_out": timed_out, "error": error,
                                                "stdout": self.blob(stdout), "stderr": self.blob(stderr)})
 
-    def close(self, request, op):
+    def prepare_close(self, request):
+        """Validate and materialize a close without appending it.
+
+        `check --preclose` reuses this exact judgement so the precheck and the
+        actual close cannot disagree about exceptions or required evidence.
+        """
         shape(request, ("schema_version", "contract_version", "actor", "mode", "summary", "report", "exceptions"))
         version(request)
         actor(request["actor"])
@@ -800,55 +842,58 @@ class Engine:
             fail("close mode must be complete or limited")
         if not isinstance(request["exceptions"], list):
             fail("exceptions must be array")
+        self.active()
+        config = self.current_config()
+        state = self.state()
+        if any(v["status"] != "passed" for group in ("implementation", "review") for v in state[group].values()):
+            fail("all implementations and independent reviews must pass")
+        exceptions = {}
+        for exception in request["exceptions"]:
+            shape(exception, ("acceptance", "scope", "risk", "authorization", "issues"), name="exception")
+            target = exception["acceptance"]
+            if target in exceptions:
+                fail("duplicate acceptance exception")
+            item = self.target(config["payload"], "verification", target)
+            if not item.get("waivable", False):
+                fail("non-waivable criterion")
+            if state["verification"][target]["status"] != "failed":
+                fail("only currently evidenced failed criteria can be excepted; not unknown/stale/pending")
+            text(exception["scope"], "exception.scope")
+            text(exception["risk"], "exception.risk")
+            strings(exception["issues"], "exception.issues", nonempty=False)
+            auth = exception["authorization"]
+            shape(auth, ("path", "quote", "by", "role"), name="exception authorization")
+            if auth["role"] != "human":
+                fail("exception requires actual human authorization")
+            text(auth["by"], "authorization.by")
+            reference = {**self.reference({k: auth[k] for k in ("path", "quote")}, True), "by": auth["by"], "role": "human"}
+            for issue_id in exception["issues"]:
+                issue = state["issues"].get(issue_id)
+                if not issue or issue["owner_kind"] != "verification" or issue["owner_target"] != target:
+                    fail("exception issue must belong to the excepted verification")
+            exceptions[target] = {**exception, "authorization": reference,
+                                  "verification_operation": state["verification"][target]["operation_id"]}
+        if request["mode"] == "complete" and exceptions:
+            fail("complete cannot have exceptions")
+        if request["mode"] == "limited" and not exceptions:
+            fail("limited requires explicit exceptions")
+        for item in config["payload"]["spec"]["acceptance"]:
+            if item["required"] and state["verification"][item["id"]]["status"] != "passed" and item["id"] not in exceptions:
+                fail(f"required acceptance is not passed: {item['id']}")
+        allowed_issues = {issue for exception in exceptions.values() for issue in exception["issues"]}
+        if any(i["blocking"] and i["status"] == "open" and i["id"] not in allowed_issues for i in state["issues"].values()):
+            fail("unresolved blocking issue")
+        report = self.reference(request["report"])
+        return {"mode": request["mode"], "actor": request["actor"], "summary": request["summary"],
+                "report": report, "config_op": config["op"], "exceptions": list(exceptions.values()), "state": state}
+
+    def close(self, request, op):
         with self.locked():
             key, existing = self.duplicate(op, {"kind": "close", "input": request})
             if existing:
                 return existing
-            self.active()
-            config = self.current_config()
-            state = self.state()
-            if any(v["status"] != "passed" for group in ("implementation", "review") for v in state[group].values()):
-                fail("all implementations and independent reviews must pass")
-            exceptions = {}
-            for exception in request["exceptions"]:
-                shape(exception, ("acceptance", "scope", "risk", "authorization", "issues"), name="exception")
-                target = exception["acceptance"]
-                if target in exceptions:
-                    fail("duplicate acceptance exception")
-                item = self.target(config["payload"], "verification", target)
-                if not item.get("waivable", False):
-                    fail("non-waivable criterion")
-                if state["verification"][target]["status"] != "failed":
-                    fail("only currently evidenced failed criteria can be excepted; not unknown/stale/pending")
-                text(exception["scope"], "exception.scope")
-                text(exception["risk"], "exception.risk")
-                strings(exception["issues"], "exception.issues", nonempty=False)
-                auth = exception["authorization"]
-                shape(auth, ("path", "quote", "by", "role"), name="exception authorization")
-                if auth["role"] != "human":
-                    fail("exception requires actual human authorization")
-                text(auth["by"], "authorization.by")
-                reference = {**self.reference({k: auth[k] for k in ("path", "quote")}, True), "by": auth["by"], "role": "human"}
-                for issue_id in exception["issues"]:
-                    issue = state["issues"].get(issue_id)
-                    if not issue or issue["owner_kind"] != "verification" or issue["owner_target"] != target:
-                        fail("exception issue must belong to the excepted verification")
-                exceptions[target] = {**exception, "authorization": reference,
-                                      "verification_operation": state["verification"][target]["operation_id"]}
-            if request["mode"] == "complete" and exceptions:
-                fail("complete cannot have exceptions")
-            if request["mode"] == "limited" and not exceptions:
-                fail("limited requires explicit exceptions")
-            for item in config["payload"]["spec"]["acceptance"]:
-                if item["required"] and state["verification"][item["id"]]["status"] != "passed" and item["id"] not in exceptions:
-                    fail(f"required acceptance is not passed: {item['id']}")
-            allowed_issues = {issue for exception in exceptions.values() for issue in exception["issues"]}
-            if any(i["blocking"] and i["status"] == "open" and i["id"] not in allowed_issues for i in state["issues"].values()):
-                fail("unresolved blocking issue")
-            report = self.reference(request["report"])
-            return self.append("close", op, key, {"mode": request["mode"], "actor": request["actor"],
-                                                 "summary": request["summary"], "report": report,
-                                                 "config_op": config["op"], "exceptions": list(exceptions.values()), "state": state})
+            payload = self.prepare_close(request)
+            return self.append("close", op, key, payload)
 
     def reopen(self, reason, op):
         text(reason, "reason")
@@ -891,6 +936,99 @@ def read_json(path):
         fail(f"cannot read input JSON: {exc}")
 
 
+WRITE_COMMANDS = {"init", "configure", "record", "run", "close", "reopen", "gate", "impact",
+                  "source-update", "resource", "attempt", "resolve-run", "enable-fix", "verify", "verify-batch"}
+REJECTED_LIMIT = 10 * 1024 * 1024
+
+
+def read_rejections(path):
+    records, bad = [], []
+    path = Path(path)
+    if not path.is_file() or path.is_symlink():
+        return records, bad
+    for number, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except ValueError:
+            bad.append(number)
+            continue
+        if not isinstance(value, dict) or "id" not in value or "op" not in value:
+            bad.append(number)
+            continue
+        records.append(value)
+    return records, bad
+
+
+def redact_rejection(message, project=None):
+    message = str(message)
+    if project:
+        root = str(project).rstrip("/")
+        message = message.replace(root + "/", "").replace(root, ".")
+    message = re.sub(
+        r"(?i)([\"']?(?:token|password|passwd|secret|api[_-]?key)[\"']?\s*[:=]\s*)"
+        r"(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)",
+        r"\1<redacted>", message)
+    return message[:500]
+
+
+def record_rejection(work, command, op, actor_value, request, exc):
+    """Append one rejection line without changing the command outcome."""
+    runtime = Path(work) / "runtime"
+    if runtime.is_symlink() or not runtime.is_dir():
+        return None
+    path = runtime / "rejected.jsonl"
+    if path.is_symlink():
+        print("rejected log is a symlink; refusal not recorded", file=sys.stderr)
+        return None
+    project = None
+    try:
+        project = json.loads((runtime / "journal.json").read_text()).get("project")
+    except (OSError, ValueError):
+        pass
+    request_hash = digest(canonical(request)) if request is not None else digest(b"")
+    code = "io_error" if isinstance(exc, OSError) else getattr(exc, "code", "invalid_request")
+    seed = {"command": command, "op": op, "request_hash": request_hash, "error_code": code}
+    identity = digest(canonical(seed))
+    try:
+        records, bad = read_rejections(path)
+    except OSError as exc:
+        print(f"rejected log read failed: {exc}", file=sys.stderr)
+        return None
+    root, attempt = identity, 1
+    for value in records:
+        if value.get("op") == op and value.get("request_hash") == request_hash and value.get("error_code") == code:
+            root = value.get("retry_of") or value.get("id") or identity
+            attempts = [v.get("attempt", 0) for v in records if (v.get("id") == root or v.get("retry_of") == root)]
+            attempt = max(attempts or [0]) + 1
+            break
+    record = {"id": identity, "at": now(), "command": command, "op": op,
+              "actor": actor_value if isinstance(actor_value, dict) else None,
+              "request_hash": request_hash, "error_code": code,
+              "error_message": redact_rejection(exc, project), "work": str(work),
+              "attempt": attempt, "retry_of": None if attempt == 1 else root}
+    line = (json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n").encode()
+    try:
+        if path.exists() and path.stat().st_size >= REJECTED_LIMIT:
+            os.replace(path, path.with_name("rejected.jsonl.1"))
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        try:
+            os.write(fd, line)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        dfd = os.open(runtime, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError as log_error:
+        print(f"rejected log write failed: {log_error}", file=sys.stderr)
+        return None
+    return record
+
+
 def render_markdown(value):
     """Render the same result object; no second readiness calculation."""
     lines = ["# Delivery 状态视图", ""]
@@ -919,26 +1057,43 @@ def render_markdown(value):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
+    read_only = {"status", "check", "next", "source", "brief", "preflight", "guard", "doctor"}
+    with_input = {"configure", "record", "close", "gate", "impact", "source-update", "resource",
+                  "attempt", "resolve-run", "enable-fix", "verify-batch"}
     for name in ("init", "configure", "record", "run", "status", "check", "next", "close", "reopen",
-                 "gate", "impact", "source-update", "resource", "attempt", "resolve-run", "source", "brief", "enable-fix"):
+                 "gate", "impact", "source-update", "resource", "attempt", "resolve-run", "source",
+                 "brief", "enable-fix", "preflight", "guard", "verify-batch", "doctor"):
         p = sub.add_parser(name)
         p.add_argument("--work", required=True)
-        if name not in ("status", "check", "next", "source", "brief"):
+        if name not in read_only:
             p.add_argument("--op", required=True)
-        if name in ("configure", "record", "close", "gate", "impact", "source-update", "resource", "attempt", "resolve-run", "enable-fix"):
+        if name in with_input:
             p.add_argument("--input", required=True)
         if name == "init":
             p.add_argument("--project", required=True)
             p.add_argument("--title", required=True)
             p.add_argument("--contract-version", type=int, choices=(1, 2), default=1)
-        if name in ("status", "check", "next", "source", "brief"):
+        if name in ("status", "check", "next", "source", "brief", "preflight", "guard", "doctor"):
             p.add_argument("--format", choices=("json", "markdown"), default="json")
+        if name == "status":
+            p.add_argument("--write-status", action="store_true")
+        if name == "check":
+            p.add_argument("--preclose", action="store_true")
+            p.add_argument("--input")
         if name == "source":
             p.add_argument("--restore")
             p.add_argument("--destination")
         if name == "brief":
             p.add_argument("--kind", choices=("implementation", "review", "verification"), required=True)
             p.add_argument("--target", required=True)
+        if name == "guard":
+            p.add_argument("--kind", choices=("task", "review", "verification"), required=True)
+            p.add_argument("--target", required=True)
+            p.add_argument("--actor")
+            p.add_argument("--context")
+        if name == "preflight":
+            p.add_argument("--project", required=True)
+            p.add_argument("--high-yield-threshold", type=int, default=1000)
         if name == "run":
             p.add_argument("--acceptance", required=True)
             p.add_argument("--actor", required=True)
@@ -947,6 +1102,21 @@ def main(argv=None):
         if name == "reopen":
             p.add_argument("--reason", required=True)
     args = parser.parse_args(argv)
+    request = None
+    actor_value = None
+    if args.command == "preflight":
+        try:
+            from delivery_monitor import preflight
+            result = preflight(args.project, args.work, args.high_yield_threshold)
+        except (DeliveryError, OSError, ValueError) as exc:
+            print(json.dumps({"error": str(exc), "code": getattr(exc, "code", "invalid_request")},
+                             ensure_ascii=False), file=sys.stderr)
+            return 2
+        if args.format == "markdown":
+            print(render_markdown(result))
+        else:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
     try:
         contract = args.contract_version if args.command == "init" else None
         journal = Path(args.work) / "runtime" / "journal.json"
@@ -958,6 +1128,19 @@ def main(argv=None):
             contract = existing_contract
         if contract not in (1, 2):
             fail("unsupported work contract or work not initialized")
+        if args.command == "init":
+            request = {"kind": "init", "project": args.project, "title": args.title}
+        elif args.command in with_input:
+            request = read_json(args.input)
+        elif args.command == "run":
+            request = {"kind": "run", "acceptance": args.acceptance, "timeout": args.timeout,
+                       "actor": {"id": args.actor, "context": args.context}}
+        elif args.command == "reopen":
+            request = {"kind": "reopen", "reason": args.reason}
+        elif args.command == "check" and args.input:
+            request = read_json(args.input)
+        if isinstance(request, dict):
+            actor_value = request.get("actor")
         if contract == 2:
             # Adding scripts locally is sufficient for the standalone CLI; tests
             # importing this file by spec retain the original v1 class identity.
@@ -968,13 +1151,21 @@ def main(argv=None):
             engine = EngineV2(args.work)
         else:
             engine = Engine(args.work)
-        extras = {"gate", "impact", "source-update", "resource", "attempt", "resolve-run", "source", "brief", "enable-fix"}
+        extras = {"gate", "impact", "source-update", "resource", "attempt", "resolve-run", "source",
+                  "brief", "enable-fix", "guard", "verify-batch", "doctor"}
         if args.command in extras and contract != 2:
             fail("command requires explicit v2 work; v1 is not silently upgraded")
+        if args.command == "check" and args.preclose and contract != 2:
+            fail("command requires explicit v2 work; v1 is not silently upgraded")
+        if args.command == "status" and args.write_status and contract != 2:
+            fail("command requires explicit v2 work; v1 is not silently upgraded")
+        status_code = 0
         if args.command == "init":
             result = engine.init(args.project, args.title, args.op)
+        elif args.command == "verify-batch":
+            result = engine.verify_batch(request, args.op)
         elif args.command in ("configure", "record", "close", "gate", "impact", "source-update", "resource", "attempt", "resolve-run", "enable-fix"):
-            result = getattr(engine, args.command.replace("-", "_"))(read_json(args.input), args.op)
+            result = getattr(engine, args.command.replace("-", "_"))(request, args.op)
         elif args.command == "run":
             result = engine.run(args.acceptance, {"id": args.actor, "context": args.context}, args.timeout, args.op)
         elif args.command == "reopen":
@@ -983,17 +1174,34 @@ def main(argv=None):
             result = engine.source(args.restore, args.destination)
         elif args.command == "brief":
             result = engine.brief(args.kind, args.target)
+        elif args.command == "guard":
+            who = {"id": args.actor, "context": args.context} if args.actor and args.context else None
+            result = engine.guard(args.kind, args.target, who)
+            status_code = 0 if result["ready"] else 1
+        elif args.command == "doctor":
+            result = engine.doctor()
+        elif args.command == "status" and args.write_status:
+            result = engine.write_status()
+        elif args.command == "check" and args.preclose:
+            result = engine.preclose(request)
+            status_code = 0 if result["ready"] else 1
         else:
             result = engine.inspect(args.command)
             if contract == 1:
                 result["contract_version"] = 1
+        warnings = getattr(engine, "last_warnings", None)
+        if warnings:
+            print(json.dumps({"warnings": warnings}, ensure_ascii=False), file=sys.stderr)
         if getattr(args, "format", "json") == "markdown":
             print(render_markdown(result))
         else:
             print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0
-    except (DeliveryError, OSError, ValueError, KeyError, TypeError) as exc:
-        print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
+        return status_code
+    except (DeliveryError, OSError, ValueError, KeyError, TypeError, AttributeError, IndexError) as exc:
+        if args.command in WRITE_COMMANDS:
+            logged = exc if isinstance(exc, (DeliveryError, OSError)) else DeliveryError(str(exc), "internal_error")
+            record_rejection(args.work, args.command, getattr(args, "op", None) or "", actor_value, request, logged)
+        print(json.dumps({"error": str(exc), "code": getattr(exc, "code", "invalid_request")}, ensure_ascii=False), file=sys.stderr)
         return 2
 
 

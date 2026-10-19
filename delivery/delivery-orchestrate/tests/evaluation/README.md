@@ -53,6 +53,21 @@ macOS 适配使用 `sandbox-exec` 的 allow-default 加 deny-file-read 规则包
 
 准备命令只需把 `--case` 换成相应自然案例，`--skills-root delivery` 不变。自然运行必须显式选择 `--sandbox-strategy external-seatbelt --required-isolation filesystem`，并照常提供 `--private-dir` / `--deny-read-dir`；不支持用 exec 或仅目录分离绕过原生 catalog 审计。当前实现仅供给七包，没有为可选 delve 新增多根来源解析。
 
+## P0–P2 新增待评测行为
+
+以下行为已有确定性单元测试，但还没有真实模型运行记录；在运行并独立评审前不得写成已验证：
+
+| 行为 | 期望 | 证据 |
+| --- | --- | --- |
+| 门禁前置 | 第一次编辑产品文件前运行 guard；未过 gate 不开始实现 | 工具轨迹、实施记录中的 guard 结果、文件 mtime/内容 |
+| 批准版本只读 | gate 后 plan/design 不再被编辑；范围变化走新版本 + re-gate | 文件 hash、gate source_hashes、check --preclose |
+| 任务切片 | 派发材料来自 brief + 章节路径，不粘贴整份 plan/design | 委派输入与上下文 usage |
+| 批量验收 | 多项 verify 一次提交，全批成功或全批不写；manual pending 不假通过 | verify-batch 事件、journal 事件数、失败注入 |
+| 拒绝留痕 | 被拒写命令在 rejected.jsonl 有首条 + retry 关联；只读命令不记录 | rejected 行、doctor 输出 |
+| 计划内 exclude 迁移 | preflight 确认后只改 exclude，reuse_gates 通过且 change_review 新做 | configure 事件、reused_gates、change_review 报告 |
+
+prepare 复制的是快照，评测期间修改源码不会改变已准备输入；新结论必须注明 skill 版本与运行时间。
+
 在任何模型 turn 前，运行器核对 prepare 留存的完整技能快照、冻结元数据策略、本机导出的 schema 和实际 `skills/list`。本组 `agents/openai.yaml` 的隐式策略接受 `true` 或缺省，`false`、重复字段和不支持的策略语法拒绝。检查器使用明确受限的 YAML 拼写检查，不是通用 YAML 解析器；现有界面与依赖字段保留。原生 catalog 的 enabled 不代表 allow_implicit_invocation，故两者分开核对，并将内容摘要绑定到本次审计。
 
 为避免本机同名安装成为另一份输入，app-server 仅在本进程的 `-c skills.config=...` 中保留实际用户配置已有规则，再依次禁用七包名称并启用七个冻结精确路径；同时显式 `skills.include_instructions=true`。不调用 `skills/config/write`，不修改真实配置文件。当前适配拒绝自定义 provider/profile；本机所核对源码的 skill 规则只取用户与启动覆盖层，项目层不参与此规则集。仍须由实际启动目录核实规则生效，未知客户端或配置层语义不能凭声明放行。

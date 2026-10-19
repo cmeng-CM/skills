@@ -37,7 +37,7 @@ class RecoveryMixin:
         if not live:
             return True
         try:
-            inventory = self.inventory(config["payload"])
+            inventory = self.inventory_snapshot(config)["inventory"]
             return (not inventory["unsupported"] and inventory["hash"] == p["inventory_hash"]
                     and self.snapshot(p["snapshot"]["scopes"])["hash"] == p["snapshot"]["hash"])
         except (DeliveryError, ValueError, OSError):
@@ -185,7 +185,7 @@ class RecoveryMixin:
             snapshot = self.snapshot(start["payload"]["before"]["scopes"])
             return self.append("run-resolution", op, key, {**request, "config_op": config["op"],
                                 "references": self.report_references(request), "snapshot": snapshot,
-                                "inventory_hash": self.inventory(config["payload"])["hash"]})
+                                "inventory_hash": self.inventory_snapshot(config)["inventory"]["hash"]})
 
     def investigate_run(self, request, op):
         self.validate_extra(request, ("run_operation", "report", "evidence", "decision", "reason", "recovery_contract_version"))
@@ -206,7 +206,7 @@ class RecoveryMixin:
             if not start or any(e["kind"] == "run" and e["op"] == start["op"] for e in self.data["events"]):
                 fail("investigation requires a real incomplete run-started")
             self.target(config["payload"], "verification", start["payload"]["acceptance"])
-            inventory = self.inventory(config["payload"])
+            inventory = self.inventory_snapshot(config)["inventory"]
             if inventory["unsupported"] and request["decision"] == "safe_to_replan":
                 fail("unsupported scene entries prevent safe investigation")
             return self.append("run-investigation", op, key, {**request, "config_op": config["op"],
@@ -299,11 +299,20 @@ class RecoveryMixin:
             result = {"kind": kind, "target": target, "definition": item, "tasks": tasks,
                     "requirements": [r for r in config["payload"]["requirements"] if set(r["tasks"]) & set(tasks)],
                     "required_sources": config["payload"]["sources"],
+                    "source_sections": {name: {"path": value["path"], "quote": value.get("quote")}
+                                        for name, value in config["payload"]["sources"].items()
+                                        if isinstance(value, dict) and "path" in value},
                     "skill_pins": {name: {k: value for k, value in pin.items() if k != "files"} for name, pin in self.effective_pins(config).items()}, "excluded_implementation_authors": authors,
                     "writable_scope": self.target_scope(config["payload"], kind, target) if kind == "implementation" else [],
                     "resources": self.required_resources(config, kind, target),
                     "report_location": {"implementation": "implementation/", "review": "review/", "verification": "verification/"}[kind],
                     "state": state, "note": "Read full referenced requirements and constraints; this derived brief is not a second task authority."}
+            if kind == "implementation":
+                guard = self._guard_info(config, state, kind, target)
+                result["guard"] = {"ready": guard["ready"], "blocked_reasons": guard["blocked_reasons"]}
+                if not guard["ready"]:
+                    fail("implementation brief blocked by guard: " + "; ".join(guard["blocked_reasons"]),
+                         "dependency_not_ready")
             if self.fix_enabled():
                 result["skill"] = self.activity_skill(config, kind, target)
                 if kind == "implementation":

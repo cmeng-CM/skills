@@ -43,6 +43,8 @@
 
 专业正文与证据说明是可读 Markdown。编排 JSON 绑定特定版本，不能成为另一份随意改动的需求真源。新流程明确采用编排契约 2；既有 v1 仍用原规则续接。版本入口、命令与例子见编排包的 [API 导航](delivery-orchestrate/references/runtime-api.md)和[契约 2](delivery-orchestrate/references/runtime-api-v2.md)。
 
+新工作首次配置前先运行只读 `preflight`，确认后把依赖/生成目录写进显式 `monitor.exclude`。`configure` 的 baseline 与 `impact` 的 inventory 存为 content-addressed snapshot 对象，日志只留引用；首次写引用时日志容器升到 schema 2，旧工作保持 schema 1，回滚靠 `runtime/journal.schema1.bak`（有损）。第一次编辑产品文件前运行 `guard`；执行状态用 `status --write-status` 写入派生视图 `status.md`，人工补充区不参与门禁。收尾顺序为 `check --preclose` → `close`（报告固定为 work 下 `closeout.md`）→ 写 `status.md`/`closeout.md`；`doctor` 只读检查未匹配 admission、拒绝日志、状态视图、证据与回滚点，`verify-batch` 支持一次原子登记多项验收。
+
 组合中的实施任务默认使用 `delivery-implement`；根因不明、偶发或反复修复失败的故障可以选择 `delivery-fix`，也可从原实施任务转交。fix 产物直接作为该任务的实施报告接纳，再进入原有独立审查和验收，不重复生成 implementation 正文。编排契约仍为 2，fix 的可选接入须显式启用实施子契约 1，详见 [可选复杂修复接入](delivery-orchestrate/references/runtime-api-v2.md#可选复杂修复接入实施子契约-1)。
 
 同一 bug 的所有轮次与证据放在 `.delivery/创建日期-主题/fixes/BUG-001-问题简述/`，由 `index.md` 导航，`001/fix.md`、`001/evidence/` 等按轮次保存。跨日期、会话、agent 和复发沿用 bug 目录；新任务引用既有目录，不复制历史。审查与验证仍保存各自报告；正式接纳绑定具体轮次而不是最新入口。

@@ -1,9 +1,106 @@
 """Project inventory, explicit impact and cooperative resources for delivery v2."""
+import json
 import os
 from pathlib import Path
 import stat
 
 from delivery import canonical, digest, fail, safe_path, shape, strings, text
+
+
+DEPENDENCY_NAMES = {"node_modules", ".venv", "venv", "vendor", "target", "Pods", ".gradle", ".m2",
+                    ".pnpm-store", "__pycache__", ".tox", ".nox"}
+GENERATED_NAMES = {"dist", "build", "out", ".next", ".nuxt", ".svelte-kit", ".turbo", ".parcel-cache",
+                   "coverage", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".cache"}
+
+
+def _directory_size(path):
+    files = total = 0
+    errors = []
+    stack = [path]
+    while stack:
+        current = stack.pop()
+        try:
+            children = list(current.iterdir())
+        except OSError as exc:
+            errors.append({"path": current.as_posix(), "error": str(exc)})
+            continue
+        for child in children:
+            try:
+                info = child.lstat()
+            except OSError as exc:
+                errors.append({"path": child.as_posix(), "error": str(exc)})
+                continue
+            if stat.S_ISLNK(info.st_mode):
+                continue
+            if stat.S_ISDIR(info.st_mode):
+                stack.append(child)
+            elif stat.S_ISREG(info.st_mode):
+                files += 1
+                total += info.st_size
+    return files, total, errors
+
+
+def preflight(project, work, threshold=1000):
+    """Suggest explicit monitor exclusions without reading file contents or state."""
+    project = Path(project).absolute()
+    if not project.is_dir():
+        fail("project must be an existing directory")
+    work_path = Path(work).absolute()
+    try:
+        work_relative = work_path.relative_to(project).as_posix()
+    except ValueError:
+        fail("work must be inside project")
+    candidates, unreadable, seen = [], [], set()
+
+    def visit(path):
+        try:
+            children = sorted(path.iterdir())
+        except OSError as exc:
+            unreadable.append({"path": path.relative_to(project).as_posix(), "error": str(exc)})
+            return
+        for child in children:
+            relative = child.relative_to(project).as_posix()
+            if relative == ".git" or relative == work_relative:
+                continue
+            try:
+                info = child.lstat()
+            except OSError as exc:
+                unreadable.append({"path": relative, "error": str(exc)})
+                continue
+            if stat.S_ISLNK(info.st_mode):
+                continue
+            if not stat.S_ISDIR(info.st_mode):
+                continue
+            name = child.name
+            kind = None
+            evidence = None
+            if name in DEPENDENCY_NAMES or (name == "cache" and child.parent.name == ".yarn"):
+                kind, evidence = "dependency", "conventional dependency/install directory"
+            elif name in GENERATED_NAMES:
+                kind, evidence = "generated", "conventional generated/cache directory"
+            if kind and relative not in seen:
+                files, total, errors = _directory_size(child)
+                seen.add(relative)
+                for error in errors:
+                    try:
+                        error["path"] = Path(error["path"]).relative_to(project).as_posix()
+                    except ValueError:
+                        pass
+                unreadable.extend(errors)
+                candidates.append({"path": relative, "kind": kind, "files": files, "bytes": total,
+                                   "high_yield": files >= threshold, "evidence": evidence,
+                                   "confirmation_required": kind == "generated",
+                                   "reason": ("Dependency/install output; exclude only if it contains no vendored product source."
+                                              if kind == "dependency" else
+                                              "Generated/cache output; confirm it is reproducible and not product source.")})
+                continue
+            visit(child)
+
+    visit(project)
+    candidates.sort(key=lambda item: (-item["bytes"], item["path"]))
+    return {"project": str(project), "work": work_relative, "threshold": threshold,
+            "candidates": candidates, "unreadable": unreadable,
+            "note": "Read-only suggestion. Confirm entries and add them to monitor.exclude; nothing was changed."}
 
 
 def overlaps(a, b):
@@ -75,7 +172,11 @@ class MonitorMixin:
         return {"entries": entries, "hash": digest(canonical(entries)), "unsupported": unsupported}
 
     def impact_state(self, config):
-        baseline = config["payload"]["monitor_baseline"]
+        return self.impact_state_with(config, self.inventory(config["payload"]))
+
+    def impact_state_with(self, config, current):
+        """Derive impact information from a supplied inventory snapshot."""
+        baseline = self.load_snapshot(config["payload"]["monitor_baseline"])
         invalid = [op for e in self.data["events"] if e["kind"] in ("impact", "source-update") and e["payload"].get("config_op") == config["op"] for op in e["payload"].get("invalidated_operations", [])]
         extra = {key: set(paths) for key, paths in config["payload"].get("inherited_context", {}).items()}
         for event in self.data["events"]:
@@ -90,21 +191,54 @@ class MonitorMixin:
                 # An invalid judgement cannot hide an earlier unassessed change.
                 if not self.references_current(p["references"]):
                     continue
+                judged = self.load_snapshot(p["inventory"])
                 bound_baseline = p.get("baseline_hash")
                 if bound_baseline is None:
                     # Read earlier v2 events conservatively: their change-set
                     # identity must prove complete coverage from this baseline.
-                    bound = self.outside_changes(config, baseline, p["inventory"])
+                    bound = self.outside_changes(config, baseline, judged)
                     linked = digest(canonical(bound)) == p["change_set_hash"]
                 else:
                     linked = bound_baseline == baseline["hash"]
                 if not linked:
                     continue
-                baseline = p["inventory"]
-        current = self.inventory(config["payload"])
+                baseline = judged
         changes = self.outside_changes(config, baseline, current)
         return {"changes": changes, "change_set_hash": digest(canonical(changes)), "inventory": current,
                 "baseline_hash": baseline["hash"], "invalidated": set(invalid), "extra_context": extra}
+
+    def store_snapshot(self, entries, unsupported):
+        data = canonical({"entries": entries, "unsupported": unsupported})
+        stored = self.blob(data)
+        return {"object_hash": stored["object_hash"], "entries_hash": digest(canonical(entries)),
+                "entries_count": len(entries), "bytes": stored["bytes"]}
+
+    def load_snapshot(self, value):
+        if not isinstance(value, dict):
+            fail("invalid snapshot reference")
+        if "object_hash" in value:
+            key = value["object_hash"]
+            path = self.runtime / "objects" / key
+            if path.is_symlink() or not path.is_file() or digest(path.read_bytes()) != key:
+                fail("snapshot object is missing or corrupted; reconfigure or reimpact")
+            if value.get("bytes") is not None and value["bytes"] != path.stat().st_size:
+                fail("snapshot object size mismatch; reconfigure or reimpact")
+            try:
+                stored = json.loads(path.read_text())
+            except (OSError, ValueError):
+                fail("snapshot object cannot be decoded; reconfigure or reimpact")
+            shape(stored, ("entries", "unsupported"), name="snapshot object")
+            if not isinstance(stored["entries"], dict) or not isinstance(stored["unsupported"], list):
+                fail("snapshot object has invalid shape; reconfigure or reimpact")
+            entries_hash = digest(canonical(stored["entries"]))
+            if entries_hash != value.get("entries_hash"):
+                fail("snapshot entries hash mismatch")
+            if value.get("entries_count") != len(stored["entries"]):
+                fail("snapshot entry count mismatch")
+            return {"entries": stored["entries"], "hash": entries_hash, "unsupported": stored["unsupported"]}
+        if "entries" in value and "hash" in value:
+            return {"entries": value["entries"], "hash": value["hash"], "unsupported": value.get("unsupported", [])}
+        fail("invalid snapshot reference")
 
     def outside_changes(self, config, baseline, current):
         declared = []
@@ -179,7 +313,9 @@ class MonitorMixin:
             if sorted(covered) != sorted(c["path"] for c in current["changes"]):
                 fail("decisions must cover every current external change exactly once")
             return self.append("impact", op, key, {**request, "config_op": config["op"],
-                                "references": self.report_references(request), "inventory": current["inventory"], "baseline_hash": current["baseline_hash"],
+                                "references": self.report_references(request),
+                                "inventory": self.store_snapshot(current["inventory"]["entries"], current["inventory"]["unsupported"]),
+                                "baseline_hash": current["baseline_hash"],
                                 "extra_context": extra, "invalidated_operations": self.invalidations(config, targets)})
 
     def held_resources(self):
@@ -228,7 +364,7 @@ class MonitorMixin:
                 if request["action"] == "claim":
                     for h in held:
                         if self.resource_overlap(h["id"], resource["id"]) and not self.same_actor(h["actor"], request["actor"], exact=True) and "write" in (h["mode"], resource["mode"]):
-                            fail("resource conflict; explicit owner release required")
+                            fail("resource conflict; explicit owner release required", "resource_conflict")
             return self.append("resource", op, key, request)
 
     def required_resources(self, config, kind, target):
@@ -245,9 +381,9 @@ class MonitorMixin:
         held = self.held_resources()
         if kind == "close":
             if any(h["mode"] == "write" for h in held):
-                fail("close requires writer resources to be returned")
+                fail("close requires writer resources to be returned", "resource_conflict")
             return
         for needed in self.required_resources(config, kind, target):
             compatible = [h for h in held if h["id"] == needed["id"] and self.same_actor(h["actor"], who, exact=True) and (h["mode"] == "write" or needed["mode"] == "read")]
             if not compatible:
-                fail("activity requires owned resource: " + needed["id"] + ":" + needed["mode"])
+                fail("activity requires owned resource: " + needed["id"] + ":" + needed["mode"], "resource_conflict")
