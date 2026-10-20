@@ -317,6 +317,30 @@ attempt 命令保存版本、actor、config_operation、target=`{kind,id}`、fai
 
 status/check/next/brief/source 均提供可追溯恢复入口；只读视图可选 `--format markdown|json`，同一结果对象生成。init 后未配置明确提示 configure required；日志或对象损坏 fail closed，不删失败事件或重算哈希链“修好”。
 
+## 7.1 可选审查批次协议 2
+
+需要“批次一次逻辑审查 + 一次最终整体审查”的多任务交付可显式启用 review_protocol=2；不设置时完全沿用现有单/多 review 行为。
+
+~~~json
+{
+  "review_protocol": 2,
+  "reviews": [
+    {"id": "R1", "tasks": ["T1", "T2"], "whole": false, "depends": []},
+    {"id": "R2", "tasks": ["T3", "T4"], "whole": false, "depends": []},
+    {"id": "R3", "tasks": ["T1", "T2", "T3", "T4"], "whole": true,
+     "depends": [{"kind": "review", "id": "R1"}, {"kind": "review", "id": "R2"}]}
+  ]
+}
+~~~
+
+协议 2 要求 Git worktree 根和至少一个提交；首次 configure 捕获基础提交并写入 base_commit，后续重配置只能继承，不能重捕获。配置必须恰有一个 whole final、至少一个非 whole 批次、每个任务恰属一个批次、批次不重叠、final 直接依赖全部批次。legacy 工作已有 implementation 时不能事后启用协议 2。
+
+批次审查在批次任务全部 record passed、测试通过、review_commit 已提交后进行一次；批次只读可并行，record 仍串行。final 审查必须等全部批次 passed，校验每个批次 review_commit 是 final 祖先、base_commit 等于 configure base 且严格早于所有批次、当前 HEAD 等于 final review_commit、产品工作树干净、diff 非空。final 审查者不得是实现者或任何历史批次审查者；record/guard/state 共用判定，final 后新提交或批次重录使 final stale。
+
+review record 新增 review_commit/base_commit 字段（协议 2 必填），只对 review_protocol=2 强制。批次的审查包可裁剪到批次 scope；final 审查包必须含完整 design/plan/关键决策/全局约束、需求与验收清单、base..head 完整 diff、实现测试证据、验收命令和验证计划。独立验证在终审后执行，不在终审包内。
+
+回退不在当前协议 2 工作内改协议：新开 linked 单 review 工作，旧 review 记录只读保留；受影响结论在新工作重做或原工作按协议 2 完成，不能回填为已通过。
+
 ## 8 收尾及证据限度
 
 close 请求沿用 v1 的 actor/mode/summary/report/exceptions，版本为 2/2。`report.path` 必须指向 work 目录下固定的 `closeout.md`；它是 close 报告，不是 gate 事实源。close 在同一请求上重跑 `check --preclose` 的阻塞判定，并校验新准入、源漂移、范围外判断、资源、未知运行、诊断和原实施/独立审查/验收门禁；重放已接受的 close op 仍返回原事件。close 后写入拒绝，显式 reopen 留存原 close 事实。

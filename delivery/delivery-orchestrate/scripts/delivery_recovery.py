@@ -307,6 +307,13 @@ class RecoveryMixin:
                     "resources": self.required_resources(config, kind, target),
                     "report_location": {"implementation": "implementation/", "review": "review/", "verification": "verification/"}[kind],
                     "state": state, "note": "Read full referenced requirements and constraints; this derived brief is not a second task authority."}
+            if kind == "review":
+                protocol = config["payload"].get("review_protocol")
+                result["review_protocol"] = protocol
+                result["review_role"] = ("legacy" if protocol != 2 else ("final" if item["whole"] else "batch"))
+                if protocol == 2 and item["whole"]:
+                    result["review_dependencies"] = list(item.get("depends", []))
+                    result["excluded_review_authors"] = self.review_actors(config, item)
             if kind == "implementation":
                 guard = self._guard_info(config, state, kind, target)
                 result["guard"] = {"ready": guard["ready"], "blocked_reasons": guard["blocked_reasons"]}

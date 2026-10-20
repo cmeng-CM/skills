@@ -377,6 +377,111 @@ class OperationsCase(OperationsFixture, unittest.TestCase):
         self.assertEqual(first["op"], second["op"])
         self.assertEqual(len(self.engine.data["events"]), before)
 
+    def git(self, *args):
+        return subprocess.run(["git", *args], cwd=self.project, check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    def init_review_git(self):
+        self.git("init", "-q")
+        self.write("src/main.txt", "base\n")
+        self.git("add", "src/main.txt", "plan.md", "authorization.md")
+        self.git("-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid",
+                  "commit", "-q", "-m", "baseline")
+        return self.git("rev-parse", "HEAD")
+
+    def commit_product(self, content):
+        self.write("src/main.txt", content)
+        self.git("add", "src/main.txt")
+        self.git("-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid",
+                  "commit", "-q", "-m", "implementation")
+        return self.git("rev-parse", "HEAD")
+
+    def protocol2_config(self):
+        self.config["review_protocol"] = 2
+        self.config["reviews"] = [
+            {"id": "R1", "tasks": ["T1"], "whole": False, "depends": []},
+            {"id": "R2", "tasks": ["T1"], "whole": True,
+             "depends": [{"kind": "review", "id": "R1"}]}]
+
+    def test_review_protocol2_reconfigure_preserves_base(self):
+        base = self.init_review_git()
+        self.protocol2_config()
+        self.admitted()
+        self.commit_product("changed\n")
+        self.record()
+        self.record("review", "R1", review_commit=self.git("rev-parse", "HEAD"), base_commit=base)
+        config = copy.deepcopy(self.config)
+        config["change"] = {"category": "organization", "reason": "Only review organization changed",
+                            "previous_config": self.configuration["op"]}
+        new = self.engine.configure(config, self.op())
+        self.assertEqual(new["payload"]["base_commit"], base)
+        config.pop("review_protocol")
+        with self.assertRaisesRegex(delivery.DeliveryError, "cannot be disabled"):
+            self.engine.configure(config, self.op())
+
+    def test_review_protocol2_cannot_start_after_legacy_implementation(self):
+        self.init_review_git()
+        self.admitted()
+        self.commit_product("legacy\n")
+        self.record()
+        self.protocol2_config()
+        with self.assertRaisesRegex(delivery.DeliveryError, "after implementation"):
+            self.engine.configure(self.config, self.op())
+
+    def test_review_protocol2_batches_commits_and_final_independence(self):
+        base = self.init_review_git()
+        self.protocol2_config()
+        self.admitted()
+        head = self.commit_product("changed\n")
+        self.record()
+        final = {"id": "final-reviewer", "context": "final-review"}
+        self.claim("review", "R2", final)
+        try:
+            with self.assertRaisesRegex(delivery.DeliveryError, "batch review not passed"):
+                self.record("review", "R2", actor=final, claim=False, review_commit=head, base_commit=base)
+        finally:
+            self.claim("review", "R2", final, "release")
+        with self.assertRaisesRegex(delivery.DeliveryError, "base_commit must equal"):
+            self.record("review", "R1", review_commit=head, base_commit=head)
+        self.write("untracked-product.txt", "dirty\n")
+        with self.assertRaisesRegex(delivery.DeliveryError, "outside changes|clean"):
+            self.record("review", "R1", review_commit=head, base_commit=base)
+        (self.project / "untracked-product.txt").unlink()
+        self.record("review", "R1", review_commit=head, base_commit=base)
+        self.assertFalse(self.engine.guard("review", "R2", self.reviewer)["ready"])
+        self.assertTrue(self.engine.guard("review", "R2", final)["ready"])
+        brief = self.engine.brief("review", "R2")
+        self.assertEqual(brief["review_role"], "final")
+        self.assertTrue(any(a["id"] == "reviewer" for a in brief["excluded_review_authors"]))
+        with self.assertRaises(delivery.DeliveryError) as conflict:
+            self.record("review", "R2", review_commit=head, base_commit=base)
+        self.assertEqual(conflict.exception.code, "review_independence")
+        self.claim("review", "R2", final)
+        try:
+            self.record("review", "R2", actor=final, claim=False, review_commit=head, base_commit=base)
+        finally:
+            self.claim("review", "R2", final, "release")
+        state = self.status()
+        self.assertEqual(state["review"]["R2"]["status"], "passed")
+        self.assertEqual(state["review"]["R2"]["review_role"], "final")
+        self.git("-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid",
+                  "commit", "-q", "--allow-empty", "-m", "after final")
+        state = self.status()
+        self.assertEqual(state["review"]["R2"]["status"], "blocked")
+        self.assertTrue(any("not current HEAD" in reason for reason in state["review"]["R2"]["blocked_reason"]))
+
+    def test_review_protocol2_rejects_overlap_and_requires_git(self):
+        self.config["review_protocol"] = 2
+        self.config["reviews"] = [
+            {"id": "R1", "tasks": ["T1"], "whole": False, "depends": []},
+            {"id": "R2", "tasks": ["T1"], "whole": False, "depends": []},
+            {"id": "R3", "tasks": ["T1"], "whole": True, "depends": [{"kind": "review", "id": "R1"}]}]
+        with self.assertRaisesRegex(delivery.DeliveryError, "Git"):
+            self.configure()
+        base = self.init_review_git()
+        with self.assertRaisesRegex(delivery.DeliveryError, "overlap"):
+            self.configure()
+
     def test_guard_checks_reviewer_independence(self):
         self.completed()
         builder = self.engine.guard("review", "R1", self.builder)

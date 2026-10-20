@@ -32,6 +32,8 @@ plan 不要求每项任务独立运行同一套测试；审查组与验证组可
 
 首次 configure 前先运行只读 preflight，确认后把依赖/生成目录写进显式 `monitor.exclude`；configure 的未排除高收益目录 warning 不是接纳结果。在途工作补 exclude 只允许 organization + 准入输入等价时用 `reuse_gates` 复用 design/plan/mapping gate，change_review 必须新做。
 
+多任务可按 review_protocol=2 组织批次：每个任务恰属一个非 whole 批次，恰有一个 whole final，final 依赖全部批次；批次一次逻辑审查、只读并行，最终审查必须等全部批次 passed 并读取完整交付 diff/决策/全局约束。协议 2 需要 Git，首次 configure 捕获不可变 base，review record 绑定 review_commit/base_commit；未启用协议 2 的旧工作不变。
+
 规范顺序是 configure → gate → 第一次编辑。批准前可编辑 plan/design；批准后只读，范围/任务/依赖/验收变化产生新版本并重新 gate，代码位置/局部步骤调整只写实施记录的偏离段。第一次编辑产品文件前运行 `guard`，把结果写入实施记录；review 必须带实际 actor/context 以核对与全部实施作者的独立性，status/next 同时反映 protected_index。guard 不阻止直接编辑，但 record/run/close 仍拒绝未过门禁或未持资源的工作。status/next 的 `ready_to_implement`/`blocked_reason` 与 guard 同源，被门禁或依赖阻塞的任务不列为可执行。
 
 阶段检查回答本阶段哪项真实能力已成立，实际生产者/消费者是否贯通；不要求所有阶段另建机器状态。原有任务、审查和验收依赖表达必要门禁，组内可接入条件满足即可推进。

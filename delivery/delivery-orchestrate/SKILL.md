@@ -39,6 +39,8 @@ description: 组织需要管理多任务依赖、阶段衔接、审查验收和�
 
 第一次编辑产品文件前运行 `guard`，把结果写进实施记录；未通过不进入实施。review 的 guard 必须带实际 actor/context，并与该审查覆盖任务的全部历史实施作者比对；status/next 同时反映 protected_index。guard 是流程检查与可检测诊断，不阻止模型直接编辑；真正的拒绝仍在 record/run/close。实施与审查按任务切片派发，不把整份 plan/design 粘贴给执行者，需要更多内容时按章节路径读取。
 
+多任务需要按批次一次逻辑审查、独立批次只读并行、最后整体终审时，可显式启用 review_protocol=2：每个任务恰属一个非 whole 批次，恰有一个 whole final，final 依赖全部批次。协议 2 需要 Git，首次 configure 捕获不可变 base_commit；review record 带 review_commit/base_commit，record 硬校验批次 passed、commit 谱系、HEAD/干净工作树/非空 diff，最终审查者排除实现者和历史批次审查者。未设置协议 2 的旧工作不变；具体契约见 [runtime-api-v2](references/runtime-api-v2.md)。
+
 所有状态操作用本 skill 目录下 `scripts/delivery.py`，不手改 journal 或复制旧运行状态。工作目录只有一个协调者负责准入和流转，子 agent 返回自己的报告；并行执行的文件范围与资源使用必须明确。
 
 初次配置、来源改变后的重新配置都需核对语义。字段齐全不等于计划合理；源文件版本不符时必须重新接纳，不能只换摘要保持旧结论。原始契约版本未知时拒绝接入，按兼容规则处理。

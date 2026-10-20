@@ -20,12 +20,12 @@ KINDS = {"implementation": "implement", "review": "review", "verification": "ver
 GATES = {"plan_review", "design_review", "mapping_review", "change_review"}
 REUSABLE_GATES = {"design_review", "plan_review", "mapping_review"}
 CONFIG_EXTRA = ("source_authors", "requirements", "admission_policy", "change", "monitor", "skill_sources")
-CONFIG_OPTIONAL = ("resources", "transition", "recovery_transfers", "implementation_routes", "reuse_gates")
+CONFIG_OPTIONAL = ("resources", "transition", "recovery_transfers", "implementation_routes", "reuse_gates", "review_protocol")
 STATUS_START = "<!-- delivery:status:start -->"
 STATUS_END = "<!-- delivery:status:end -->"
 CONFIG_CORE = ("actor", "plan", "authorization", "mapping_reason", "tasks", "reviews", "acceptance")
 RECORD_CORE = ("kind", "target", "actor", "report", "result", "summary", "evidence")
-RECORD_OPTIONAL = ("issues", "resolutions", "run_operation", "confirmation", "supersedes", "reason", "implementation_skill", "implementation_authors")
+RECORD_OPTIONAL = ("issues", "resolutions", "run_operation", "confirmation", "supersedes", "reason", "implementation_skill", "implementation_authors", "review_commit", "base_commit")
 
 
 LOADED_SOURCE_BYTES = Path(__file__).read_bytes()
@@ -68,6 +68,187 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
     @staticmethod
     def same_actor(a, b, exact=False):
         return a == b if exact else a["id"] == b["id"] or a["context"] == b["context"]
+
+
+    def _git(self, *args):
+        try:
+            return subprocess.run(["git", *args], cwd=self.project, capture_output=True, timeout=5)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            fail("cannot inspect Git review state: " + str(exc))
+
+    def review_git_head(self):
+        result = self._git("rev-parse", "HEAD")
+        if result.returncode != 0:
+            fail("review_protocol=2 requires a Git commit", "review_commit_mismatch")
+        return result.stdout.decode("ascii", "replace").strip()
+
+    def review_git_root(self):
+        result = self._git("rev-parse", "--show-toplevel")
+        if result.returncode != 0:
+            fail("review_protocol=2 requires a Git worktree root", "review_commit_mismatch")
+        return Path(result.stdout.decode("utf-8", "replace").strip()).resolve()
+
+    def review_git_clean_product(self):
+        result = self._git("status", "--porcelain", "-z", "--untracked-files=all")
+        if result.returncode != 0:
+            fail("cannot inspect review worktree", "review_commit_mismatch")
+        work = self.data["work"].strip("/")
+        dirty = []
+        for entry in result.stdout.split(b"\0"):
+            if not entry:
+                continue
+            value = entry.decode("utf-8", "surrogateescape")
+            path = value[3:] if len(value) > 3 else ""
+            if path == work or path.startswith(work + "/"):
+                continue
+            dirty.append(path)
+        return dirty
+
+    def review_git_is_ancestor(self, base, head):
+        result = self._git("merge-base", "--is-ancestor", base, head)
+        return result.returncode == 0
+
+    def review_git_has_diff(self, base, head):
+        result = self._git("diff", "--quiet", base + ".." + head)
+        if result.returncode == 0:
+            return False
+        if result.returncode == 1:
+            return True
+        fail("cannot inspect review diff", "review_commit_mismatch")
+
+    def review_git_commit(self, value):
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}", value):
+            fail("review_commit/base_commit must be a full lowercase SHA", "review_commit_mismatch")
+        result = self._git("rev-parse", "--verify", value + "^{commit}")
+        if result.returncode != 0:
+            fail("review commit does not exist", "review_commit_mismatch")
+        return value
+
+    def review_batches(self, config, final=None):
+        reviews = config["payload"]["spec"]["reviews"]
+        batches = [r for r in reviews if not r["whole"]]
+        if final is None:
+            return batches
+        tasks = set(final["tasks"])
+        return [r for r in batches if set(r["tasks"]) & tasks]
+
+    def review_actors(self, config, final):
+        ids = {r["id"] for r in self.review_batches(config, final)}
+        actors = []
+        for event in self.data["events"]:
+            payload = event["payload"]
+            if event["kind"] == "record" and payload.get("kind") == "review" and payload.get("target") in ids:
+                actors.append(payload["actor"])
+        return actors
+
+    def final_review_actor_conflict(self, who, config, final):
+        return any(self.same_actor(who, actor) for actor in self.review_actors(config, final))
+
+    def review_protocol2_final_blockers(self, config, state, who=None, include_pending=True):
+        if config["payload"].get("review_protocol") != 2:
+            return []
+        final = next((r for r in config["payload"]["spec"]["reviews"] if r["whole"]), None)
+        if not final:
+            return ["final review is not configured"]
+        reasons = []
+        batches = self.review_batches(config, final)
+        for batch in batches:
+            row = state["review"][batch["id"]]
+            if row["status"] != "passed":
+                if include_pending or row["status"] in ("failed", "unknown", "stale", "blocked"):
+                    reasons.append("batch review not passed: " + batch["id"])
+        if who is not None and self.final_review_actor_conflict(who, config, final):
+            reasons.append("final reviewer participated in a batch review")
+        if who is not None and not self.independent(who, final["tasks"]):
+            reasons.append("final reviewer participated in implementation")
+        pair = self.records(config).get(("review", final["id"]))
+        if pair:
+            record = pair[1]
+            commit = record.get("review_commit")
+            base = record.get("base_commit")
+            if self.final_review_actor_conflict(record["actor"], config, final):
+                reasons.append("final reviewer participated in a batch review")
+            if not self.independent(record["actor"], final["tasks"]):
+                reasons.append("final reviewer participated in implementation")
+            if not commit or not base:
+                reasons.append("final review lacks review_commit/base_commit")
+            else:
+                if self.review_git_head() != commit:
+                    reasons.append("final review commit is not current HEAD")
+                if base != config["payload"].get("base_commit"):
+                    reasons.append("final review base is not the configure base")
+                if not self.review_git_is_ancestor(base, commit) or base == commit:
+                    reasons.append("final review base is not before final commit")
+                if not self.review_git_has_diff(base, commit):
+                    reasons.append("final review diff is empty")
+                for batch in batches:
+                    batch_pair = self.records(config).get(("review", batch["id"]))
+                    if not batch_pair or batch_pair[1].get("result") is None:
+                        reasons.append("batch review has no record: " + batch["id"])
+                        continue
+                    batch_commit = batch_pair[1].get("review_commit")
+                    if not batch_commit:
+                        reasons.append("batch review lacks review_commit: " + batch["id"])
+                    elif not self.review_git_is_ancestor(batch_commit, commit):
+                        reasons.append("batch review commit is not in final history: " + batch["id"])
+        return reasons
+
+    def validate_review_protocol(self, spec):
+        reviews = spec["reviews"]
+        batches = [r for r in reviews if not r["whole"]]
+        finals = [r for r in reviews if r["whole"]]
+        if len(finals) != 1:
+            fail("review_protocol=2 requires exactly one whole final review")
+        if not batches:
+            fail("review_protocol=2 requires at least one batch review")
+        all_tasks = {t["id"] for t in spec["tasks"]}
+        seen = set()
+        for batch in batches:
+            for task in batch["tasks"]:
+                if task in seen:
+                    fail("review_protocol=2 batches must not overlap")
+                seen.add(task)
+        if seen != all_tasks:
+            fail("review_protocol=2 requires every task in exactly one batch")
+        final = finals[0]
+        if set(final["tasks"]) != all_tasks:
+            fail("final review must cover every task")
+        deps = {d["id"] for d in final.get("depends", []) if d["kind"] == "review"}
+        missing = [r["id"] for r in batches if r["id"] not in deps]
+        if missing:
+            fail("final review must depend on every batch: " + ", ".join(missing))
+
+    def validate_review_commit(self, request, config):
+        if config["payload"].get("review_protocol") != 2 or request["kind"] != "review":
+            return
+        commit = request.get("review_commit")
+        base = request.get("base_commit")
+        self.review_git_commit(commit)
+        if base != config["payload"].get("base_commit"):
+            fail("base_commit must equal the configure delivery base", "review_commit_mismatch")
+        self.review_git_commit(base)
+        if self.review_git_root() != self.project.resolve():
+            fail("review_protocol=2 requires the project root Git worktree", "review_commit_mismatch")
+        if self.review_git_head() != commit:
+            fail("review_commit must equal current HEAD", "review_commit_mismatch")
+        if not self.review_git_is_ancestor(base, commit) or base == commit:
+            fail("base_commit must be before review_commit", "review_commit_mismatch")
+        if self.review_git_clean_product():
+            fail("review worktree must be clean for tracked and untracked product files", "review_commit_mismatch")
+        if not self.review_git_has_diff(base, commit):
+            fail("review diff must not be empty", "empty_review_diff")
+
+    def validate_final_review(self, request, config):
+        final = self.target(config["payload"], "review", request["target"])
+        if not final["whole"]:
+            return
+        state = self.state()
+        for reason in self.review_protocol2_final_blockers(config, state, request["actor"]):
+            if reason.startswith("batch review not passed"):
+                fail(reason, "dependency_not_ready")
+            if "participated in a batch review" in reason:
+                fail(reason, "review_independence")
+            fail(reason, "review_commit_mismatch")
 
     def validate_extra(self, request, fields):
         shape(request, ("schema_version", "contract_version", "actor") + tuple(fields))
@@ -189,6 +370,31 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
 
     def configure_payload(self, payload, request):
         old_configs = [e for e in self.data["events"] if e["kind"] == "configure"]
+        protocol = request.get("review_protocol")
+        if protocol is not None and (type(protocol) is not int or protocol != 2):
+            fail("review_protocol must be 2")
+        old_payload = old_configs[-1]["payload"] if old_configs else None
+        if old_payload and old_payload.get("review_protocol") == 2:
+            if protocol != 2:
+                fail("review_protocol=2 cannot be disabled in place; open a linked legacy work for rollback")
+            base = old_payload.get("base_commit")
+            if not base:
+                fail("review_protocol=2 configuration is missing base_commit")
+            payload["review_protocol"] = 2
+            payload["base_commit"] = base
+            self.validate_review_protocol(payload["spec"])
+        elif protocol == 2:
+            if old_configs and any(e["kind"] == "record" and e["payload"].get("kind") == "implementation" for e in self.data["events"]):
+                fail("review_protocol=2 cannot be enabled after implementation starts; open a new target")
+            if self.review_git_root() != self.project.resolve():
+                fail("review_protocol=2 requires the project root Git worktree", "review_commit_mismatch")
+            base = self.review_git_head()
+            dirty = self.review_git_clean_product()
+            if dirty:
+                fail("review_protocol=2 requires a clean product worktree before configure: " + ", ".join(dirty[:5]), "review_commit_mismatch")
+            payload["review_protocol"] = 2
+            payload["base_commit"] = base
+            self.validate_review_protocol(payload["spec"])
         if old_configs:
             old_config = old_configs[-1]
             latest = self.records(old_config)
@@ -333,6 +539,14 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
         payload["monitor_baseline"] = self.store_snapshot(inventory["entries"], inventory["unsupported"])
         payload["protected_index"] = old[0]["payload"].get("protected_index") if old else self.capture_index()
         self.last_warnings = self.unexcluded_warnings(payload, inventory["entries"])
+        if payload.get("review_protocol") == 2:
+            for review in payload["spec"]["reviews"]:
+                if not review["whole"] and len(review["tasks"]) > 4:
+                    self.last_warnings.append("review batch has more than 4 tasks; split or justify: " + review["id"])
+            for item in payload.get("reused", []):
+                record = item["record"]
+                if record.get("kind") == "review" and not record.get("review_commit"):
+                    fail("review_protocol=2 cannot reuse a review without review_commit")
         return payload
 
     def monitor_only_input_view(self, payload):
@@ -355,6 +569,8 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
         return {
             "tasks": payload["spec"]["tasks"],
             "reviews": payload["spec"]["reviews"],
+            "review_protocol": payload.get("review_protocol"),
+            "base_commit": payload.get("base_commit"),
             "acceptance": payload["spec"]["acceptance"],
             "requirements": payload.get("requirements"),
             "resources": payload.get("resources", []),
@@ -610,6 +826,13 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
                                "gate_protocol": 2,
                                "skill_pins": {name: pin["tree_hash"] for name, pin in self.effective_pins(config).items()}})
 
+    def prepare_record(self, request, config=None):
+        if request["kind"] == "review":
+            current = config or self.current_config()
+            self.validate_review_commit(request, current)
+            self.validate_final_review(request, current)
+        return super().prepare_record(request, config)
+
     def record(self, request, op):
         shape(request, ("schema_version", "contract_version") + RECORD_CORE, RECORD_OPTIONAL)
         self.v2(request)
@@ -806,6 +1029,21 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
             add("incomplete_run", [item["operation"]], ["side-effect and process investigation"], action, item["acceptance"])
         for item in diagnoses:
             add("diagnosis_required", [item["failure_key"]], ["new facts or substantiated strategy"], "attempt", item["id"])
+        if config_payload.get("review_protocol") == 2:
+            reviews = config_payload["spec"]["reviews"]
+            by_id = {review["id"]: review for review in reviews}
+            for target, row in state["review"].items():
+                review = by_id[target]
+                row["review_role"] = "final" if review["whole"] else "batch"
+                row["covered_tasks"] = list(review["tasks"])
+            final = next((review for review in reviews if review["whole"]), None)
+            if final and self.records(config).get(("review", final["id"])):
+                reasons = self.review_protocol2_final_blockers(config, state)
+                if reasons:
+                    row = state["review"][final["id"]]
+                    if row["status"] == "passed":
+                        row["status"] = "blocked"
+                    row["blocked_reason"] = reasons
         state["diagnostics"] = diagnostics
         return state
 
@@ -866,6 +1104,8 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
                 reasons.append("reviewer actor/context required to verify independence")
             elif not self.independent(who, item["tasks"]):
                 reasons.append("reviewer id/context participated in implementation")
+            if config["payload"].get("review_protocol") == 2 and item["whole"]:
+                reasons.extend(self.review_protocol2_final_blockers(config, state, who))
         held = self.held_resources()
         resources = []
         for needed in self.required_resources(config, kind, target):

@@ -667,7 +667,8 @@ class Engine:
 
     def prepare_record(self, request, config=None):
         shape(request, ("schema_version", "contract_version", "skill_revision", "kind", "target", "actor", "report", "result", "summary", "evidence"),
-              ("issues", "resolutions", "run_operation", "confirmation", "supersedes", "reason"))
+              ("issues", "resolutions", "run_operation", "confirmation", "supersedes", "reason",
+               "review_commit", "base_commit"))
         version(request)
         actor(request["actor"])
         text(request["skill_revision"], "skill_revision")
