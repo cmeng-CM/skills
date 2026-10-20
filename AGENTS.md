@@ -34,7 +34,7 @@
 
 - 辅助代码以 Python 3 和 Bash 为主。Python 优先标准库；新增外部依赖在所属 skill 中声明，不为单包改动引入仓库级依赖体系。
 - 根目录 `skill` 是唯一的安装管理入口，使用 Python 3 标准库。菜单和快捷命令共享同一套核心规则；旧安装、卸载 shell 脚本已移除，不再新增转发层。
-- `folo/` 使用自己的 CLI 和版本约定。具体依赖、环境选择和命令以目标 `SKILL.md` 为准。
+- Folo 相关个人 skill（`folo`、`folo-collection-pull`、`folo-receive`）已移至 Obsidian Vault 的 `61-skills/`，不在本仓库维护；具体依赖和命令以那里的 `SKILL.md` 为准。
 
 ## 安装与卸载
 
