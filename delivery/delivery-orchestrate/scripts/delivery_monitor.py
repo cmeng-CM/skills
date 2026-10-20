@@ -43,9 +43,13 @@ def _directory_size(path):
 def preflight(project, work, threshold=1000):
     """Suggest explicit monitor exclusions without reading file contents or state."""
     project = Path(project).absolute()
+    if any(part.is_symlink() for part in (project, *project.parents)):
+        fail("project path must not traverse symlinks")
     if not project.is_dir():
         fail("project must be an existing directory")
     work_path = Path(work).absolute()
+    if any(part.is_symlink() for part in (work_path, *work_path.parents)):
+        fail("work path must not traverse symlinks")
     try:
         work_relative = work_path.relative_to(project).as_posix()
     except ValueError:

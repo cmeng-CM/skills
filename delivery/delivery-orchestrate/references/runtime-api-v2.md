@@ -69,7 +69,7 @@ monitor.roots 首版固定 `["."]`。自动排除 `.git` 和当前 work，但 wo
 python3 -B CLI preflight --work W --project /项目绝对路径 --format json --high-yield-threshold 1000
 ```
 
-它只做 stat/目录遍历，不读文件内容、不跟随 symlink、不修改 journal。候选分依赖/安装目录（`node_modules`、`.venv`、`vendor`、`target` 等）和生成/缓存目录（`dist`、`build`、`.next`、`coverage` 等）；输出路径、文件数、字节数、检测依据、是否达到高收益阈值。生成目录默认标 `confirmation_required`，由协调者确认是否确为可再生产物。未发现的缓存仍会被监控，保持 fail closed。configure 若在 inventory 中看到未排除的高收益依赖/生成目录，只输出 warning 和 preflight 建议，不改变接纳结果。
+它只做 stat/目录遍历，不读文件内容、不跟随 symlink、不修改 journal；项目或 work 的任一路径组件是 symlink 时直接拒绝，避免 preflight 通过而 init/configure 随后因路径边界失败。候选分依赖/安装目录（`node_modules`、`.venv`、`vendor`、`target` 等）和生成/缓存目录（`dist`、`build`、`.next`、`coverage` 等）；输出路径、文件数、字节数、检测依据、是否达到高收益阈值。生成目录默认标 `confirmation_required`，由协调者确认是否确为可再生产物。未发现的缓存仍会被监控，保持 fail closed。configure 若在 inventory 中看到未排除的高收益依赖/生成目录，只输出 warning 和 preflight 建议，不改变接纳结果。
 
 在途工作补 exclude 的迁移路径：preflight → `change.category=organization` + `previous_config` 重新 configure → 新做 `change_review`。若只有 `monitor.exclude` 变化，且 tasks/reviews/acceptance、requirements、resources、implementation_routes、transition/recovery_transfers、admission_policy、plan/design object_hash、monitor.roots、skill_sources、authorization.scope、design/plan source authors 全部等价，可用 `reuse_gates` 显式复用 design/plan/mapping gate：
 
@@ -178,7 +178,7 @@ plan_review 排除所有历史 plan 作者；design_review 同理；mapping_revi
 
 新引擎写入的 gate 固定包含 `gate_protocol: 2` 和 `source_hashes`（plan/design 在 gate 时的 config source object hash）。规范顺序是 **configure → gate → implementation**：configure 前编辑 plan/design 允许，configure 绑定编辑后的内容；configure 后、gate 前编辑使 config source stale，gate 的 fresh 校验拒绝，必须重新 configure；gate 后编辑由 `source_hashes` 锚点拦住。
 
-legacy 只适用于第一个 snapshot-ref configure（或第一个 schema 2 事件）之前、**同时缺少** `source_hashes` 和 `gate_protocol` 的旧 gate：用原 config 的 plan/design source object hash 作锚点，原 config sources 必须仍 current，复用或 check 时标记 `legacy: true`。cutoff 之后新增的 gate 缺 `source_hashes`，或带 `gate_protocol: 2` 却缺 `source_hashes`，一律 fail closed（stale/error），不能按 legacy 放过。`check --preclose` 的批准锚点按“最新 passed gate 的 source_hashes → cutoff 前 legacy 锚点 → 无对应 gate 时 configure fallback”取，不能统一退回 configure hash。
+legacy 只适用于第一个 snapshot-ref configure（或第一个 schema 2 事件）之前、**同时缺少** `source_hashes` 和 `gate_protocol` 的旧 gate：用原 config 的 plan/design source object hash 作锚点，原 config sources 必须仍 current，复用或 check 时标记 `legacy: true`。cutoff 之后新增的 gate 缺 `source_hashes`，或带 `gate_protocol: 2` 却缺 `source_hashes`，或带 `source_hashes` 却缺 `gate_protocol: 2`，一律 fail closed（stale/error），不能按 legacy 放过。`check --preclose` 的批准锚点按“最新 passed gate 的 source_hashes → cutoff 前 legacy 锚点 → 无对应 gate 时 configure fallback”取，不能统一退回 configure hash。
 
 重配置必须 change.previous_config 指向上一配置，category 为 within_grant/organization/material，并需独立 change_review。前两者不机械重问用户，但报告要核查原授权；material 需具体新授权 `{path,quote}`。已知结构性弱化（取消必需验收、放开 waivable、把 command 改成其他方法）不能标局部组织调整，必须 material 加具体授权。自然语言是否真的降低要求仍需独立审阅。
 
@@ -217,7 +217,7 @@ action 为 claim/release；read 可并行，任一 write 冲突拒绝。返回�
 python3 -B CLI guard --work W --kind task --target T1 --format json
 ```
 
-`--kind` 为 task/review/verification（task 映射 implementation）。可选 `--actor`/`--context` 用于核对资源持有者；不提供时若存在写冲突会返回 blocked 并提示补身份。输出 `ready`、`blocked_reasons`、gates、dependencies、resources（含 held_by/claimable）。退出码 0=ready、1=blocked、2=参数/IO 错误。guard 只报告，不批准 gate、不占资源；真正拒绝仍在 record/run/close。`brief --kind implementation` 在 guard 不 ready 时拒绝输出可执行任务卡。`status/next` 同样给出 `ready_to_implement`、`blocked_reason`；被门禁或依赖阻塞的任务列为 blocked。
+`--kind` 为 task/review/verification（task 映射 implementation）。可选 `--actor`/`--context` 用于核对资源持有者；不提供时若存在写冲突会返回 blocked 并提示补身份。review 还要求提供 actor/context，并与该审查覆盖任务的全部历史实施作者比对；id 或 context 相同即 blocked。guard/status/next 也会反映 configure 捕获的 protected_index 变化。输出 `ready`、`blocked_reasons`、gates、dependencies、resources（含 held_by/claimable）。退出码 0=ready、1=blocked、2=参数/IO 错误。guard 只报告，不批准 gate、不占资源；真正拒绝仍在 record/run/close。`brief --kind implementation` 在 guard 不 ready 时拒绝输出可执行任务卡。`status/next` 同样给出 `ready_to_implement`、`blocked_reason`；被门禁或依赖阻塞的任务列为 blocked。
 
 批量验收可用真正的原子批次：
 
@@ -225,7 +225,7 @@ python3 -B CLI guard --work W --kind task --target T1 --format json
 python3 -B CLI verify-batch --work W --input /项目路径/.delivery/日期-主题/admission/verify-batch-001.json --op batch-verify-001
 ```
 
-输入 `{batch_id, items:[...]}`，每个 item 必须有自己的唯一 `op` 和 `config_operation`（必须等于当前配置），其余字段同单条 verify。任一项失败整批拒绝；全部 item op 已存在且请求一致、且都绑定当前配置时幂等返回，部分存在则报不一致；逐项 op 仍是重试键，`batch_id` 不写入事件。一次锁内构造连续事件、一次原子写盘，不产生半批；整批共用一次 inventory 快照。只支持 schema 2 工作；schema 1 继续用单条 verify 或先升级。
+输入 `{batch_id, items:[...]}`，每个 item 必须有自己的唯一 `op` 和 `config_operation`（必须等于当前配置），`kind` 必须为 verification，其余字段同单条 verify。任一项失败整批拒绝；全部 item op 已存在且请求一致、且都绑定当前配置时幂等返回，部分存在则报不一致；逐项 op 仍是重试键，`batch_id` 不写入事件。一次锁内构造连续事件、一次原子写盘，不产生半批；整批共用一次 inventory 快照。只支持 schema 2 工作；schema 1 继续用单条 verify 或先升级。
 
 manual 验收仍要求逐项真实人工确认；manual pending 不能批量假通过。
 
@@ -319,7 +319,7 @@ status/check/next/brief/source 均提供可追溯恢复入口；只读视图可�
 
 ## 8 收尾及证据限度
 
-close 请求沿用 v1 的 actor/mode/summary/report/exceptions，版本为 2/2。`report.path` 必须指向 work 目录下固定的 `closeout.md`；它是 close 报告，不是 gate 事实源。close 同时校验新准入、源漂移、范围外判断、资源、未知运行、诊断和原实施/独立审查/验收门禁。close 后写入拒绝，显式 reopen 留存原 close 事实。
+close 请求沿用 v1 的 actor/mode/summary/report/exceptions，版本为 2/2。`report.path` 必须指向 work 目录下固定的 `closeout.md`；它是 close 报告，不是 gate 事实源。close 在同一请求上重跑 `check --preclose` 的阻塞判定，并校验新准入、源漂移、范围外判断、资源、未知运行、诊断和原实施/独立审查/验收门禁；重放已接受的 close op 仍返回原事件。close 后写入拒绝，显式 reopen 留存原 close 事实。
 
 收尾前先运行机械检查：
 
@@ -331,7 +331,7 @@ python3 -B CLI doctor --work W
 
 `check --preclose` 只读，有阻塞项退出 1。检查必需验收、最新 run、范围外变化、未释放写资源、未知运行、诊断阻塞、来源/pin 漂移、批准后编辑（按 gate source_hashes → cutoff 前 legacy → configure fallback）、证据缺失、孤儿 admission、status.md 一致性和未处置的 rejected 记录。带 `--input` 时复用 close 的同一例外判定；manual pending 不是 failed，不能走 limited；unknown/stale/未运行不能豁免。阻塞项必须修复，孤儿 admission/旧工作缺 status/index 等作为警告列入报告。收尾顺序固定为 `check --preclose`（批准正文 hash 未变）→ `close` → 写 `status.md`/`closeout.md`；close 成功后视图写失败只警告并可重试，不回滚 close。
 
-`status --write-status` 原子替换生成区并保留人工补充区；状态无法评估时 fail closed（返回 2）、保留旧文件、不改 journal。`doctor` 只读诊断：journal/schema、配置状态、gates、unassessed/unsupported、未知运行、未释放写资源、诊断阻塞、status 视图一致性、未匹配 admission（按请求内容 hash，不按文件名）、rejected 数量/坏行/未处置记录（verify-batch 调用单独计数）、缺失证据、legacy/fallback 锚点，以及 schema 2 工作的 `journal.schema1.bak` 是否可读且属于同一 work。被 CLI 拒绝的写命令追加到 `runtime/rejected.jsonl`（严格 append-only，首条稳定 id + attempt + retry_of，10MB 轮转保留一份，错误消息含带引号键脱敏并截断）；只读命令与 guard blocked 不记录。
+`status --write-status` 原子替换生成区并保留人工补充区；状态无法评估时 fail closed（返回 2）、保留旧文件、不改 journal。`doctor` 只读诊断：journal/schema、配置状态、gates、unassessed/unsupported、未知运行、未释放写资源、诊断阻塞、skill 来源漂移、status 视图一致性、未匹配 admission（按请求内容 hash，不按文件名；已使用的 verify-batch 按 items 逐项匹配）、rejected 数量/坏行/未处置记录（verify-batch 调用单独计数）、缺失证据、legacy/fallback 锚点，以及 schema 2 工作的 `journal.schema1.bak` 是否可读且属于同一 work。被 CLI 拒绝的写命令追加到 `runtime/rejected.jsonl`（严格 append-only；读取、attempt 计算、追加和 10MB 轮转在同一 runtime lock 下串行，首条稳定 id + attempt + retry_of，错误消息含带引号键脱敏并截断）；只读命令与 guard blocked 不记录。
 
 close 的来源检查覆盖当前计划、审查、验证、已配置设计、任务选用实施能力及当前接纳产物的真实专业来源，包含实际使用的 fix；仅登记而未使用的可选 fix 不因此成为依赖。发现漂移须恢复原包或完成显式 source-update，再按影响复用证据。漂移不自动抹掉历史报告的 pin 或强制全量重跑，但未处置漂移不能进入 complete 或 limited 收尾。
 

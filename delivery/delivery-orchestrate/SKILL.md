@@ -37,7 +37,7 @@ description: 组织需要管理多任务依赖、阶段衔接、审查验收和�
 
 大任务初次实施、重大重规划需要真正独立的计划审阅；设计按机制风险触发独立审阅。专业标准分别归 design 和 plan。正文到准入配置的映射始终独立复核，可与专业计划审阅同次开展但分别给结论；实现 review 不替代二者。v2 configure 仅保存候选准入，必要 gate 当前通过后才能推进。规范顺序固定为 configure → gate → implementation：批准前可编辑 plan/design，批准后只读；范围、任务、依赖或验收变化产生新版本并重新 gate，代码位置/局部步骤调整只写实施记录的偏离段，不回写批准版本。
 
-第一次编辑产品文件前运行 `guard`，把结果写进实施记录；未通过不进入实施。guard 是流程检查与可检测诊断，不阻止模型直接编辑；真正的拒绝仍在 record/run/close。实施与审查按任务切片派发，不把整份 plan/design 粘贴给执行者，需要更多内容时按章节路径读取。
+第一次编辑产品文件前运行 `guard`，把结果写进实施记录；未通过不进入实施。review 的 guard 必须带实际 actor/context，并与该审查覆盖任务的全部历史实施作者比对；status/next 同时反映 protected_index。guard 是流程检查与可检测诊断，不阻止模型直接编辑；真正的拒绝仍在 record/run/close。实施与审查按任务切片派发，不把整份 plan/design 粘贴给执行者，需要更多内容时按章节路径读取。
 
 所有状态操作用本 skill 目录下 `scripts/delivery.py`，不手改 journal 或复制旧运行状态。工作目录只有一个协调者负责准入和流转，子 agent 返回自己的报告；并行执行的文件范围与资源使用必须明确。
 
@@ -69,7 +69,7 @@ description: 组织需要管理多任务依赖、阶段衔接、审查验收和�
 
 运行 `status/check/next` 核对当前绑定、问题及缺口。完整收尾要求当前实施、独立审查和全部必需验收通过。仅已实证失败、允许例外且有具体用户授权的验收可申请 `limited`；未知、过期证据、失败的独立审查不能豁免。验证原不符合项保留，不能称为全部通过。
 
-收尾顺序固定为 `check --preclose` → `close` → 写 `status.md`/`closeout.md`。`check --preclose` 只读，阻塞项必须修复，孤儿 admission、旧工作缺 status/index 等警告可带说明继续。`close` 的 `report.path` 必须是 work 下固定的 `closeout.md`；close 后不修改批准版本，视图写失败只警告并允许重试。历史关闭不覆盖；后续修改先显式 `reopen`，不能拿旧收尾证明新版本。恢复时读取 journal、当前产品与原始证据，按真实差异决定复用和复核。
+收尾顺序固定为 `check --preclose` → `close` → 写 `status.md`/`closeout.md`，并同步 `index.md` 的纯导航当前边界。`check --preclose` 只读，`close` 会以同一请求重跑其阻塞判定；阻塞项必须修复，孤儿 admission、旧工作缺 status/index 等警告可带说明继续。`close` 的 `report.path` 必须是 work 下固定的 `closeout.md`；close 后不修改批准版本，视图写失败只警告并允许重试。历史关闭不覆盖；后续修改先显式 `reopen`，不能拿旧收尾证明新版本。恢复时读取 journal、当前产品与原始证据，按真实差异决定复用和复核。
 
 ## Exit Criteria
 

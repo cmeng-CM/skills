@@ -32,7 +32,7 @@ plan 不要求每项任务独立运行同一套测试；审查组与验证组可
 
 首次 configure 前先运行只读 preflight，确认后把依赖/生成目录写进显式 `monitor.exclude`；configure 的未排除高收益目录 warning 不是接纳结果。在途工作补 exclude 只允许 organization + 准入输入等价时用 `reuse_gates` 复用 design/plan/mapping gate，change_review 必须新做。
 
-规范顺序是 configure → gate → 第一次编辑。批准前可编辑 plan/design；批准后只读，范围/任务/依赖/验收变化产生新版本并重新 gate，代码位置/局部步骤调整只写实施记录的偏离段。第一次编辑产品文件前运行 `guard`，把结果写入实施记录；guard 不阻止直接编辑，但 record/run/close 仍拒绝未过门禁或未持资源的工作。status/next 的 `ready_to_implement`/`blocked_reason` 与 guard 同源，被门禁或依赖阻塞的任务不列为可执行。
+规范顺序是 configure → gate → 第一次编辑。批准前可编辑 plan/design；批准后只读，范围/任务/依赖/验收变化产生新版本并重新 gate，代码位置/局部步骤调整只写实施记录的偏离段。第一次编辑产品文件前运行 `guard`，把结果写入实施记录；review 必须带实际 actor/context 以核对与全部实施作者的独立性，status/next 同时反映 protected_index。guard 不阻止直接编辑，但 record/run/close 仍拒绝未过门禁或未持资源的工作。status/next 的 `ready_to_implement`/`blocked_reason` 与 guard 同源，被门禁或依赖阻塞的任务不列为可执行。
 
 阶段检查回答本阶段哪项真实能力已成立，实际生产者/消费者是否贯通；不要求所有阶段另建机器状态。原有任务、审查和验收依赖表达必要门禁，组内可接入条件满足即可推进。
 
@@ -99,9 +99,9 @@ v2 的 attempt 保存失败身份、实际事实与策略；恢复继承原诊�
 
 提交可以作为阶段快照，不代表最终质量通过。审查、验证绑定实际文件内容，后续提交若只改变提交标识而文件不变，不应人为使证据失效。若提交过程会改文件或生成产物，按实际范围重新检查。
 
-close 前先运行 `check --preclose`，核对来源当前、全任务实施、独立整体审查、所有必验、问题处置、批准后编辑、未知运行、资源与证据缺口；阻塞项修复后再 close。首版 limited 只豁免允许例外且已实证失败的验收；实施和审查仍须通过。未知/过期证据和不可豁免条件不进入例外。close 的报告固定为 work 下 `closeout.md`；收尾顺序为 check --preclose → close → 写 status.md/closeout.md，close 成功后视图写失败只警告并可重试。
+close 前先运行 `check --preclose`，核对来源当前、全任务实施、独立整体审查、所有必验、问题处置、批准后编辑、未知运行、资源与证据缺口；close 会以同一请求重跑该判定，阻塞项修复后才 append。 首版 limited 只豁免允许例外且已实证失败的验收；实施和审查仍须通过。未知/过期证据和不可豁免条件不进入例外。close 的报告固定为 work 下 `closeout.md`；收尾顺序为 check --preclose → close → 写 status.md/closeout.md，并同步 index.md 的纯导航当前边界；close 成功后视图写失败只警告并可重试。
 
-`status --write-status` 只替换生成区，保留人工补充；`doctor` 只读检查未匹配 admission、rejected、状态视图、证据和 schema1 回滚点。未被任何事件匹配的 admission 与未处置拒绝是警告，不自动删除用户文件。
+`status --write-status` 只替换生成区，保留人工补充；`doctor` 只读检查未匹配 admission（含按 items 匹配的已用 verify-batch）、rejected、skill 来源漂移、状态视图、证据和 schema1 回滚点。未被任何事件匹配的 admission 与未处置拒绝是警告，不自动删除用户文件。
 
 关闭后不写入新的活动结果，先 reopen。状态损坏、对象缺失或版本不支持时保留现场，报告恢复需要；不删除 runtime 后重建一个伪装成功的流程。最终报告真实状态、证据、剩余限制和需用户查看的重大选择。
 

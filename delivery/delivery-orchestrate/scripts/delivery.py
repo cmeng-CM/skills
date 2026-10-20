@@ -991,42 +991,51 @@ def record_rejection(work, command, op, actor_value, request, exc):
     code = "io_error" if isinstance(exc, OSError) else getattr(exc, "code", "invalid_request")
     seed = {"command": command, "op": op, "request_hash": request_hash, "error_code": code}
     identity = digest(canonical(seed))
-    try:
-        records, bad = read_rejections(path)
-    except OSError as exc:
-        print(f"rejected log read failed: {exc}", file=sys.stderr)
+    lock_path = runtime / "lock"
+    if lock_path.is_symlink():
+        print("rejected log lock is a symlink; refusal not recorded", file=sys.stderr)
         return None
-    root, attempt = identity, 1
-    for value in records:
-        if value.get("op") == op and value.get("request_hash") == request_hash and value.get("error_code") == code:
-            root = value.get("retry_of") or value.get("id") or identity
-            attempts = [v.get("attempt", 0) for v in records if (v.get("id") == root or v.get("retry_of") == root)]
-            attempt = max(attempts or [0]) + 1
-            break
-    record = {"id": identity, "at": now(), "command": command, "op": op,
-              "actor": actor_value if isinstance(actor_value, dict) else None,
-              "request_hash": request_hash, "error_code": code,
-              "error_message": redact_rejection(exc, project), "work": str(work),
-              "attempt": attempt, "retry_of": None if attempt == 1 else root}
-    line = (json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n").encode()
     try:
-        if path.exists() and path.stat().st_size >= REJECTED_LIMIT:
-            os.replace(path, path.with_name("rejected.jsonl.1"))
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-        try:
-            os.write(fd, line)
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-        dfd = os.open(runtime, os.O_RDONLY)
-        try:
-            os.fsync(dfd)
-        finally:
-            os.close(dfd)
+        with lock_path.open("a+b") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                try:
+                    records, bad = read_rejections(path)
+                except OSError as exc:
+                    print(f"rejected log read failed: {exc}", file=sys.stderr)
+                    return None
+                root, attempt = identity, 1
+                for value in records:
+                    if value.get("op") == op and value.get("request_hash") == request_hash and value.get("error_code") == code:
+                        root = value.get("retry_of") or value.get("id") or identity
+                        attempts = [v.get("attempt", 0) for v in records if (v.get("id") == root or v.get("retry_of") == root)]
+                        attempt = max(attempts or [0]) + 1
+                        break
+                record = {"id": identity, "at": now(), "command": command, "op": op,
+                          "actor": actor_value if isinstance(actor_value, dict) else None,
+                          "request_hash": request_hash, "error_code": code,
+                          "error_message": redact_rejection(exc, project), "work": str(work),
+                          "attempt": attempt, "retry_of": None if attempt == 1 else root}
+                line = (json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n").encode()
+                if path.exists() and path.stat().st_size >= REJECTED_LIMIT:
+                    os.replace(path, path.with_name("rejected.jsonl.1"))
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+                try:
+                    os.write(fd, line)
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
+                dfd = os.open(runtime, os.O_RDONLY)
+                try:
+                    os.fsync(dfd)
+                finally:
+                    os.close(dfd)
+                return record
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
     except OSError as log_error:
         print(f"rejected log write failed: {log_error}", file=sys.stderr)
         return None
-    return record
 
 
 def render_markdown(value):

@@ -30,6 +30,15 @@ RECORD_OPTIONAL = ("issues", "resolutions", "run_operation", "confirmation", "su
 
 LOADED_SOURCE_BYTES = Path(__file__).read_bytes()
 
+
+def batch_item_hash(item):
+    """Return the journal request hash for one verify-batch item."""
+    normalized = {k: v for k, v in item.items() if k not in ("op", "config_operation")}
+    normalized.setdefault("schema_version", 2)
+    normalized.setdefault("contract_version", 2)
+    return digest(canonical({"kind": "record", "input": normalized}))
+
+
 class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, Engine):
     def __init__(self, work):
         super().__init__(work)
@@ -451,21 +460,47 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
                 return event["seq"]
         return None
 
+    def index_entries(self):
+        """Return staged entry digests in one git call, or None outside Git."""
+        try:
+            result = subprocess.run(["git", "ls-files", "--stage", "-z"], cwd=self.project,
+                                    capture_output=True, timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if result.returncode != 0:
+            return None
+        records = {}
+        for record in result.stdout.split(b"\0"):
+            if not record:
+                continue
+            _, separator, path = record.partition(b"\t")
+            if not separator:
+                return None
+            key = path.decode("utf-8", "surrogateescape")
+            records[key] = records.get(key, b"") + record + b"\0"
+        return {path: digest(value) for path, value in records.items()}
+
     def capture_index(self):
         try:
             paths = subprocess.run(["git", "diff", "--cached", "--name-only", "-z"], cwd=self.project, capture_output=True, timeout=5)
             if paths.returncode != 0:
                 return None
             names = [p.decode("utf-8", "surrogateescape") for p in paths.stdout.split(b"\0") if p]
-            return {path: self.index_entry(path) for path in names}
+            entries = self.index_entries()
+            if entries is None:
+                return None
+            for path in names:
+                if path not in entries:
+                    fail("cannot inspect protected staged file")
+            return {path: entries[path] for path in names}
         except (OSError, subprocess.TimeoutExpired):
             return None
 
     def index_entry(self, path):
-        result = subprocess.run(["git", "ls-files", "--stage", "-z", "--", path], cwd=self.project, capture_output=True, timeout=5)
-        if result.returncode != 0:
+        entries = self.index_entries()
+        if entries is None or path not in entries:
             fail("cannot inspect protected staged file")
-        return digest(result.stdout)
+        return entries[path]
 
     def required_gates(self, config):
         policy = config["payload"]["admission_policy"]
@@ -498,6 +533,8 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
         expected = {name: config["payload"]["sources"][name]["object_hash"]
                     for name in ("plan", "design") if name in config["payload"]["sources"]}
         if "source_hashes" in p:
+            if p.get("gate_protocol") != 2:
+                return False, False, "source_hashes_without_gate_protocol"
             return p["source_hashes"] == expected, False, None
         cutoff = self.legacy_cutoff()
         if "gate_protocol" in p:
@@ -586,6 +623,8 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
               ("schema_version", "contract_version") + RECORD_OPTIONAL, name="batch item")
         if "schema_version" in item or "contract_version" in item:
             self.v2(item)
+        if item.get("kind") != "verification":
+            fail("batch item kind must be verification")
         if item["config_operation"] != config["op"]:
             fail("batch item belongs to another configuration")
         core = {k: v for k, v in item.items() if k in RECORD_CORE + RECORD_OPTIONAL}
@@ -617,6 +656,8 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
             if not isinstance(item, dict):
                 fail("batch item must be an object")
             text(item.get("op"), "batch item.op")
+            if item.get("kind") != "verification":
+                fail("batch item kind must be verification")
             if item["op"] in ops:
                 fail("duplicate batch item operation id")
             ops.add(item["op"])
@@ -626,10 +667,7 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
             targets.add(identity)
 
         def key_for(item):
-            normalized = {k: v for k, v in item.items() if k not in ("op", "config_operation")}
-            normalized.setdefault("schema_version", 2)
-            normalized.setdefault("contract_version", 2)
-            return digest(canonical({"kind": "record", "input": normalized}))
+            return batch_item_hash(item)
 
         with self.locked():
             if self.data["schema_version"] != 2:
@@ -670,6 +708,15 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
     def close(self, request, op):
         shape(request, ("schema_version", "contract_version", "actor", "mode", "summary", "report", "exceptions"))
         self.v2(request)
+        # Replay an accepted close before preclose so an idempotent retry after
+        # the lifecycle is closed still returns the original event.
+        with self.locked():
+            _, existing = self.duplicate(op, {"kind": "close", "input": request})
+            if existing:
+                return existing
+        pre = self.preclose(request)
+        if not pre["ready"]:
+            fail("preclose blocked: " + "; ".join(pre["blocking"]), "preclose_blocked")
         with self.adapting(request, ("close", None, request["actor"])):
             return super().close({**request, "schema_version": 1, "contract_version": 1}, op)
 
@@ -762,6 +809,18 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
         state["diagnostics"] = diagnostics
         return state
 
+    def protected_index_blockers(self, config):
+        """Return hard blockers for user-staged entries captured at configure."""
+        protected = config["payload"].get("protected_index") or {}
+        if not protected:
+            return []
+        entries = self.index_entries()
+        if entries is None:
+            return ["protected staged entries cannot be checked: git index unavailable"]
+        changed = [path for path, expected in protected.items()
+                   if entries.get(path) != expected]
+        return (["existing user staged entries changed: " + ", ".join(changed)] if changed else [])
+
     def base_blockers(self, config, state):
         reasons = []
         if state["configuration"] != "current":
@@ -775,6 +834,7 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
             reasons.append(str(len(state["unassessed_changes"])) + " unassessed outside changes")
         if state["unsupported_entries"]:
             reasons.append(str(len(state["unsupported_entries"])) + " unsupported entries")
+        reasons.extend(self.protected_index_blockers(config))
         if any(d["name"] == "delivery-orchestrate" for d in state["skill_drift"]):
             reasons.append("orchestrate skill source drift")
         for item in state["unknown_runs"]:
@@ -801,6 +861,11 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
         selected = self.activity_skill(config, kind, target)
         if any(d["name"] == selected for d in state["skill_drift"]):
             reasons.append("professional skill source drift: " + selected)
+        if kind == "review":
+            if who is None:
+                reasons.append("reviewer actor/context required to verify independence")
+            elif not self.independent(who, item["tasks"]):
+                reasons.append("reviewer id/context participated in implementation")
         held = self.held_resources()
         resources = []
         for needed in self.required_resources(config, kind, target):
@@ -949,6 +1014,9 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
         directory = self.work / "admission"
         if directory.is_symlink() or not directory.is_dir():
             return [], 0
+        events_by_op = {}
+        for event in self.data["events"]:
+            events_by_op.setdefault(event["op"], []).append(event)
         hashes = {e["request_hash"] for e in self.data["events"]}
         kinds = {e["kind"] for e in self.data["events"]}
         orphans, matched = [], 0
@@ -960,6 +1028,30 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
             except (OSError, ValueError) as exc:
                 orphans.append({"path": path.name, "error": str(exc)})
                 continue
+            # A verify-batch admission is a batch request, not a single journal
+            # request. Match each item's real record hash instead of treating a
+            # successfully used batch as an orphan.
+            if isinstance(value, dict) and isinstance(value.get("batch_id"), str) and value["batch_id"].strip():
+                items = value.get("items")
+                if isinstance(items, list) and items and len({item.get("op") for item in items if isinstance(item, dict)}) == len(items):
+                    valid = True
+                    for item in items:
+                        if not isinstance(item, dict) or item.get("kind") != "verification":
+                            valid = False
+                            break
+                        config_operation = item.get("config_operation")
+                        if not isinstance(config_operation, str) or not config_operation.strip():
+                            valid = False
+                            break
+                        events = [e for e in events_by_op.get(item.get("op"), [])
+                                  if e["request_hash"] == batch_item_hash(item)
+                                  and e["payload"].get("config_op") == config_operation]
+                        if not events:
+                            valid = False
+                            break
+                    if valid:
+                        matched += 1
+                        continue
             candidates = [value]
             if isinstance(value, dict) and "request" in value:
                 candidates.append(value["request"])
@@ -1041,14 +1133,6 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
                         blocking.append(f"required acceptance {item['id']}: {state['verification'][item['id']]['status']}")
             if any(h["mode"] == "write" for h in state["resources"]):
                 blocking.append("write resources are still held")
-            protected = config["payload"].get("protected_index") or {}
-            try:
-                changed = [path for path, expected in protected.items() if self.index_entry(path) != expected]
-            except DeliveryError as exc:
-                blocking.append("protected staged entries cannot be checked: " + str(exc))
-            else:
-                if changed:
-                    blocking.append("existing user staged entries changed: " + ", ".join(changed))
             try:
                 self.recovery_for(config, "close", None, closing=True)
             except DeliveryError as exc:
@@ -1135,6 +1219,7 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
                 "unsupported_entries": len(state["unsupported_entries"]),
                 "unknown_runs": unsettled,
                 "held_resources": state["resources"],
+                "skill_drift": state["skill_drift"],
                 "diagnostics": state["diagnostics"],
             }
             if state["configuration"] != "current":
@@ -1146,6 +1231,9 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
                 report["warnings"].append(f"{len(state['unassessed_changes'])} unassessed outside changes")
             if state["unsupported_entries"]:
                 report["warnings"].append(f"{len(state['unsupported_entries'])} unsupported entries")
+            if state["skill_drift"]:
+                report["warnings"].append("skill source drift: " + ", ".join(
+                    sorted(item["name"] for item in state["skill_drift"])))
             if unsettled:
                 report["warnings"].append(f"{len(unsettled)} unsettled run(s)")
             if any(item["mode"] == "write" for item in state["resources"]):
@@ -1238,8 +1326,12 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
         self.recovery_for(config, kind, target, closing=kind == "close")
         self.assert_resources(config, kind, target, who)
         protected = config["payload"].get("protected_index") or {}
-        if any(self.index_entry(path) != expected for path, expected in protected.items()):
-            fail("existing user staged entry changed; restore or obtain explicit project decision")
+        if protected:
+            entries = self.index_entries()
+            if entries is None:
+                fail("cannot inspect protected staged entries")
+            if any(entries.get(path) != expected for path, expected in protected.items()):
+                fail("existing user staged entry changed; restore or obtain explicit project decision")
 
     def inspect(self, command):
         with self.locked():

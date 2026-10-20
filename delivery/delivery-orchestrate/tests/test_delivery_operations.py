@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -51,6 +52,13 @@ class PreflightTests(unittest.TestCase):
         candidates = {item["path"]: item for item in result["candidates"]}
         self.assertFalse(candidates["node_modules"]["high_yield"])
         self.assertEqual(candidates["node_modules"]["bytes"], 4 * len("module\n"))
+
+    def test_preflight_rejects_symlinked_project_path(self):
+        link = self.project.parent / "linked-project"
+        link.symlink_to(self.project, target_is_directory=True)
+        self.addCleanup(link.unlink)
+        with self.assertRaisesRegex(delivery.DeliveryError, "symlink"):
+            preflight(link, link / ".delivery/work", 3)
 
 
 class OperationsFixture:
@@ -206,6 +214,11 @@ class OperationsCase(OperationsFixture, unittest.TestCase):
                                 "skill_pins": {}, "gate_protocol": 2}}
         matches, legacy, issue = self.engine.gate_source_state(config, protocol)
         self.assertEqual(issue, "gate_protocol_without_source_hashes")
+        hashes_only = {"seq": cutoff + 1,
+                       "payload": {"kind": "plan_review", "result": "passed", "references": {},
+                                   "skill_pins": {}, "source_hashes": {"plan": "x"}}}
+        matches, legacy, issue = self.engine.gate_source_state(config, hashes_only)
+        self.assertEqual(issue, "source_hashes_without_gate_protocol")
         gate = self.gate("plan_review")
         self.assertEqual(gate["payload"]["gate_protocol"], 2)
         self.assertEqual(set(gate["payload"]["source_hashes"]), {"plan"})
@@ -347,6 +360,56 @@ class OperationsCase(OperationsFixture, unittest.TestCase):
         self.assertTrue(owned["ready"], owned["blocked_reasons"])
         self.claim("implementation", "T1", self.builder, "release")
 
+    def test_close_requires_preclose_and_replays_idempotently(self):
+        self.completed()
+        original = self.engine.preclose
+        self.engine.preclose = lambda request=None: {"ready": False, "blocking": ["synthetic preclose blocker"], "warnings": []}
+        try:
+            with self.assertRaisesRegex(delivery.DeliveryError, "preclose blocked"):
+                self.engine.close(self.closing(), self.op())
+        finally:
+            self.engine.preclose = original
+        self.assertEqual(self.status()["lifecycle"], "active")
+        op = self.op()
+        first = self.engine.close(self.closing(), op)
+        before = len(self.engine.data["events"])
+        second = self.engine.close(self.closing(), op)
+        self.assertEqual(first["op"], second["op"])
+        self.assertEqual(len(self.engine.data["events"]), before)
+
+    def test_guard_checks_reviewer_independence(self):
+        self.completed()
+        builder = self.engine.guard("review", "R1", self.builder)
+        self.assertFalse(builder["ready"])
+        self.assertTrue(any("participated in implementation" in reason for reason in builder["blocked_reasons"]), builder)
+        anonymous = self.engine.guard("review", "R1")
+        self.assertFalse(anonymous["ready"])
+        self.assertTrue(any("actor/context required" in reason for reason in anonymous["blocked_reasons"]), anonymous)
+        independent = self.engine.guard("review", "R1", self.reviewer)
+        self.assertTrue(independent["ready"], independent["blocked_reasons"])
+
+    def test_guard_and_status_include_protected_index(self):
+        subprocess.run(["git", "init", "-q"], cwd=self.project, check=True)
+        self.write("protected.txt", "original user staging\n")
+        subprocess.run(["git", "add", "protected.txt"], cwd=self.project, check=True)
+        self.configure()
+        self.gate("plan_review")
+        self.gate("mapping_review")
+        self.write("protected.txt", "changed user staging\n")
+        subprocess.run(["git", "add", "protected.txt"], cwd=self.project, check=True)
+        state = self.status()
+        self.assertFalse(state["ready_to_implement"])
+        self.assertTrue(any("staged entries changed" in reason for reason in state["blocked_reason"]), state)
+        guard = self.engine.guard("task", "T1")
+        self.assertFalse(guard["ready"])
+        self.assertTrue(any("staged entries changed" in reason for reason in guard["blocked_reasons"]), guard)
+        next_state = self.engine.inspect("next")
+        self.assertFalse(next_state["ready_to_implement"])
+        self.assertTrue(any("staged entries changed" in reason for reason in next_state["blocked_reason"]), next_state)
+        self.write("protected.txt", "original user staging\n")
+        subprocess.run(["git", "add", "protected.txt"], cwd=self.project, check=True)
+        self.assertTrue(self.engine.guard("task", "T1")["ready"])
+
     def test_status_view_preserves_manual_region_and_detects_staleness(self):
         self.admitted()
         self.engine.write_status()
@@ -379,6 +442,23 @@ class OperationsCase(OperationsFixture, unittest.TestCase):
         self.write("plan.md", original)
         accepted = self.engine.preclose(self.closing())
         self.assertTrue(accepted["ready"], accepted["blocking"])
+
+    def test_rejected_log_serializes_concurrent_attempts(self):
+        self.configure()
+        request = {"same": "request"}
+        error = delivery.DeliveryError("same rejection")
+        threads = [threading.Thread(target=delivery.record_rejection,
+                                    args=(self.work, "record", "same-op", self.builder, request, error))
+                   for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        lines = [json.loads(line) for line in (self.work / "runtime/rejected.jsonl").read_text().splitlines()]
+        self.assertEqual(len(lines), 8)
+        self.assertEqual(sorted(line["attempt"] for line in lines), list(range(1, 9)))
+        self.assertEqual(len({line["id"] for line in lines}), 1)
+        self.assertTrue(all(line["retry_of"] == lines[0]["id"] for line in lines[1:]))
 
     def test_rejected_log_is_append_only_and_skips_read_only_commands(self):
         self.configure()
@@ -431,6 +511,16 @@ class OperationsCase(OperationsFixture, unittest.TestCase):
         replay = self.engine.verify_batch(batch, "batch-call-2")
         self.assertIn("Idempotent replay", replay["note"])
         self.assertEqual(len(self.engine.data["events"]), before + 2)
+        admission = self.work / "admission"
+        admission.mkdir(exist_ok=True)
+        (admission / "verify-batch-001.json").write_text(json.dumps(batch))
+        orphans, matched = self.engine.orphan_admissions()
+        self.assertEqual(orphans, [])
+        self.assertGreaterEqual(matched, 1)
+        wrong_kind = copy.deepcopy(batch)
+        wrong_kind["items"][0]["kind"] = "review"
+        with self.assertRaisesRegex(delivery.DeliveryError, "kind must be verification"):
+            self.engine.verify_batch(wrong_kind, "batch-call-review")
         wrong = copy.deepcopy(batch)
         wrong["items"] = [{**item, "config_operation": "config-other"} for item in items]
         with self.assertRaisesRegex(delivery.DeliveryError, "another configuration"):
@@ -466,6 +556,21 @@ class OperationsCase(OperationsFixture, unittest.TestCase):
                                 capture_output=True, text=True)
         self.assertEqual(doctor.returncode, 0, doctor.stderr)
         self.assertEqual(json.loads(doctor.stdout)["rollback_backup"]["status"], "readable")
+
+    def test_doctor_reports_skill_drift(self):
+        self.completed()
+        original = self.engine.state
+        def drifted():
+            state = original()
+            state["skill_drift"] = [{"name": "delivery-plan", "detail": "changed"}]
+            return state
+        self.engine.state = drifted
+        try:
+            report = self.engine.doctor()
+        finally:
+            self.engine.state = original
+        self.assertEqual(report["state"]["skill_drift"], [{"name": "delivery-plan", "detail": "changed"}])
+        self.assertTrue(any("skill source drift: delivery-plan" in warning for warning in report["warnings"]), report)
 
     def test_doctor_matches_admission_by_request_projection(self):
         self.configure()
