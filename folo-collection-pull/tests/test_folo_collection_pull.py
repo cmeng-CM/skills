@@ -27,6 +27,15 @@ def make_entry(entry_id, title, url, description="", author="Alice"):
     }
 
 
+def write_existing(clippings: Path, name: str, title: str, source: str) -> Path:
+    path = clippings / name
+    path.write_text(
+        f'---\ntitle: "{title}"\nsource: "{source}"\n---\n\nbody\n',
+        encoding="utf-8",
+    )
+    return path
+
+
 class NormalizeUrlTests(unittest.TestCase):
     def test_removes_tracking_and_fragment(self):
         self.assertEqual(
@@ -88,29 +97,37 @@ class FrontmatterTests(unittest.TestCase):
 
 
 class ExistingSourceTests(unittest.TestCase):
-    def test_reads_quoted_source(self):
+    def test_reads_quoted_source_and_path(self):
         with tempfile.TemporaryDirectory() as temp:
             clippings = Path(temp) / "11-Clippings"
             clippings.mkdir()
-            (clippings / "one.md").write_text(
-                '---\ntitle: "One"\nsource: "https://example.com/a?utm_source=x"\n---\n\nbody\n',
-                encoding="utf-8",
+            path = write_existing(
+                clippings,
+                "one.md",
+                "One",
+                "https://example.com/a?utm_source=x",
             )
             sources = MODULE.load_existing_sources(clippings)
-            self.assertIn("https://example.com/a", sources)
+            self.assertEqual(sources["https://example.com/a"], path)
 
     def test_reads_title_key_with_host(self):
         with tempfile.TemporaryDirectory() as temp:
             clippings = Path(temp) / "11-Clippings"
             clippings.mkdir()
-            (clippings / "one.md").write_text(
-                '---\ntitle: "Same Article"\nsource: "https://mp.weixin.qq.com/s/old"\n---\n\nbody\n',
-                encoding="utf-8",
+            path = write_existing(
+                clippings,
+                "one.md",
+                "Same Article",
+                "https://mp.weixin.qq.com/s/old",
             )
             keys = MODULE.load_existing_title_keys(clippings)
-            self.assertIn(
-                MODULE.title_key("Same Article", "https://mp.weixin.qq.com/s/new"),
-                keys,
+            self.assertEqual(
+                keys[
+                    MODULE.title_key(
+                        "Same Article", "https://mp.weixin.qq.com/s/new"
+                    )
+                ],
+                path,
             )
 
     def test_ignores_files_without_frontmatter(self):
@@ -118,7 +135,7 @@ class ExistingSourceTests(unittest.TestCase):
             clippings = Path(temp) / "11-Clippings"
             clippings.mkdir()
             (clippings / "one.md").write_text("no frontmatter\n", encoding="utf-8")
-            self.assertEqual(MODULE.load_existing_sources(clippings), set())
+            self.assertEqual(MODULE.load_existing_sources(clippings), {})
 
 
 class StateTests(unittest.TestCase):
@@ -130,8 +147,20 @@ class StateTests(unittest.TestCase):
             MODULE.record_state(state, entry, "pulled", "11-Clippings/a.md")
             MODULE.save_state(path, state)
             loaded = MODULE.load_state(path)
-            self.assertEqual(loaded["entries"]["e1"]["status"], "pulled")
-            self.assertEqual(loaded["entries"]["e1"]["clipping"], "11-Clippings/a.md")
+            record = loaded["entries"]["e1"]
+            self.assertEqual(record["pull_status"], "pulled")
+            self.assertEqual(record["process_status"], "unprocessed")
+            self.assertEqual(record["clipping"], "11-Clippings/a.md")
+            self.assertTrue(record["pulled_at"])
+
+    def test_state_preserves_process_status(self):
+        state = {"version": 1, "updated_at": "", "entries": {}}
+        entry = make_entry("e1", "Title", "https://example.com/a")["entries"]
+        MODULE.record_state(state, entry, "pulled", "11-Clippings/a.md")
+        MODULE.update_process_status(state, ["e1"], "processed")
+        MODULE.record_state(state, entry, "existing", "11-Clippings/a.md")
+        self.assertEqual(state["entries"]["e1"]["process_status"], "processed")
+        self.assertTrue(state["entries"]["e1"]["processed_at"])
 
     def test_state_index(self):
         state = {
@@ -161,7 +190,7 @@ class PlanTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             clippings = Path(temp) / "11-Clippings"
             clippings.mkdir()
-            existing = {"https://example.com/a"}
+            existing = {"https://example.com/a": clippings / "a.md"}
             entries = [
                 make_entry("e1", "Duplicate", "https://example.com/a?utm_source=x"),
                 make_entry("e2", "New", "https://example.com/b"),
@@ -170,6 +199,8 @@ class PlanTests(unittest.TestCase):
             plan = MODULE.build_plan(
                 entries,
                 existing,
+                {},
+                set(),
                 set(),
                 set(),
                 lambda entry_id: "<p>body</p>" if entry_id == "e2" else "",
@@ -191,9 +222,11 @@ class PlanTests(unittest.TestCase):
 
             plan = MODULE.build_plan(
                 entries,
-                set(),
-                set(),
+                {},
+                {},
                 {"e1"},
+                set(),
+                set(),
                 should_not_be_called,
                 clippings,
                 pending=True,
@@ -215,6 +248,8 @@ class PlanTests(unittest.TestCase):
             ]
             plan = MODULE.build_plan(
                 entries,
+                {},
+                {},
                 set(),
                 set(),
                 set(),
@@ -240,8 +275,14 @@ class PlanTests(unittest.TestCase):
             ]
             plan = MODULE.build_plan(
                 entries,
+                {},
+                {
+                    MODULE.title_key(
+                        "Same Article", "https://mp.weixin.qq.com/s/old"
+                    ): clippings / "old.md"
+                },
                 set(),
-                {MODULE.title_key("Same Article", "https://mp.weixin.qq.com/s/old")},
+                set(),
                 set(),
                 lambda entry_id: "<p>body</p>",
                 clippings,
@@ -249,6 +290,7 @@ class PlanTests(unittest.TestCase):
                 pandoc_bin="definitely-missing-pandoc",
             )
             self.assertEqual(plan[0]["status"], "duplicate")
+            self.assertEqual(plan[0]["existing_path"].name, "old.md")
 
     def test_no_content_is_skipped(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -257,6 +299,8 @@ class PlanTests(unittest.TestCase):
             entries = [make_entry("e1", "Empty", "https://example.com/empty")]
             plan = MODULE.build_plan(
                 entries,
+                {},
+                {},
                 set(),
                 set(),
                 set(),
@@ -299,61 +343,46 @@ class MainTests(unittest.TestCase):
             code = MODULE.main(args)
         return code, output.getvalue()
 
-    def test_dry_run_does_not_write_or_create_state(self):
+    def default_args(self, vault: Path, fixture: Path) -> list[str]:
+        return [
+            "--vault-root",
+            str(vault),
+            "--from-json",
+            str(fixture),
+            "--pandoc-bin",
+            "definitely-missing-pandoc",
+        ]
+
+    def test_dry_run_does_not_write_or_create_ledger(self):
         with tempfile.TemporaryDirectory() as temp:
             vault = Path(temp)
             clippings = vault / "11-Clippings"
             clippings.mkdir()
-            (clippings / "existing.md").write_text(
-                '---\ntitle: "Existing"\nsource: "https://example.com/existing"\n---\n\nbody\n',
-                encoding="utf-8",
-            )
-            state = vault / "state.json"
+            write_existing(clippings, "existing.md", "Existing", "https://example.com/existing")
             fixture = self.fixture(vault)
-            code, output = self.run_main(
-                [
-                    "--vault-root",
-                    str(vault),
-                    "--from-json",
-                    str(fixture),
-                    "--pandoc-bin",
-                    "definitely-missing-pandoc",
-                    "--state-file",
-                    str(state),
-                ]
-            )
+            code, output = self.run_main(self.default_args(vault, fixture))
             self.assertEqual(code, 0)
             self.assertIn("Dry run", output)
             self.assertEqual(sorted(path.name for path in clippings.glob("*.md")), ["existing.md"])
-            self.assertFalse(state.exists())
+            self.assertFalse((clippings / MODULE.LEDGER_NAME).exists())
 
     def test_write_creates_files_and_second_run_is_idempotent(self):
         with tempfile.TemporaryDirectory() as temp:
             vault = Path(temp)
             clippings = vault / "11-Clippings"
             clippings.mkdir()
-            existing = clippings / "existing.md"
-            original = (
-                '---\ntitle: "Existing"\nsource: "https://example.com/existing"\n---\n\nbody\n'
+            existing = write_existing(
+                clippings, "existing.md", "Existing", "https://example.com/existing"
             )
-            existing.write_text(original, encoding="utf-8")
-            state = vault / "state.json"
+            original = existing.read_text(encoding="utf-8")
             fixture = self.fixture(vault)
-            args = [
-                "--vault-root",
-                str(vault),
-                "--from-json",
-                str(fixture),
-                "--pandoc-bin",
-                "definitely-missing-pandoc",
-                "--state-file",
-                str(state),
-                "--write",
-            ]
+            args = self.default_args(vault, fixture) + ["--write"]
             code, _ = self.run_main(args)
             self.assertEqual(code, 0)
             self.assertEqual(existing.read_text(encoding="utf-8"), original)
-            first_names = sorted(path.name for path in clippings.glob("*.md"))
+            first_names = sorted(
+                path.name for path in clippings.glob("*.md")
+            )
             self.assertEqual(len(first_names), 3)
             new_file = clippings / "New - Article.md"
             self.assertTrue(new_file.exists())
@@ -362,14 +391,17 @@ class MainTests(unittest.TestCase):
             self.assertIn('  - "待整理"', content)
             self.assertIn("Hello", content)
             self.assertIn("World", content)
-
             video = clippings / "Video.md"
             self.assertTrue(video.exists())
             self.assertIn("> 原文：", video.read_text(encoding="utf-8"))
 
-            saved = json.loads(state.read_text(encoding="utf-8"))
-            self.assertEqual(saved["entries"]["e2"]["status"], "pulled")
-            self.assertEqual(saved["entries"]["e3"]["status"], "pulled")
+            ledger_path = clippings / MODULE.LEDGER_NAME
+            self.assertTrue(ledger_path.exists())
+            saved = json.loads(ledger_path.read_text(encoding="utf-8"))
+            self.assertEqual(saved["entries"]["e2"]["pull_status"], "pulled")
+            self.assertEqual(saved["entries"]["e2"]["process_status"], "unprocessed")
+            self.assertEqual(saved["entries"]["e3"]["pull_status"], "pulled")
+            self.assertEqual(saved["entries"]["e1"]["pull_status"], "existing")
 
             code, output = self.run_main(args)
             self.assertEqual(code, 0)
@@ -382,36 +414,19 @@ class MainTests(unittest.TestCase):
             vault = Path(temp)
             clippings = vault / "11-Clippings"
             clippings.mkdir()
-            state = vault / "state.json"
             fixture = self.fixture(vault)
-            baseline_args = [
-                "--vault-root",
-                str(vault),
-                "--from-json",
-                str(fixture),
-                "--state-file",
-                str(state),
-                "--baseline",
-            ]
+            baseline_args = self.default_args(vault, fixture) + ["--baseline"]
             code, output = self.run_main(baseline_args)
             self.assertEqual(code, 0)
             self.assertIn("BASELINE", output)
             self.assertEqual(list(clippings.glob("*.md")), [])
-            saved = json.loads(state.read_text(encoding="utf-8"))
+            ledger_path = clippings / MODULE.LEDGER_NAME
+            saved = json.loads(ledger_path.read_text(encoding="utf-8"))
             self.assertEqual(len(saved["entries"]), 4)
-            self.assertEqual(saved["entries"]["e1"]["status"], "baseline")
+            self.assertEqual(saved["entries"]["e1"]["pull_status"], "baseline")
+            self.assertEqual(saved["entries"]["e1"]["process_status"], "unprocessed")
 
-            write_args = [
-                "--vault-root",
-                str(vault),
-                "--from-json",
-                str(fixture),
-                "--pandoc-bin",
-                "definitely-missing-pandoc",
-                "--state-file",
-                str(state),
-                "--write",
-            ]
+            write_args = self.default_args(vault, fixture) + ["--write"]
             code, output = self.run_main(write_args)
             self.assertEqual(code, 0)
             self.assertEqual(list(clippings.glob("*.md")), [])
@@ -425,81 +440,74 @@ class MainTests(unittest.TestCase):
             new_fixture_data["contents"]["e5"] = "<p>Fresh content</p>"
             new_fixture.write_text(json.dumps(new_fixture_data), encoding="utf-8")
             code, _ = self.run_main(
-                [
-                    "--vault-root",
-                    str(vault),
-                    "--from-json",
-                    str(new_fixture),
-                    "--pandoc-bin",
-                    "definitely-missing-pandoc",
-                    "--state-file",
-                    str(state),
-                    "--write",
-                ]
+                self.default_args(vault, new_fixture) + ["--write"]
             )
             self.assertEqual(code, 0)
-            self.assertEqual(sorted(path.name for path in clippings.glob("*.md")), ["Fresh.md"])
-            saved = json.loads(state.read_text(encoding="utf-8"))
-            self.assertEqual(saved["entries"]["e5"]["status"], "pulled")
+            self.assertEqual(
+                sorted(path.name for path in clippings.glob("*.md")), ["Fresh.md"]
+            )
+            saved = json.loads(ledger_path.read_text(encoding="utf-8"))
+            self.assertEqual(saved["entries"]["e5"]["pull_status"], "pulled")
 
     def test_include_pulled_can_pull_baseline_entries(self):
         with tempfile.TemporaryDirectory() as temp:
             vault = Path(temp)
             clippings = vault / "11-Clippings"
             clippings.mkdir()
-            state = vault / "state.json"
             fixture = self.fixture(vault)
+            self.run_main(self.default_args(vault, fixture) + ["--baseline"])
             code, _ = self.run_main(
-                [
-                    "--vault-root",
-                    str(vault),
-                    "--from-json",
-                    str(fixture),
-                    "--state-file",
-                    str(state),
-                    "--baseline",
-                ]
-            )
-            self.assertEqual(code, 0)
-            code, _ = self.run_main(
-                [
-                    "--vault-root",
-                    str(vault),
-                    "--from-json",
-                    str(fixture),
-                    "--pandoc-bin",
-                    "definitely-missing-pandoc",
-                    "--state-file",
-                    str(state),
-                    "--write",
-                    "--include-pulled",
-                ]
+                self.default_args(vault, fixture) + ["--write", "--include-pulled"]
             )
             self.assertEqual(code, 0)
             names = sorted(path.name for path in clippings.glob("*.md"))
             self.assertEqual(names, ["New - Article.md", "Video.md"])
 
-    def test_corrupt_state_blocks_write(self):
+    def test_mark_processed_ignored_and_show_ledger(self):
         with tempfile.TemporaryDirectory() as temp:
             vault = Path(temp)
             clippings = vault / "11-Clippings"
             clippings.mkdir()
-            state = vault / "state.json"
-            state.write_text("{not json", encoding="utf-8")
             fixture = self.fixture(vault)
-            code, _ = self.run_main(
-                [
-                    "--vault-root",
-                    str(vault),
-                    "--from-json",
-                    str(fixture),
-                    "--pandoc-bin",
-                    "definitely-missing-pandoc",
-                    "--state-file",
-                    str(state),
-                    "--write",
-                ]
+            self.run_main(self.default_args(vault, fixture) + ["--write"])
+            code, output = self.run_main(
+                ["--vault-root", str(vault), "--mark-processed", "e2"]
             )
+            self.assertEqual(code, 0)
+            self.assertIn("processed", output)
+            saved = json.loads(
+                (clippings / MODULE.LEDGER_NAME).read_text(encoding="utf-8")
+            )
+            self.assertEqual(saved["entries"]["e2"]["process_status"], "processed")
+            self.assertTrue(saved["entries"]["e2"]["processed_at"])
+
+            code, output = self.run_main(
+                ["--vault-root", str(vault), "--mark-ignored", "e3"]
+            )
+            self.assertEqual(code, 0)
+            saved = json.loads(
+                (clippings / MODULE.LEDGER_NAME).read_text(encoding="utf-8")
+            )
+            self.assertEqual(saved["entries"]["e3"]["process_status"], "ignored")
+
+            code, output = self.run_main(
+                ["--vault-root", str(vault), "--show-ledger"]
+            )
+            self.assertEqual(code, 0)
+            self.assertIn("LEDGER", output)
+            self.assertIn("processed", output)
+            self.assertIn("ignored", output)
+            self.assertIn("unprocessed", output)
+
+    def test_corrupt_ledger_blocks_write(self):
+        with tempfile.TemporaryDirectory() as temp:
+            vault = Path(temp)
+            clippings = vault / "11-Clippings"
+            clippings.mkdir()
+            ledger_path = clippings / MODULE.LEDGER_NAME
+            ledger_path.write_text("{not json", encoding="utf-8")
+            fixture = self.fixture(vault)
+            code, _ = self.run_main(self.default_args(vault, fixture) + ["--write"])
             self.assertEqual(code, 1)
             self.assertEqual(list(clippings.glob("*.md")), [])
 

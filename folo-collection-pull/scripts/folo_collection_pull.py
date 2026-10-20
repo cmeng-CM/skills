@@ -39,7 +39,7 @@ TRACKING_PARAMS = {
 }
 ILLEGAL_FILENAME = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 DEFAULT_CATEGORY = "11-Clippings"
-DEFAULT_STATE_FILE = "~/.local/state/folo-collection-pull/state.json"
+LEDGER_NAME = "folo-collection-ledger.json"
 STATE_VERSION = 1
 
 
@@ -98,8 +98,8 @@ def frontmatter_value(frontmatter: str, field: str) -> str:
     return raw
 
 
-def load_existing_sources(clippings_dir: Path) -> set[str]:
-    sources: set[str] = set()
+def load_existing_sources(clippings_dir: Path) -> dict[str, Path]:
+    sources: dict[str, Path] = {}
     if not clippings_dir.exists():
         return sources
     for path in clippings_dir.glob("*.md"):
@@ -115,12 +115,12 @@ def load_existing_sources(clippings_dir: Path) -> set[str]:
         raw = frontmatter_value(text[3:end], "source")
         normalized = normalize_url(raw)
         if normalized:
-            sources.add(normalized)
+            sources.setdefault(normalized, path)
     return sources
 
 
-def load_existing_title_keys(clippings_dir: Path) -> set[str]:
-    title_keys: set[str] = set()
+def load_existing_title_keys(clippings_dir: Path) -> dict[str, Path]:
+    title_keys: dict[str, Path] = {}
     if not clippings_dir.exists():
         return title_keys
     for path in clippings_dir.glob("*.md"):
@@ -139,7 +139,7 @@ def load_existing_title_keys(clippings_dir: Path) -> set[str]:
             frontmatter_value(frontmatter, "source"),
         )
         if key:
-            title_keys.add(key)
+            title_keys.setdefault(key, path)
     return title_keys
 
 
@@ -237,12 +237,6 @@ def unique_path(clippings_dir: Path, title: str, entry_id: str, planned: set[str
     return candidate
 
 
-def default_state_path() -> Path:
-    return Path(
-        os.environ.get("FOLO_COLLECTION_PULL_STATE", DEFAULT_STATE_FILE)
-    ).expanduser()
-
-
 def load_state(path: Path) -> dict:
     if not path.exists():
         return {"version": STATE_VERSION, "updated_at": "", "entries": {}}
@@ -285,37 +279,64 @@ def state_index(state: dict) -> tuple[set[str], set[str], set[str]]:
 
 
 def record_state(
-    state: dict, entry: dict, status: str, clipping: str | None = None
+    state: dict,
+    entry: dict,
+    pull_status: str,
+    clipping: str | None = None,
+    process_status: str | None = None,
 ) -> None:
     entry_id = str(entry.get("id") or "")
     if not entry_id:
         return
+    entries = state.setdefault("entries", {})
+    existing = entries.get(entry_id) or {}
     source = entry.get("url") or ""
-    state.setdefault("entries", {})[entry_id] = {
+    entries[entry_id] = {
         "source": source,
         "normalized_source": normalize_url(source),
         "title": entry.get("title") or "",
         "title_key": title_key(entry.get("title") or "", source),
-        "status": status,
-        "clipping": clipping,
+        "pull_status": pull_status,
+        "process_status": process_status
+        or existing.get("process_status")
+        or "unprocessed",
+        "clipping": clipping if clipping is not None else existing.get("clipping"),
+        "pulled_at": existing.get("pulled_at") or date.today().isoformat(),
+        "processed_at": existing.get("processed_at"),
         "updated_at": date.today().isoformat(),
     }
 
 
+def update_process_status(state: dict, entry_ids: list[str], status: str) -> list[str]:
+    missing: list[str] = []
+    entries = state.setdefault("entries", {})
+    for entry_id in entry_ids:
+        record = entries.get(entry_id)
+        if not record:
+            missing.append(entry_id)
+            continue
+        record["process_status"] = status
+        record["processed_at"] = date.today().isoformat()
+        record["updated_at"] = date.today().isoformat()
+    return missing
+
+
 def build_plan(
     entries: list[dict],
-    existing: set[str],
-    existing_title_keys: set[str],
+    existing_sources: dict[str, Path],
+    existing_title_keys: dict[str, Path],
     pulled_ids: set[str],
+    state_sources: set[str],
+    state_title_keys: set[str],
     content_fetcher,
     clippings_dir: Path,
     pending: bool,
     pandoc_bin: str,
 ) -> list[dict]:
     plan: list[dict] = []
-    seen = set(existing)
-    seen_title_keys = set(existing_title_keys)
     seen_ids = set(pulled_ids)
+    seen_sources = set(state_sources)
+    seen_title_keys = set(state_title_keys)
     planned_names: set[str] = set()
     for wrapper in entries:
         entry = wrapper.get("entries") or {}
@@ -324,15 +345,27 @@ def build_plan(
         source = entry.get("url") or ""
         normalized = normalize_url(source)
         key = title_key(title, source)
-        if (entry_id and entry_id in seen_ids) or (
-            normalized and normalized in seen
-        ) or (key and key in seen_title_keys):
-            plan.append({"status": "duplicate", "title": title, "source": source})
+        existing_path = existing_sources.get(normalized) or existing_title_keys.get(key)
+        if (
+            (entry_id and entry_id in seen_ids)
+            or existing_path
+            or (normalized and normalized in seen_sources)
+            or (key and key in seen_title_keys)
+        ):
+            plan.append(
+                {
+                    "status": "duplicate",
+                    "title": title,
+                    "source": source,
+                    "entry": entry,
+                    "existing_path": existing_path,
+                }
+            )
             continue
         if entry_id:
             seen_ids.add(entry_id)
         if normalized:
-            seen.add(normalized)
+            seen_sources.add(normalized)
         if key:
             seen_title_keys.add(key)
         try:
@@ -469,17 +502,34 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--baseline",
         action="store_true",
-        help="Record current collection entry ids as already seen, without reading content or writing files.",
+        help="Record current collection entry ids as already seen, without reading content or writing clippings.",
     )
     parser.add_argument(
         "--include-pulled",
         action="store_true",
-        help="Ignore the state ledger; the vault scan still prevents duplicate files.",
+        help="Ignore the ledger; the vault scan still prevents duplicate files.",
     )
     parser.add_argument(
         "--state-file",
-        default=str(default_state_path()),
-        help="Idempotency ledger path. Default: ~/.local/state/folo-collection-pull/state.json",
+        default="",
+        help="Ledger path. Default: <vault>/11-Clippings/folo-collection-ledger.json",
+    )
+    parser.add_argument(
+        "--show-ledger",
+        action="store_true",
+        help="Print ledger entries and exit.",
+    )
+    parser.add_argument(
+        "--mark-processed",
+        nargs="+",
+        metavar="ENTRY_ID",
+        help="Mark ledger entries as processed.",
+    )
+    parser.add_argument(
+        "--mark-ignored",
+        nargs="+",
+        metavar="ENTRY_ID",
+        help="Mark ledger entries as ignored.",
     )
     parser.add_argument(
         "--no-pending",
@@ -495,10 +545,48 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def show_ledger(path: Path, state: dict) -> None:
+    entries = state.get("entries") or {}
+    print(f"LEDGER {path}")
+    print("entry_id | pull_status | process_status | title | clipping | pulled_at | processed_at")
+    for entry_id, record in sorted(
+        entries.items(), key=lambda item: (item[1].get("pulled_at") or "", item[0])
+    ):
+        print(
+            " | ".join(
+                [
+                    entry_id,
+                    str(record.get("pull_status") or ""),
+                    str(record.get("process_status") or ""),
+                    str(record.get("title") or ""),
+                    str(record.get("clipping") or ""),
+                    str(record.get("pulled_at") or ""),
+                    str(record.get("processed_at") or ""),
+                ]
+            )
+        )
+    unprocessed = sum(
+        1 for record in entries.values() if record.get("process_status") == "unprocessed"
+    )
+    print(f"Summary: {len(entries)} entries, {unprocessed} unprocessed")
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv if argv is not None else sys.argv[1:])
-    if args.baseline and args.write:
-        print("error: --baseline and --write are separate modes", file=sys.stderr)
+    modes = sum(
+        [
+            bool(args.baseline),
+            bool(args.write),
+            bool(args.show_ledger),
+            bool(args.mark_processed),
+            bool(args.mark_ignored),
+        ]
+    )
+    if modes > 1:
+        print(
+            "error: choose one of --write, --baseline, --show-ledger, --mark-processed, --mark-ignored",
+            file=sys.stderr,
+        )
         return 2
     if not args.vault_root:
         print("error: --vault-root or OBSIDIAN_VAULT is required", file=sys.stderr)
@@ -508,12 +596,35 @@ def main(argv: list[str] | None = None) -> int:
     if not clippings_dir.is_dir():
         print(f"error: {clippings_dir} does not exist", file=sys.stderr)
         return 2
-    state_path = Path(args.state_file).expanduser()
+    state_path = (
+        Path(args.state_file).expanduser()
+        if args.state_file
+        else clippings_dir / LEDGER_NAME
+    )
     try:
         state = load_state(state_path)
     except Exception as exc:  # noqa: BLE001 - never re-pull on a broken ledger
         print(f"error: {exc}", file=sys.stderr)
         return 1
+
+    if args.show_ledger:
+        show_ledger(state_path, state)
+        return 0
+
+    if args.mark_processed or args.mark_ignored:
+        target_status = "processed" if args.mark_processed else "ignored"
+        entry_ids = args.mark_processed or args.mark_ignored or []
+        missing = update_process_status(state, entry_ids, target_status)
+        try:
+            save_state(state_path, state)
+        except Exception as exc:  # noqa: BLE001 - report, do not pretend success
+            print(f"error: could not save ledger: {exc}", file=sys.stderr)
+            return 1
+        print(f"MARKED {len(entry_ids) - len(missing)} entries as {target_status}")
+        if missing:
+            print(f"UNKNOWN {', '.join(missing)}", file=sys.stderr)
+            return 1
+        return 0
 
     if args.from_json:
         fixture = json.loads(Path(args.from_json).read_text(encoding="utf-8"))
@@ -550,7 +661,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             save_state(state_path, state)
         except Exception as exc:  # noqa: BLE001 - state is required for idempotency
-            print(f"error: could not save state: {exc}", file=sys.stderr)
+            print(f"error: could not save ledger: {exc}", file=sys.stderr)
             return 1
         print(
             f"BASELINE: {marked} new, {kept} already recorded, "
@@ -558,7 +669,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
-    existing = load_existing_sources(clippings_dir)
+    existing_sources = load_existing_sources(clippings_dir)
     existing_title_keys = load_existing_title_keys(clippings_dir)
     state_ids, state_sources, state_title_keys = state_index(state)
     if args.include_pulled:
@@ -568,9 +679,11 @@ def main(argv: list[str] | None = None) -> int:
 
     plan = build_plan(
         entries,
-        existing | state_sources,
-        existing_title_keys | state_title_keys,
+        existing_sources,
+        existing_title_keys,
         state_ids,
+        state_sources,
+        state_title_keys,
         fetch,
         clippings_dir,
         pending=not args.no_pending,
@@ -600,6 +713,22 @@ def main(argv: list[str] | None = None) -> int:
 
     write_failures = 0
     for item in plan:
+        if item["status"] == "duplicate" and item.get("existing_path"):
+            entry = item.get("entry") or {}
+            entry_id = str(entry.get("id") or "")
+            if entry_id and entry_id not in state.get("entries", {}):
+                try:
+                    clipping = str(item["existing_path"].relative_to(vault_root))
+                except ValueError:
+                    clipping = str(item["existing_path"])
+                record_state(state, entry, "existing", clipping=clipping)
+                try:
+                    save_state(state_path, state)
+                except Exception as exc:  # noqa: BLE001 - do not lose the tracking record
+                    print(f"error: could not save ledger for {entry_id}: {exc}", file=sys.stderr)
+                    return 1
+                print(f"TRACK existing: {item['existing_path']}")
+            continue
         if item["status"] != "add":
             continue
         try:
@@ -616,7 +745,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             save_state(state_path, state)
         except Exception as exc:  # noqa: BLE001 - file exists, next run scans vault
-            print(f"error: wrote {item['path']} but could not save state: {exc}", file=sys.stderr)
+            print(f"error: wrote {item['path']} but could not save ledger: {exc}", file=sys.stderr)
             return 1
         print(f"WROTE {item['path']}")
     return 0 if counts.get("failed", 0) == 0 and write_failures == 0 else 1

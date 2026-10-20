@@ -1,15 +1,16 @@
 ---
 name: folo-collection-pull
-description: 把 Folo Collection 中尚未处理过的条目拉取到 Obsidian 11-Clippings：状态账本记录已拉取 entry id，剪藏目录再按来源和标题兜底去重，重复运行不会重复生成文件。只新建原始剪藏，不做主题综合或项目写入。
+description: 把 Folo Collection 中尚未拉取过的条目拉到 Obsidian 11-Clippings；账本 folo-collection-ledger.json 记录拉取与处理状态（unprocessed/processed/ignored），剪藏目录再按来源和标题兜底去重，重复运行不会重复拉取或重复处理。只新建原始剪藏，不做主题综合。
 ---
 
 # Folo Collection 拉取到 Obsidian 剪藏
 
 把 Folo Collection 中的**新条目**拉进 Vault 的 `11-Clippings/`。收藏是长期不变的队列，所以本 skill 的核心不是“每次都拉全部”，而是**只拉没拉过的**：
 
-1. 本地状态账本记录已拉取/已 baseline 的 entry id；
+1. 剪藏目录内的账本 `11-Clippings/folo-collection-ledger.json` 记录已拉取/已 baseline 的 entry id；
 2. 再扫描 `11-Clippings/`，按 `source` 和“标题 + 域名”兜底去重；
-3. 已拉过的条目在取正文之前就跳过，重复运行不会重复进剪藏。
+3. 已拉过的条目在取正文之前就跳过，重复运行不会重复进剪藏；
+4. 账本还记录 `process_status`（`unprocessed` / `processed` / `ignored`），后续处理流程据此避免重复处理同一篇。
 
 ## Working Protocol
 
@@ -19,7 +20,8 @@ description: 把 Folo Collection 中尚未处理过的条目拉取到 Obsidian 1
 - `pandoc` 可用；缺失时回退 Python `markdownify`。
 - Vault 根目录包含 `11-Clippings/`。本机为 `/Users/cm/workspace/obsidian/obsidian-repository`，其他环境用 `--vault-root` 或 `OBSIDIAN_VAULT`。
 - Folo Collection 是唯一输入队列；只收藏确定要留下的文章。
-- 默认状态账本：`~/.local/state/folo-collection-pull/state.json`，可用 `--state-file` 改。
+- 默认账本：`<vault>/11-Clippings/folo-collection-ledger.json`，可用 `--state-file` 改。
+- 账本是本 skill 在 `11-Clippings/` 内唯一允许新增的非剪藏文件；不要把它当剪藏正文处理。
 
 Folo CLI 的返回结构、`entry read` / `entry get` 差异和分页，以 `folo` skill 的 `references/commands.md` 为准；本 skill 只固化拉取所需的最小调用。
 
@@ -33,7 +35,7 @@ python3 scripts/folo_collection_pull.py \
   --baseline
 ```
 
-baseline 只读取 `collection list` 的元数据，不调用 `entry read` / `entry get`，不创建剪藏文件；它把当前 entry id 标记为 `baseline`。之后正常拉取时，这些条目会被跳过。
+baseline 只读取 `collection list` 的元数据，不调用 `entry read` / `entry get`，不创建剪藏文件；它把当前 entry id 以 `pull_status: baseline`、`process_status: unprocessed` 写入账本。之后正常拉取时，这些条目会被跳过。
 
 如果以后想补拉某条 baseline 条目，用 `--include-pulled` 覆盖账本；剪藏目录扫描仍会防止重复文件。
 
@@ -89,7 +91,13 @@ tags:
 
 ### 5. 幂等规则
 
-**第一层：状态账本。** 以 entry id 为准，记录 `status: pulled|baseline`、来源、标题、剪藏相对路径。它比文件更稳定：剪藏被移动、改名或删除后，同一 entry 仍不会被重复拉取。
+**第一层：状态账本。** 以 entry id 为准，记录：
+
+- `pull_status`: `pulled`（本次新建）、`baseline`（只登记未拉取）、`existing`（剪藏目录里已有同篇，只登记不新建）；
+- `process_status`: `unprocessed` / `processed` / `ignored`；
+- 来源、标题、剪藏相对路径、`pulled_at`、`processed_at`。
+
+账本比文件更稳定：剪藏被移动、改名或删除后，同一 entry 仍不会被重复拉取。已有剪藏被识别为重复时，也会以 `existing` 写入账本，不会被漏记。
 
 **第二层：剪藏目录扫描。** 每个已有剪藏解析 `source` 和 `title`：
 - `source` 去掉 `utm_*`、`spm`、`from`、`scene`、`poc_token` 等跟踪参数后比较；
@@ -100,7 +108,34 @@ tags:
 - 不要为了重新拉取而删除账本；账本损坏时脚本会停止，避免误判为“全都没拉过”。
 - 如果确认要重建账本，先备份并明确知道会重新扫描收藏；不要静默删除。
 
-### 6. 拉取后的首轮整理
+### 6. 处理状态
+
+账本不只防重复拉取，也防后续处理流程重复处理同一篇。每个 entry 初始为 `unprocessed`；处理完成后必须显式标记：
+
+```bash
+# 查看账本
+python3 scripts/folo_collection_pull.py \
+  --vault-root /Users/cm/workspace/obsidian/obsidian-repository \
+  --show-ledger
+
+# 标记已处理 / 明确忽略
+python3 scripts/folo_collection_pull.py \
+  --vault-root /Users/cm/workspace/obsidian/obsidian-repository \
+  --mark-processed <entry_id>
+
+python3 scripts/folo_collection_pull.py \
+  --vault-root /Users/cm/workspace/obsidian/obsidian-repository \
+  --mark-ignored <entry_id>
+```
+
+规则：
+
+- 后续处理流程只取 `process_status: unprocessed` 的条目；
+- 处理完成或决定不处理后，立即用 `--mark-processed` / `--mark-ignored` 更新，避免下一轮重复处理；
+- 重复标记是幂等的，只更新状态和 `processed_at`；
+- entry id 不在账本中时报告 `UNKNOWN` 并返回失败，不静默忽略。
+
+### 7. 拉取后的首轮整理
 
 对每个新增剪藏：
 
@@ -117,7 +152,7 @@ tags:
 
 任何对已有笔记、项目文档、主题页、周报或记忆的写入，仍使用 `obsidian-write`、`work-closeout`、`memory-write`，不交给本脚本。
 
-### 7. 失败处理
+### 8. 失败处理
 
 | 情况 | 处理 |
 |---|---|
@@ -133,10 +168,12 @@ tags:
 
 - [ ] 首次使用已说明当前 Collection 是 baseline 跳过还是实际拉取；baseline 没有读取正文、没有写剪藏。
 - [ ] dry-run 已说明 `ADD` / `SKIP duplicate` / `SKIP no content` / `FAIL` 数量。
-- [ ] `--write` 只新增了 `11-Clippings` 下的文件；已有文件内容和数量未变。
+- [ ] `--write` 只新增了 `11-Clippings` 下的文件和账本；已有剪藏内容和数量未变。
 - [ ] 每个新增文件都有合法 frontmatter：`title`、`source`、`created`、`description`、`tags`。
 - [ ] 连续执行两次 `--write`，第二次为 `0 add`；没有重复来源或重复标题文件。
-- [ ] 状态账本已写入，且下一次运行在取正文前跳过已拉取 entry。
+- [ ] 账本位于 `11-Clippings/folo-collection-ledger.json`，每条记录都有 `pull_status` 和 `process_status`。
+- [ ] 剪藏目录中已存在的同篇以 `pull_status: existing` 记账，没有生成第二份文件。
+- [ ] 下一次运行在取正文前跳过已拉取 entry；`--show-ledger` 能看到 `unprocessed` 数量。
 - [ ] 失败项已报告，没有把“跳过/失败”说成“拉取完成”。
 
 ## Exit Protocol
@@ -146,12 +183,12 @@ tags:
 ```text
 拉取结果：
 - Vault：<路径>
-- 状态账本：<路径>（新增 N 条 pulled / baseline）
+- 账本：11-Clippings/folo-collection-ledger.json（N 条 pulled / existing / baseline，N 条 unprocessed）
 - 新增：N 个（列出文件）
 - 跳过：N 个已拉取，N 个无正文
 - 失败：N 个（原因）
 - 幂等核对：第二次运行 0 add（或未执行）
-- 下一步：为新增剪藏补 description / 标签 / 去向
+- 下一步：为 unprocessed 剪藏补 description / 标签 / 去向，完成后 --mark-processed
 ```
 
 未写入时明确说“仅 dry-run，未创建文件”。不要声称“收藏已同步完”，只报告本次新增和跳过。
