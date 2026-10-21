@@ -59,3 +59,13 @@ metrics/
 - 主会话按阶段/任务窗口切分，不能切开的标 shared/unallocated；
 - 每次试点至少 5 个匹配任务；样本不足只作方向性结论；
 - 输出 top 时间/成本/finding 热点，并明确数据缺口；不要把 raw token 当金额。
+
+## 7. 最小采集脚本
+
+~~~bash
+python3 -B delivery/delivery-orchestrate/scripts/collect_metrics.py \
+  --work <工作目录> --usage <请求级usage.csv> \
+  --price <价格表.csv> --output <metrics目录>
+~~~
+
+脚本按 session 汇总 input/uncached/cache/output/duration；价格不完整时 cost 为 null，不用部分价格冒充总成本。任务/阶段归因仍需 task_phase_map；脚本只解决 token 汇总和金额计算的最小闭环。
