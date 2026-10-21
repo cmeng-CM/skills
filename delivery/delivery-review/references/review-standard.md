@@ -99,3 +99,7 @@
 局部复审不自动替代编排要求的整体审查。整体审查可与最后一批审查合并，但报告须明确覆盖全体交付、共享约束和集成关系，不能只改标题。
 
 **完成判据：** 后续行动、阻断和独立性限制可识别；报告保留发现与修复链，结论不冒充验收或发布批准。
+
+## 分层与 final
+
+每条发现标记 blocker、defect 或 observation；blocker 按影响和可复现证据判定，不能只按 severity 映射。final whole review 在独立验收之后执行，读取完整交付和验收证据；final 审查者排除实现者、历史批次审查者和 verifier。报告头写明被审 config/版本和覆盖范围；未覆盖当前版本不能作为 gate 证据。final 必须重新 triage observation，避免淹没 blocker。

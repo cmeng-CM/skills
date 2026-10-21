@@ -439,3 +439,18 @@ validate_suite 只证明包结构和确定性回归，不证明真实模型行�
 - 不用 index 代替状态，不用 status 代替门禁，不用报告存在代替验收。
 - 不用“任务大”强制编排，也不用“改动小”绕过既有门禁。
 - 质量由专业判断、独立审查、机械检查和实际验收共同保证；任何一项都不能单独宣称交付完成。
+
+## 15. 质量-成本组合的固定顺序
+
+当前 delivery 组合新增以下运行约定：
+
+- design 冻结后才送 plan/mapping/change gate；
+- 高风险跨边界改动必须有真实入口可执行合同包；合同产物缺失/不可执行才阻断，红测预期失败不阻断；合同测试作者不能是实现者；
+- 功能任务（小/中/大）的 acceptance 必须有独立 verifier；未声明 acceptance 的机械/文档维护才可自检；
+- final whole review 在独立验收之后执行，读取完整交付和验收证据；final 审查者排除实现者、历史批次审查者和 verifier；
+- unknown 未获有限交付授权时阻塞 close，但不阻塞 final；
+- 大型 Git 多任务建议显式设置 review_protocol=2；引擎不隐式默认；
+- batch review 只对含代码且达到最小变更/风险阈值的批次单独进行，小批并入相邻批；记录 review yield；
+- 试点按 [metrics.md](delivery-orchestrate/references/metrics.md) 记录阶段耗时、请求级 token、first-pass/unknown 和 finding 归因；没有价格表只报 token，不报金额。
+
+这些是当前组合的规则，不改变 journal 状态机；没有相应记录时仍以 journal 和报告为准。
