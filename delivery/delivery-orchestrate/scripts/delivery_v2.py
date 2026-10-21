@@ -25,7 +25,7 @@ STATUS_START = "<!-- delivery:status:start -->"
 STATUS_END = "<!-- delivery:status:end -->"
 CONFIG_CORE = ("actor", "plan", "authorization", "mapping_reason", "tasks", "reviews", "acceptance")
 RECORD_CORE = ("kind", "target", "actor", "report", "result", "summary", "evidence")
-RECORD_OPTIONAL = ("issues", "resolutions", "run_operation", "confirmation", "supersedes", "reason", "implementation_skill", "implementation_authors", "review_commit", "base_commit")
+RECORD_OPTIONAL = ("issues", "resolutions", "run_operation", "confirmation", "supersedes", "reason", "implementation_skill", "implementation_authors", "review_commit", "base_commit", "agent_session")
 
 
 LOADED_SOURCE_BYTES = Path(__file__).read_bytes()
@@ -836,6 +836,8 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
     def record(self, request, op):
         shape(request, ("schema_version", "contract_version") + RECORD_CORE, RECORD_OPTIONAL)
         self.v2(request)
+        if "agent_session" in request:
+            text(request["agent_session"], "agent_session")
         core = {k: v for k, v in request.items() if k not in ("implementation_skill", "implementation_authors")}
         core.update(schema_version=1, contract_version=1, skill_revision="actual source pin captured by v2")
         with self.adapting(request, (request["kind"], request["target"], request["actor"])):
@@ -1044,6 +1046,22 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
                     if row["status"] == "passed":
                         row["status"] = "blocked"
                     row["blocked_reason"] = reasons
+        for task in config_payload["spec"]["tasks"]:
+            row = state["implementation"][task["id"]]
+            row["implementation_status"] = row["status"]
+            required = [item["id"] for item in config_payload["spec"]["acceptance"]
+                        if item["required"] and task["id"] in item["tasks"]]
+            statuses = [state["verification"][item]["status"] for item in required]
+            if not statuses:
+                row["acceptance_status"] = "n/a"
+            elif any(value == "failed" for value in statuses):
+                row["acceptance_status"] = "failed"
+            elif any(value == "stale" for value in statuses):
+                row["acceptance_status"] = "stale"
+            elif any(value in ("pending", "unknown") for value in statuses):
+                row["acceptance_status"] = "pending" if "pending" in statuses else "unknown"
+            else:
+                row["acceptance_status"] = "passed"
         state["diagnostics"] = diagnostics
         return state
 
@@ -1201,7 +1219,10 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
                 row = state[group][item["id"]]
                 manual = (" manual-pending" if group == "verification" and item["method"] == "manual"
                           and row["status"] in ("pending", "unknown", "stale") else "")
-                lines.append(f"- {item['id']}: {row['status']}{manual} ({row['operation_id'] or 'no operation'})")
+                suffix = ""
+                if group == "implementation":
+                    suffix = f", acceptance={row.get('acceptance_status', 'unknown')}"
+                lines.append(f"- {item['id']}: {row['status']}{manual}{suffix} ({row['operation_id'] or 'no operation'})")
             lines.append("")
         if state["blocked_reason"]:
             lines.append("### Blocking")

@@ -133,6 +133,18 @@ class V2Case(unittest.TestCase):
         self.assertEqual(event["payload"]["mode"], "complete")
         self.assertEqual(self.status()["lifecycle"], "closed")
 
+    def test_agent_session_and_dual_task_status(self):
+        self.admitted()
+        self.record(agent_session="sess-T1")
+        event = next(e for e in self.engine.data["events"] if e["kind"] == "record")
+        self.assertEqual(event["payload"]["agent_session"], "sess-T1")
+        state = self.status()
+        self.assertEqual(state["implementation"]["T1"]["implementation_status"], "passed")
+        self.assertEqual(state["implementation"]["T1"]["acceptance_status"], "pending")
+        self.record("verification", "A1")
+        state = self.status()
+        self.assertEqual(state["implementation"]["T1"]["acceptance_status"], "passed")
+
     def test_all_execution_entrypoints_block_without_gates(self):
         self.command()
         self.configure()

@@ -229,7 +229,7 @@ python3 -B CLI verify-batch --work W --input /项目路径/.delivery/日期-主�
 
 manual 验收仍要求逐项真实人工确认；manual pending 不能批量假通过。
 
-record 格式沿用 v1 的 kind/target/actor/report/result/summary/evidence 与可选 issues/resolutions/run_operation/confirmation/supersedes/reason，版本改 2/2，**去掉 skill_revision**。引擎按任务已接纳路线自动绑定实际专业 pin 和执行 pin；fix 的附加字段与报告位置见 [实施子契约 1](#可选复杂修复接入实施子契约-1)。实施不代替审查，审查排除覆盖任务全部历史实施者，问题只能原 owner 凭证据关闭。
+record 格式沿用 v1 的 kind/target/actor/report/result/summary/evidence 与可选 issues/resolutions/run_operation/confirmation/supersedes/reason/agent_session，版本改 2/2，**去掉 skill_revision**。agent_session 记录实际执行 session（可取得时），只作审计，不替代 actor/context 独立性判断。引擎按任务已接纳路线自动绑定实际专业 pin 和执行 pin；fix 的附加字段与报告位置见 [实施子契约 1](#可选复杂修复接入实施子契约-1)。实施不代替审查，审查排除覆盖任务全部历史实施者，问题只能原 owner 凭证据关闭。
 
 ```bash
 python3 -B CLI record --work W --input /项目路径/.delivery/日期-主题/admission/implementation-001.json --op impl-T1-001
@@ -315,7 +315,7 @@ attempt 命令保存版本、actor、config_operation、target=`{kind,id}`、fai
 
 诊断责任按稳定目标跨配置承接；实施目标还按历史配置中相同 bug 身份关联任务。organization、换执行能力或同 bug 转交本身不解除阻塞。解除须有当前有效报告/事实引用支持的不同事实内容或策略；仅改 outcome、重复或重排同一事实引用不算变化。解除依据后来过期时，原未解决诊断责任重新阻塞；机器只能识别内容/声明变化，策略是否有实质新判断仍须专业核对。
 
-status/check/next/brief/source 均提供可追溯恢复入口；只读视图可选 `--format markdown|json`，同一结果对象生成。init 后未配置明确提示 configure required；日志或对象损坏 fail closed，不删失败事件或重算哈希链“修好”。
+status/check/next/brief/source 均提供可追溯恢复入口；只读视图可选 `--format markdown|json`，同一结果对象生成。status 的任务行同时给出 implementation_status 与 acceptance_status；implementation passed 不等于 acceptance passed。init 后未配置明确提示 configure required；日志或对象损坏 fail closed，不删失败事件或重算哈希链“修好”。
 
 ## 7.1 可选审查批次协议 2
 
@@ -337,7 +337,7 @@ status/check/next/brief/source 均提供可追溯恢复入口；只读视图可�
 
 批次审查在批次任务全部 record passed、测试通过、review_commit 已提交后进行一次；批次只读可并行，record 仍串行。final 审查必须等全部批次 passed，校验每个批次 review_commit 是 final 祖先、base_commit 等于 configure base 且严格早于所有批次、当前 HEAD 等于 final review_commit、产品工作树干净、diff 非空。final 审查者不得是实现者或任何历史批次审查者；record/guard/state 共用判定，final 后新提交或批次重录使 final stale。
 
-review record 新增 review_commit/base_commit 字段（协议 2 必填），只对 review_protocol=2 强制。批次的审查包可裁剪到批次 scope；final 审查包必须含完整 design/plan/关键决策/全局约束、需求与验收清单、base..head 完整 diff、实现测试证据、验收命令和验证计划。独立验证在终审后执行，不在终审包内。
+review record 新增 review_commit/base_commit 字段（协议 2 必填），只对 review_protocol=2 强制。批次的审查包可裁剪到批次 scope；final 审查包必须含完整 design/plan/关键决策/全局约束、需求与验收清单、base..head 完整 diff、实现测试证据、验收命令和独立验收证据。独立验证在 final 之前完成，final 读取验收结果；若验收后修改代码，重跑受影响验收并重做 final。unknown 未获有限交付授权时阻塞 close，但不阻塞 final。
 
 回退不在当前协议 2 工作内改协议：新开 linked 单 review 工作，旧 review 记录只读保留；受影响结论在新工作重做或原工作按协议 2 完成，不能回填为已通过。
 

@@ -285,6 +285,7 @@ status.md：
 
 - 由 status --write-status 生成；
 - 包含 lifecycle、config、gates、tasks、reviews、verification、unassessed、unknown runs、resources 等；
+- 每个任务同时显示 implementation_status 与 acceptance_status；implementation passed 不等于 acceptance passed；
 - 人工补充区不参与门禁；
 - 可能过期，journal 才是真源。
 
