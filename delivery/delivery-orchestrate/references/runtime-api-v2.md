@@ -168,9 +168,18 @@ python3 -B CLI gate --work W --input /项目路径/.delivery/日期-主题/admis
   "report": {"path": ".delivery/2026-10-16-settings/plan-reviews/001.md"},
   "result": "passed",
   "summary": "核查目标覆盖、可实施性、联合依赖、阶段消费者及验证归属，无阻断遗漏。",
-  "evidence": [{"path": ".delivery/2026-10-16-settings/evidence/plan-review.md"}]
+  "evidence": [{"path": ".delivery/2026-10-16-settings/evidence/plan-review.md"}],
+  "report_provenance": {
+    "config_operation": "config-001",
+    "design_version": "v0.3",
+    "plan_version": "v0.2",
+    "scope": "full delivery",
+    "reviewer_session": "sess-review-001"
+  }
 }
 ```
+
+report_provenance 可选；出现时 `config_operation` 必填且必须等于当前配置，其余字段为字符串。它只记录报告头 provenance，不替代 source_hashes 或 gate 的 fresh 校验。
 
 kind 为 plan_review/design_review/mapping_review/change_review，result 为 passed/failed/unknown。相同 kind 最新记录生效，不能绕过后续失败选早期通过。报告、证据、来源变化令结论 stale。gate 保存的实际编排 pin，以及 plan/design 审阅对应专业 pin，必须仍属于有效来源链；兼容证据失效后，即使恢复旧包，也不能把新版生成的审阅当成旧版审阅。补齐有效兼容链或按有效来源重新审阅才可继续。无关专业包的 pin 不使该 gate 过期。
 

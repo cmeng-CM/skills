@@ -250,8 +250,8 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
                 fail(reason, "review_independence")
             fail(reason, "review_commit_mismatch")
 
-    def validate_extra(self, request, fields):
-        shape(request, ("schema_version", "contract_version", "actor") + tuple(fields))
+    def validate_extra(self, request, fields, optional=()):
+        shape(request, ("schema_version", "contract_version", "actor") + tuple(fields), tuple(optional))
         self.v2(request)
         actor(request["actor"])
 
@@ -799,7 +799,8 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
         return {"delivery-orchestrate"} | ({professional} if professional else set())
 
     def gate(self, request, op):
-        self.validate_extra(request, ("config_operation", "kind", "report", "result", "summary", "evidence"))
+        self.validate_extra(request, ("config_operation", "kind", "report", "result", "summary", "evidence"),
+                            ("report_provenance",))
         if request["kind"] not in GATES or request["result"] not in ("passed", "failed", "unknown"):
             fail("invalid admission gate kind/result")
         text(request["summary"], "summary")
@@ -809,6 +810,14 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
                 return prior
             self.active()
             config = self.match_config(request)
+            if "report_provenance" in request:
+                provenance = request["report_provenance"]
+                shape(provenance, ("config_operation",), ("design_version", "plan_version", "scope", "reviewer_session"))
+                if provenance["config_operation"] != config["op"]:
+                    fail("report_provenance belongs to another configuration")
+                for key in ("design_version", "plan_version", "scope", "reviewer_session"):
+                    if key in provenance:
+                        text(provenance[key], "report_provenance." + key)
             if any(d["name"] in self.gate_sources(request["kind"]) for d in self.source_drift(config)):
                 fail("actual gate skill source drift; accept compatible update or restore pin")
             if request["kind"] == "design_review" and "design" not in config["payload"]["sources"]:

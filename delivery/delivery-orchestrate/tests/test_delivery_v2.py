@@ -133,6 +133,15 @@ class V2Case(unittest.TestCase):
         self.assertEqual(event["payload"]["mode"], "complete")
         self.assertEqual(self.status()["lifecycle"], "closed")
 
+    def test_gate_report_provenance_binds_current_config_and_session(self):
+        self.admitted()
+        with self.assertRaisesRegex(delivery.DeliveryError, "another configuration"):
+            self.gate("plan_review", report_provenance={"config_operation": "other"})
+        event = self.gate("plan_review", report_provenance={"config_operation": self.configuration["op"],
+                                                               "design_version": "v1", "reviewer_session": "sess-r"})
+        self.assertEqual(event["payload"]["report_provenance"]["config_operation"], self.configuration["op"])
+        self.assertEqual(event["payload"]["report_provenance"]["reviewer_session"], "sess-r")
+
     def test_agent_session_and_dual_task_status(self):
         self.admitted()
         self.record(agent_session="sess-T1")

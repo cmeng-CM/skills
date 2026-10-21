@@ -34,6 +34,17 @@ class MetricsTests(unittest.TestCase):
         self.assertIsNone(total["cost"])
         self.assertEqual(sessions["s1"]["requests"], 2)
 
+    def test_task_phase_mapping_and_unmapped(self):
+        mapping = self.root / "map.csv"
+        with mapping.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(["session_id", "task_id", "phase_id", "weight"])
+            writer.writerow(["s1", "T1", "P1", 1])
+        grouped = collect_metrics.summarize_by_task_phase(self.usage, collect_metrics.load_map(mapping))
+        self.assertEqual(grouped[("T1", "P1")]["input_tokens"], 3000)
+        self.assertEqual(grouped[("unmapped", "unmapped")]["input_tokens"], 500)
+        self.assertEqual(grouped[("unmapped", "unmapped")]["allocation"], "unmapped")
+
     def test_cost_requires_all_rows(self):
         price = self.root / "price.csv"
         with price.open("w", newline="", encoding="utf-8") as handle:

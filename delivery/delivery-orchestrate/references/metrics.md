@@ -65,7 +65,9 @@ metrics/
 ~~~bash
 python3 -B delivery/delivery-orchestrate/scripts/collect_metrics.py \
   --work <工作目录> --usage <请求级usage.csv> \
-  --price <价格表.csv> --output <metrics目录>
+  --map <task_phase_map.csv> --output <metrics目录>
 ~~~
 
-脚本按 session 汇总 input/uncached/cache/output/duration；价格不完整时 cost 为 null，不用部分价格冒充总成本。任务/阶段归因仍需 task_phase_map；脚本只解决 token 汇总和金额计算的最小闭环。
+map CSV 字段：session_id,task_id,phase_id,weight。一个 session 对应多个 task/phase 时按 weight 分摊，标 shared_equal_or_weighted；未映射 session 输出到 unmapped。
+
+脚本按 session 汇总 input/uncached/cache/output/duration，并输出 usage_by_session.csv、usage_by_task_phase.csv、metrics_summary.json。价格不是必需；没有价格时只报 token，不报金额。任务/阶段归因来自显式 map，不能由 session 名猜。

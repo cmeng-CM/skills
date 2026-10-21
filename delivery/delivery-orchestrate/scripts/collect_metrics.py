@@ -86,6 +86,52 @@ def summarize_usage(path, prices):
     return total, dict(sessions)
 
 
+def load_map(path):
+    if not path:
+        return {}
+    mapping = defaultdict(list)
+    for row in read_csv(path):
+        session = (row.get("session_id") or "").strip()
+        task = (row.get("task_id") or "").strip()
+        phase = (row.get("phase_id") or "").strip()
+        if not session or not task or not phase:
+            continue
+        try:
+            weight = float(row.get("weight") or 1)
+        except ValueError:
+            weight = 1.0
+        mapping[session].append((task, phase, max(weight, 0.0)))
+    return dict(mapping)
+
+
+def summarize_by_task_phase(path, mapping):
+    rows = read_csv(path)
+    grouped = defaultdict(lambda: {"requests": 0.0, "input_tokens": 0.0, "uncached_input_tokens": 0.0,
+                                   "cache_read_tokens": 0.0, "cache_write_tokens": 0.0,
+                                   "output_tokens": 0.0, "duration_ms": 0.0,
+                                   "allocation": "exact"})
+    for row in rows:
+        session = row.get("session_id") or "(unknown)"
+        targets = mapping.get(session) or [("unmapped", "unmapped", 1.0)]
+        total_weight = sum(weight for _, _, weight in targets) or 1.0
+        inputs = number(row.get("input_tokens"))
+        cache_read = number(row.get("cache_read_input_tokens"))
+        values = {"requests": 1.0, "input_tokens": float(inputs),
+                  "uncached_input_tokens": float(max(inputs - cache_read, 0)),
+                  "cache_read_tokens": float(cache_read),
+                  "cache_write_tokens": float(number(row.get("cache_creation_input_tokens"))),
+                  "output_tokens": float(number(row.get("output_tokens"))),
+                  "duration_ms": float(number(row.get("duration_ms")))}
+        for task, phase, weight in targets:
+            share = weight / total_weight
+            cell = grouped[(task, phase)]
+            if len(targets) > 1 or task == "unmapped":
+                cell["allocation"] = "shared_equal_or_weighted" if task != "unmapped" else "unmapped"
+            for key, value in values.items():
+                cell[key] += value * share
+    return dict(grouped)
+
+
 def journal_summary(path):
     if not path:
         return None
@@ -124,11 +170,23 @@ def main():
     parser.add_argument("--work")
     parser.add_argument("--usage", required=True)
     parser.add_argument("--price")
+    parser.add_argument("--map", dest="map_path")
     parser.add_argument("--output", default="metrics")
     args = parser.parse_args()
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
     total, sessions = summarize_usage(args.usage, load_prices(args.price))
+    mapping = load_map(args.map_path)
+    by_task_phase = output / "usage_by_task_phase.csv"
+    with by_task_phase.open("w", newline="", encoding="utf-8") as handle:
+        fields = ["task_id", "phase_id", "requests", "input_tokens", "uncached_input_tokens",
+                  "cache_read_tokens", "cache_write_tokens", "output_tokens", "duration_ms", "allocation"]
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for (task, phase), row in sorted(summarize_by_task_phase(args.usage, mapping).items()):
+            writer.writerow({"task_id": task, "phase_id": phase,
+                             **{key: round(value, 2) for key, value in row.items() if key != "allocation"},
+                             "allocation": row["allocation"]})
     by_session = output / "usage_by_session.csv"
     fields = ["session_id", "requests", "input_tokens", "uncached_input_tokens",
               "cache_read_tokens", "cache_write_tokens", "output_tokens", "duration_ms", "cost"]
@@ -142,7 +200,7 @@ def main():
         "usage": total,
         "journal": journal_summary(args.work),
         "cost_note": "cost is null unless every request has a matching price row",
-        "files": [str(by_session)],
+        "files": [str(by_session), str(by_task_phase)],
     }
     (output / "metrics_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2))
     print(json.dumps(summary, ensure_ascii=False, indent=2))
