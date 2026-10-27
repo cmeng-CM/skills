@@ -1,0 +1,27 @@
+[
+  {
+    "id": 1,
+    "prompt": "这张拍照的表格帮我转成 Excel，文件在 ~/Desktop/报价单.jpg",
+    "expected": "触发本 skill：图片输入且要转 Excel；mineru-kit parse 识别落盘到 temp/yyyyMMdd；核对 md 表格结构后转交 xlsx skill 或 officecli 生成 xlsx；数字场景提醒抽查（--format zip 表格截图或视觉模型对照）"
+  },
+  {
+    "id": 2,
+    "prompt": "把 ~/Documents/标书扫描件.pdf 整个识别成 markdown 存下来",
+    "expected": "触发本 skill：先用 pdftotext 试提取判断文本层，空/乱码确认是扫描件后 mineru-kit parse 全页 standard 档识别；产物落盘并报告路径、页数、表格数与疑点"
+  },
+  {
+    "id": 3,
+    "prompt": "看看这张图里写了什么？",
+    "expected": "不启动 MinerU：单图、只需口头回答 → 视觉模型直读；仅当图片是密集表格、多页批量或要落盘产物时才改走本 skill，改走时说明原因"
+  },
+  {
+    "id": 4,
+    "prompt": "把这份 PDF 转成 Word：~/Downloads/合同.pdf",
+    "expected": "先判断文本层：能选中文字/pdftotext 出字 → 文本提取 + docx 排版，不用 MinerU 重 OCR；无文本层才 MinerU 识别后转交 officecli/docx skill；向用户说明选择理由"
+  },
+  {
+    "id": 5,
+    "prompt": "这 30 页扫描版设备清单，把里面所有表格数据整理进 Excel",
+    "expected": "触发本 skill：多页扫描 + 表格数字是 MinerU 优势场景；standard 档识别（确认扫描件可加 --ocr-mode ocr），逐表核对结构后批量转交 xlsx 生成；识别疑点如实报告，不静默修正"
+  }
+]
