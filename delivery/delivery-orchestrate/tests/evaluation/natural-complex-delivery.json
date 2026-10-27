@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "id": "natural-complex-delivery",
+  "activation": "natural",
+  "mode": "fullflow",
+  "skills": [
+    "delivery-design",
+    "delivery-plan",
+    "delivery-implement",
+    "delivery-review",
+    "delivery-verify",
+    "delivery-orchestrate",
+    "delivery-fix"
+  ],
+  "fixture": "fixtures/natural-ledger",
+  "git": true,
+  "prompt": "请把 README.md 的账本汇总功能完整交付。共享交易输入、收入和支出分支及命令接入有依赖关系，要能看清各自完成情况、问题处理和验收依据，并支持之后换会话接着做。最终需要由未参与实现的上下文复核实际改动，逐项核对用户可见结果。已授权本地业务代码、测试和必要技术文档修改及范围内技术决策；不提交、不推送。",
+  "requirements": [],
+  "allowed_changes": [
+    "业务代码、测试、必要技术文档和可恢复的本地交付记录"
+  ]
+}

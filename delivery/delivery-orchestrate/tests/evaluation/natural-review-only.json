@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "id": "natural-review-only",
+  "activation": "natural",
+  "mode": "negative",
+  "skills": [
+    "delivery-design",
+    "delivery-plan",
+    "delivery-implement",
+    "delivery-review",
+    "delivery-verify",
+    "delivery-orchestrate",
+    "delivery-fix"
+  ],
+  "fixture": "fixtures/natural-cli",
+  "git": false,
+  "prompt": "请只审查 app.py 是否符合 README.md 已有约定，指出有依据的问题和影响，必要时可运行现有命令或测试。仅在对话给出结论，不修改或创建任何文件。",
+  "requirements": [],
+  "allowed_changes": []
+}

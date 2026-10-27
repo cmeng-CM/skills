@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "id": "natural-discussion-only",
+  "activation": "natural",
+  "mode": "negative",
+  "skills": [
+    "delivery-design",
+    "delivery-plan",
+    "delivery-implement",
+    "delivery-review",
+    "delivery-verify",
+    "delivery-orchestrate",
+    "delivery-fix"
+  ],
+  "fixture": "fixtures/natural-cli",
+  "git": false,
+  "prompt": "我还没决定是否增加多语言问候。只讨论当前命令支持中英文问候的两种简单做法和各自代价，给出建议；不要创建或修改文件，也不要运行开发流程。",
+  "requirements": [],
+  "allowed_changes": []
+}

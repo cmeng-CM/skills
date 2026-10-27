@@ -1,0 +1,10 @@
+.claude/
+.history/
+.DS_Store
+*.bak
+__pycache__/
+*.pyc
+
+# 本地任务材料与执行记录
+/.delivery/
+/.workflow/

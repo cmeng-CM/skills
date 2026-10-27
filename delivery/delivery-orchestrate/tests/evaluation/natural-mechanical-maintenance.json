@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "id": "natural-mechanical-maintenance",
+  "activation": "natural",
+  "mode": "standalone",
+  "skills": [
+    "delivery-design",
+    "delivery-plan",
+    "delivery-implement",
+    "delivery-review",
+    "delivery-verify",
+    "delivery-orchestrate",
+    "delivery-fix"
+  ],
+  "fixture": "fixtures/natural-cli",
+  "git": false,
+  "prompt": "请把 README.md 里的 greetng 拼写改成 greeting，只改这一处文字，不改代码或规则，不提交。",
+  "requirements": [],
+  "allowed_changes": [
+    "README.md 中指定拼写"
+  ]
+}

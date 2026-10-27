@@ -1,0 +1,6 @@
+interface:
+  display_name: "Delivery 复杂缺陷修复"
+  short_description: "独立或编排使用的复杂故障诊断与修复，留存多轮证据、自检和续接记录"
+  default_prompt: "使用 $delivery-fix 诊断并修复本次已授权的 bug，保留根因依据、针对性自检和可续接记录。"
+policy:
+  allow_implicit_invocation: true

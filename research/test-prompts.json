@@ -1,0 +1,62 @@
+[
+  {
+    "id": "independent-live",
+    "coverage": ["independent-research", "knowledge-discovery", "live-sources"],
+    "prompt": "我没有相关收藏。请研究 HTTP 客户端遇到超时后为什么不能一律重试，直接查官方资料与原始论证，讲清需要掌握的概念、适用条件和仍需具体系统信息的部分。",
+    "expected": "直接进入问题研究，不要求先读 Vault 或选题。建立解释问题所需的概念关联，使用当前可用渠道实际读取原始材料，按关键缺口追踪与补查；结论可追溯，当前资料与推断分开，不自动安装、运行实验或保存。"
+  },
+  {
+    "id": "source-framework",
+    "coverage": ["knowledge-discovery", "material-scope", "citation-tracing"],
+    "prompt": "请只根据给定的 MicaQueue 合成资料目录，研究队列工具在超时后重试会不会重复执行。我还不熟悉这个问题，先解释需要理解的知识和关系，再给有条件的判断，不运行实验。",
+    "expected": "沿目录和引用读取必要材料，建立受理、执行、确认等相关概念的关系，追溯原始依据及后续版本；不只汇总文章标题，不把原问题扩展成整个队列系统综述，不越过限定材料或实验边界。"
+  },
+  {
+    "id": "handoff",
+    "coverage": ["handoff", "independent-research", "material-scope"],
+    "prompt": "沿用刚才已选的问题继续研究：问题是超时重试如何避免重复执行，用途是设计我的工具调用循环；范围仅限给定的 MicaQueue 合成资料，不联网、不实验；已有线索是目录中的两版 API 文档和测量报告；待验证判断是相同请求键是否足以保证业务动作不重复。",
+    "expected": "复用五项自然语言交接信息直接研究，不重新选题或索要已有背景，不自行写选择反馈；读取被采用的材料并区分契约、观察和推断，遵守仅给定材料与不实验的约束。"
+  },
+  {
+    "id": "evidence-conflict",
+    "coverage": ["evidence-conflict", "source-independence", "citation-tracing"],
+    "prompt": "只看给定的 MicaQueue 合成资料：两篇文章都称重试可避免重复执行、节约 35% 的成本。这能否作为我采用方案的依据？请比较证据，处理版本差异，并说明现有材料能支持到哪里。",
+    "expected": "实际追踪转载来源与版本修订，检查测量指标、样本、场景和限制；不把两篇转载当独立证据或按数量投票，不把效果外推视为实测。无法消解的部分保持未定，指出会改变判断的缺口，不能自动实验。"
+  },
+  {
+    "id": "single-file",
+    "coverage": ["material-scope", "unsupported-claim"],
+    "prompt": "只根据我指定的那一篇转载文章，判断它是否证明我的所有工具都能零重复执行并节约 35% 的成本。不要联网，不要打开它的引用，也不要读取其他文件。",
+    "expected": "仅读取指定文章，不读其他研究资料、个人背景或文章外链；根据可用内容说明能否支持主张，清楚标出范围与证据限制，不假装已核验原报告，也不通过扩大范围补强结论。"
+  },
+  {
+    "id": "channel-failure",
+    "coverage": ["channel-failure", "bounded-conclusion"],
+    "prompt": "请研究超时重试的条件。给定本地合成资料可读，但本次联网渠道已经返回不可用，请在这些可用材料上继续，说明对结论的影响，不把失败的渠道当作查无结果。",
+    "expected": "区分未查、没查成和查后未发现，说明失败原因与证据时效/覆盖边界；利用允许的可用材料回答能回答的部分，不声称核实了当前网络情况，不反复探测同一未变化失败或编造来源。"
+  },
+  {
+    "id": "bounded-enumeration",
+    "coverage": ["bounded-enumeration", "material-scope"],
+    "prompt": "请列出给定本地合成资料目录中所有 Markdown 资料，并说明每份的用途和引用关系。范围仅是这个目录，不需要找别处的资料。",
+    "expected": "将任务识别为有界枚举并核对实际目录条目，读取用于判断用途和引用关系的材料；完整性只限定当前目录，不用搜索命中或限量结果代替枚举，不扩展到全网。"
+  },
+  {
+    "id": "ambiguous-topic",
+    "coverage": ["clarification"],
+    "prompt": "帮我研究一下 AI。",
+    "expected": "先提出一个决定研究方向的关键澄清问题，等待用户明确目标；不自行选题、读取个人资料或启动宽泛联网综述。"
+  },
+  {
+    "id": "collection-notice",
+    "coverage": ["non-trigger"],
+    "prompt": "我刚往收藏目录放了两篇新文章。",
+    "expected": "不因收藏通知自动研究、选题、摘要、整理或写入；不把读过材料等同于用户已读。"
+  },
+  {
+    "id": "experiment-boundary",
+    "coverage": ["no-default-experiment", "unsupported-claim"],
+    "prompt": "根据给定资料判断这套方案能否保证我的系统在所有超时情况下零重复执行；如果资料证明不了，请告诉我需要怎样的验证，不要实际运行或安装任何东西。",
+    "expected": "检查资料支持范围，不能证明时说明缺少的实测条件及建议方法，不自动执行研究对象或伪造实验数据；区分建议、已报告观察和用户系统实测。"
+  }
+]
