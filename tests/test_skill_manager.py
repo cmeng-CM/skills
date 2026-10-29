@@ -45,6 +45,7 @@ class ManagerTests(unittest.TestCase):
                              self.base / "cache/write.lock", cwd=self.base,
                              stdin=io.StringIO(), stdout=io.StringIO(), stderr=io.StringIO())
         self.ctx.vault_root = self.base / "vault"
+        self.ctx.trash_root = self.base / "trash"
 
     def package(self, name="alpha", group=""):
         p = self.repo / group / name
@@ -239,8 +240,9 @@ class ManagerTests(unittest.TestCase):
         self.assertIn("alpha", snapshot.rows)
         self.assertEqual(snapshot.groups["alpha"], m.GROUP_EXT)
         self.assertEqual(snapshot.rows["alpha"]["claude"].state, m.LINK_OTHER)
-        self.assertEqual(self.call("remove", "alpha"), 2)
-        self.assertTrue(slot.is_symlink())
+        self.assertEqual(self.call("remove", "alpha"), 0)
+        self.assertFalse(slot.is_symlink())
+        self.assertTrue(outside.is_dir())
 
     def test_foreign_path_invalid_name_and_unknown_batch_zero_writes(self):
         self.package()
@@ -369,7 +371,7 @@ class ManagerTests(unittest.TestCase):
         shutil.rmtree(self.repo / "alpha")
         self.ctx.stdin = TTYInput("i 1\n/\nq\n")
         self.assertEqual(m.main([], self.ctx), 0)
-        self.assertIn("没有可管理", self.ctx.stdout.getvalue())
+        self.assertIn("没有匹配", self.ctx.stdout.getvalue())
 
     def test_non_tty_aliases_help_and_argument_errors(self):
         self.package()
@@ -405,12 +407,11 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual(snapshot.groups["dupe"], m.GROUP_VAULT)
         self.assertEqual(self.call("status"), 0)
         output = self.ctx.stdout.getvalue()
-        self.assertIn("自建 · Obsidian Vault 2 项 · 只读，v 看来源", output)
-        self.assertIn("folo", output)
+        self.assertIn("自建 · Obsidian Vault 2 项", output)
         self.assertIn("两端链接 → 61-skills/folo", output)
         self.assertIn("仅 Claude 链接 → 61-skills/dupe", output)
-        self.assertEqual(self.call("install", "folo"), 2)
-        self.assertIn("不在安装范围", self.ctx.stderr.getvalue())
+        self.assertEqual(self.call("install", "folo"), 1)
+        self.assertIn("不在「仓库」组，不能安装", self.ctx.stderr.getvalue())
         self.assertFalse((self.ctx.targets["agents"] / "dupe").exists())
 
     def test_external_independent_share_warning_and_json(self):
@@ -425,8 +426,8 @@ class ManagerTests(unittest.TestCase):
         self.link("shared", home, "claude")
         self.assertEqual(self.call("status"), 0)
         output = self.ctx.stdout.getvalue()
-        self.assertIn("两端独立 ⚠ 各一份", output)
-        self.assertIn("Claude 共享 · Agents 独立", output)
+        self.assertIn("两端本体 ⚠ 各一份", output)
+        self.assertIn("Claude 引用 · Agents 本体", output)
         self.assertIn("外部 · 独立安装", output)
         self.assertEqual(self.call("status", "--json"), 0)
         payload = json.loads(self.ctx.stdout.getvalue())
@@ -448,7 +449,7 @@ class ManagerTests(unittest.TestCase):
         self.link("pine", vault, "agents")
         self.assertEqual(self.call("status"), 0)
         output = self.ctx.stdout.getvalue()
-        self.assertIn("仓库 · 自建 2 项 · i / r 可管理", output)
+        self.assertIn("仓库 · 自建 2 项", output)
         positions = [output.index(text) for text in
                      ("beta", "alpha", "自建 · Obsidian Vault", "pine")]
         self.assertEqual(positions, sorted(positions))
@@ -464,9 +465,42 @@ class ManagerTests(unittest.TestCase):
         self.ctx.stdout = TTYOutput()
         self.assertEqual(m.main([], self.ctx), 0)
         output = self.ctx.stdout.getvalue() + self.ctx.stderr.getvalue()
-        self.assertIn("2 号属于「自建 · Obsidian Vault」组，不在安装范围。", output)
-        self.assertIn("i / r 仅接受「仓库」组编号", output)
+        self.assertIn("2 号（pine） 不在「仓库」组，不能安装", output)
         self.assertFalse((self.ctx.targets["claude"] / "alpha").exists())
+
+    def test_remove_reaches_vault_links_and_external_directories(self):
+        vault = self.vault_package("61-skills/pine")
+        self.link("pine", vault, "claude")
+        self.link("pine", vault, "agents")
+        home = self.ctx.targets["agents"] / "twin"
+        home.mkdir(parents=True)
+        (home / "SKILL.md").write_text("body")
+        self.link("twin", home, "claude")
+        self.assertEqual(self.call("remove", "pine", "twin"), 0)
+        self.assertFalse((self.ctx.targets["claude"] / "pine").is_symlink())
+        self.assertFalse((self.ctx.targets["agents"] / "pine").is_symlink())
+        self.assertTrue(vault.is_dir())
+        self.assertFalse(home.exists())
+        trashed = list(self.ctx.trash_root.iterdir())
+        self.assertEqual(len(trashed), 1)
+        self.assertTrue(trashed[0].name.startswith("twin-"))
+        self.assertEqual((trashed[0] / "SKILL.md").read_text(), "body")
+
+    def test_menu_keeps_list_after_operation_and_l_refreshes(self):
+        self.package("alpha")
+        self.package("beta")
+        self.ctx.stdin = TTYInput("i 2\ny\nl\nq\n")
+        self.ctx.stdout = TTYOutput()
+        self.assertEqual(m.main([], self.ctx), 0)
+        output = self.ctx.stdout.getvalue()
+        self.assertEqual(output.count("skills 总览"), 2)
+        first = output.index("skills 总览")
+        result = output.index("结果：完成")
+        second = output.index("skills 总览", result)
+        self.assertLess(first, result)
+        self.assertLess(result, second)
+        self.assertIn("列表已变化；l 刷新", output)
+        self.assertIn("beta", output)
 
     def test_detail_shows_description_boundary_and_hash_compare(self):
         for client in self.ctx.targets:
@@ -483,11 +517,11 @@ class ManagerTests(unittest.TestCase):
         self.ctx.stdout = TTYOutput()
         self.assertEqual(m.main([], self.ctx), 0)
         output = self.ctx.stdout.getvalue()
-        self.assertIn("⚠ 两端各一份独立副本，更新互不同步", output)
+        self.assertIn("⚠ 两端各一份副本，更新互不同步", output)
         self.assertIn("两端不一致（内容哈希不同）", output)
         self.assertIn("说明：外部副本", output)
-        self.assertIn("本工具不修改、不删除外部目录", output)
-        self.assertIn("本工具不修改此条目；调整请维护 Vault 源目录", output)
+        self.assertIn("卸载移除链接；本体目录/文件移入回收站", output)
+        self.assertIn("卸载仅移除链接，不影响 Vault 源目录", output)
         self.assertIn("说明：测试用 Vault skill", output)
 
     def test_real_pty_menu_on_isolated_context(self):

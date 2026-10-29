@@ -11,8 +11,10 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import stat
 import sys
+import time
 from typing import TextIO
 import unicodedata
 
@@ -22,12 +24,11 @@ RESERVED = {"Archive", "99-Archive", "docs", "tests", "scripts", "delivery"}
 TARGET_LABELS = {"claude": "Claude", "agents": "Agents"}
 CONNECTED, ABSENT, STALE = "已连接", "未安装", "链接失效"
 DELETED, CONFLICT, ERROR = "源已删除", "同名冲突", "检查错误"
-LINK_VAULT, LINK_SHARE, LINK_OTHER = "Vault 链接", "共享链接", "外部链接"
-INDEP, FOREIGN = "独立目录", "实际文件"
+LINK_VAULT, LINK_SHARE, LINK_OTHER = "Vault 链接", "引用链接", "外部链接"
+INDEP, FOREIGN = "本体目录", "实际文件"
 GROUP_REPO, GROUP_VAULT, GROUP_EXT = "repo", "vault", "external"
 GROUP_LABELS = {GROUP_REPO: "仓库 · 自建", GROUP_VAULT: "自建 · Obsidian Vault",
                 GROUP_EXT: "外部 · 独立安装"}
-GROUP_HINTS = {GROUP_REPO: "i / r 可管理", GROUP_VAULT: "只读，v 看来源", GROUP_EXT: "只读，不改动"}
 GROUP_ORDER = (GROUP_REPO, GROUP_VAULT, GROUP_EXT)
 LINK_STATES = {LINK_VAULT, LINK_SHARE, LINK_OTHER}
 
@@ -46,6 +47,7 @@ class Context:
     targets: dict[str, Path]
     lock_path: Path
     vault_root: Path = field(default_factory=lambda: Path.home() / "workspace/obsidian")
+    trash_root: Path = field(default_factory=lambda: Path.home() / ".Trash")
     cwd: Path = field(default_factory=Path.cwd)
     stdin: TextIO = field(default_factory=lambda: sys.stdin)
     stdout: TextIO = field(default_factory=lambda: sys.stdout)
@@ -58,7 +60,8 @@ class Context:
                    {"claude": user_dir / ".claude/skills",
                     "agents": user_dir / ".agents/skills"},
                    user_dir / ".cache/local-skill-manager/write.lock",
-                   user_dir / "workspace/obsidian/obsidian-repository")
+                   user_dir / "workspace/obsidian/obsidian-repository",
+                   user_dir / ".Trash")
 
 
 @dataclass(frozen=True)
@@ -249,11 +252,6 @@ def scan(ctx):
     return Snapshot(sources, rows, errors, target_errors, groups)
 
 
-def readonly_tail(group):
-    return ("如需调整请维护 Vault 源目录" if group == GROUP_VAULT
-            else "外部条目不归本工具管理")
-
-
 def requested_names(ctx, snapshot, args):
     names = []
     for arg in args:
@@ -265,10 +263,6 @@ def requested_names(ctx, snapshot, args):
                 raise InputError(f"不是本仓库允许的源码路径：{arg}")
         if not valid_name(name) or name not in snapshot.rows:
             raise InputError(f"未知或无效的 skill 名称：{arg}")
-        group = snapshot.groups.get(name)
-        if group != GROUP_REPO:
-            raise InputError(f"{name} 属于「{GROUP_LABELS[group]}」组，不在安装范围；"
-                             f"i / r 仅接受「仓库」组，{readonly_tail(group)}")
         if name not in names:
             names.append(name)
     if not names:
@@ -286,6 +280,8 @@ def make_plan(ctx, snapshot, action, names, target="all"):
     changes = []
     for name in names:
         candidates = snapshot.sources.get(name, [])
+        if action == "install" and snapshot.groups.get(name) != GROUP_REPO:
+            errors.append(f"{name} 不在「仓库」组，不能安装")
         if len(candidates) > 1:
             errors.append(f"{name}：源码重名：{', '.join(map(str, candidates))}")
         elif action == "install" and not candidates:
@@ -306,7 +302,7 @@ def make_plan(ctx, snapshot, action, names, target="all"):
 
 
 def show_plan(ctx, plan):
-    out(ctx, f"操作：{plan.action}；目标：{plan.target}")
+    out(ctx, f"操作：{plan.action}" + ("" if plan.target == "all" else f"；目标：{plan.target}"))
     for item in plan.changes:
         destination = ctx.targets[item.client] / item.name
         suffix = f" -> {item.source}" if plan.action == "install" else ""
@@ -365,8 +361,10 @@ def execute(ctx, plan, confirmed=False):
                         if inspect_slot(ctx, item.name, item.client,
                                         snapshot.sources.get(item.name, [])) != item.before:
                             raise OperationError(f"{path} 状态已变化")
-                    if item.action in {"修复", "移除"}:
+                    if item.action == "修复":
                         path.unlink()
+                    if item.action == "移除":
+                        remove_entry(ctx, path)
                     if item.action in {"新增", "修复"}:
                         path.symlink_to(item.source, target_is_directory=True)
                     after = inspect_slot(ctx, item.name, item.client,
@@ -384,12 +382,27 @@ def execute(ctx, plan, confirmed=False):
                 for pending in plan.changes[completed + 1:]:
                     out(ctx, f"未执行  {pending.name} / {TARGET_LABELS[pending.client]}")
                 break
-    out(ctx, f"结果：{completed}/{len(plan.changes)} 项完成（含无操作）；目标：{plan.target}")
+    out(ctx, f"结果：完成 {completed}/{len(plan.changes)}")
     if failure:
         out(ctx, "当前实际状态；已完成部分保留，重试会跳过正确链接：")
         show_status(ctx, scan(ctx), plan.names)
         return code
     return 0
+
+
+def remove_entry(ctx, path):
+    """Unlink a link; move real content to the trash so removal is recoverable."""
+    if path.is_symlink():
+        path.unlink()
+        return
+    root = ctx.trash_root
+    root.mkdir(parents=True, exist_ok=True)
+    destination = root / f"{path.name}-{time.strftime('%Y%m%d-%H%M%S')}"
+    suffix = 0
+    while destination.exists():
+        suffix += 1
+        destination = root / f"{path.name}-{time.strftime('%Y%m%d-%H%M%S')}-{suffix}"
+    shutil.move(str(path), str(destination))
 
 
 def width(text):
@@ -418,9 +431,9 @@ ABNORMAL = {STALE, DELETED, CONFLICT, ERROR}
 REPO_WORDS = {CONNECTED: "已连接", ABSENT: "未安装", STALE: "链接失效", DELETED: "源已删除",
               CONFLICT: "同名冲突", ERROR: "检查错误", INDEP: "同名冲突", FOREIGN: "同名冲突",
               LINK_VAULT: "同名冲突", LINK_SHARE: "同名冲突", LINK_OTHER: "同名冲突"}
-VAULT_WORDS = {ABSENT: "未安装", ERROR: "检查错误", INDEP: "独立",
+VAULT_WORDS = {ABSENT: "未安装", ERROR: "检查错误", INDEP: "本体",
                LINK_VAULT: "链接", LINK_SHARE: "链接", LINK_OTHER: "链接"}
-EXT_WORDS = {ABSENT: "未安装", ERROR: "检查错误", INDEP: "独立", LINK_SHARE: "共享",
+EXT_WORDS = {ABSENT: "未安装", ERROR: "检查错误", INDEP: "本体", LINK_SHARE: "引用",
              LINK_VAULT: "链接", LINK_OTHER: "链接", FOREIGN: "实际文件"}
 
 
@@ -448,7 +461,7 @@ def merged_phrase(ctx, group, slots):
         return "未安装"
     if claude.state == agents.state and claude_word == agents_word:
         if claude.state == INDEP:
-            return "两端独立 ⚠ 各一份"
+            return "两端本体 ⚠ 各一份"
         return f"两端{claude_word}"
     if (claude.state != ABSENT and agents.state != ABSENT) or (
             end_abnormal(claude) or end_abnormal(agents)):
@@ -482,19 +495,16 @@ def show_status(ctx, snapshot, names=None, query=None):
     if query is not None:
         out(ctx, f"筛选「{query}」· {len(ordered)} 项")
     elif names is None or set(names) == set(snapshot.rows):
-        counts = {group: sum(1 for g in snapshot.groups.values() if g == group)
-                  for group in GROUP_ORDER}
         present = {client: sum(1 for row in snapshot.rows.values()
                                if row[client].state != ABSENT)
                    for client in ctx.targets}
-        out(ctx, f"skills 总览 · {len(snapshot.rows)} 项｜仓库 {counts[GROUP_REPO]}"
-                 f" · Vault {counts[GROUP_VAULT]} · 外部 {counts[GROUP_EXT]}"
-                 f"｜Claude {present['claude']} · Agents {present['agents']}")
+        out(ctx, f"skills 总览 · {len(snapshot.rows)} 项｜"
+                 f"Claude {present['claude']} · Agents {present['agents']}")
     else:
         out(ctx, f"所选 {len(ordered)} 项")
-    out(ctx, "状态表示文件连接，不代表客户端已重新加载；组内两端都在 → 仅一端 → 未安装")
+    out(ctx, "状态表示文件连接，不代表客户端已重新加载")
     if not ordered:
-        out(ctx, "（没有可管理的 skill；/ 清除筛选，q 退出）")
+        out(ctx, "（没有匹配的 skill；/ 清除筛选，q 退出）")
     name_width = max([20] + [width(safe(name)) + 2 for name in ordered])
     index = 0
     for group in GROUP_ORDER:
@@ -502,7 +512,7 @@ def show_status(ctx, snapshot, names=None, query=None):
         if not members:
             continue
         out(ctx, "")
-        out(ctx, f"{GROUP_LABELS[group]} {len(members)} 项 · {GROUP_HINTS[group]}")
+        out(ctx, f"{GROUP_LABELS[group]} {len(members)} 项")
         for name in members:
             index += 1
             phrase = merged_phrase(ctx, group, snapshot.rows[name])
@@ -569,7 +579,7 @@ def show_detail(ctx, snapshot, name):
         if slot.reason:
             out(ctx, f"    原因：{slot.reason}")
     if group == GROUP_EXT and all(slots[c].state == INDEP for c in slots):
-        out(ctx, "  ⚠ 两端各一份独立副本，更新互不同步")
+        out(ctx, "  ⚠ 两端各一份副本，更新互不同步")
         digests = {client: skill_digest(ctx.targets[client] / name) for client in slots}
         if all(digest is not None for digest in digests.values()):
             verdict = ("两端一致（内容哈希相同）" if len(set(digests.values())) == 1
@@ -591,9 +601,9 @@ def show_detail(ctx, snapshot, name):
     if description:
         out(ctx, f"  说明：{description}")
     if group == GROUP_VAULT:
-        out(ctx, "  本工具不修改此条目；调整请维护 Vault 源目录")
+        out(ctx, "  卸载仅移除链接，不影响 Vault 源目录")
     elif group == GROUP_EXT:
-        out(ctx, "  本工具不修改、不删除外部目录")
+        out(ctx, "  卸载移除链接；本体目录/文件移入回收站")
 
 
 def readline(ctx, prompt):
@@ -642,18 +652,35 @@ def emit_json(ctx, snapshot):
     return 1 if errors else 0
 
 
+MENU_HELP = "i 安装(仓库组)  r 卸载  v 详情  l 列表  /关键词 筛选  q 退出"
+
+
+def filtered_names(ctx, snapshot, query):
+    return ordered_names(snapshot, [name for name in snapshot.rows if query in name])
+
+
 def menu(ctx):
     query = ""
+    snapshot = scan(ctx)
+    names = filtered_names(ctx, snapshot, query)
+    show_status(ctx, snapshot, names, query=query or None)
+    out(ctx, MENU_HELP)
     while True:
-        snapshot = scan(ctx)
-        names = ordered_names(snapshot, [name for name in snapshot.rows if query in name])
-        show_status(ctx, snapshot, names, query=query or None)
-        out(ctx, "i 安装  r 卸载  v 详情  /关键词 筛选  q 退出 · i / r 仅接受「仓库」组编号")
-        command = readline(ctx, "输入操作和编号，例如 i 12、v 26：")
+        command = readline(ctx, "输入操作和编号：")
         if command is None or command == "q":
             return 0
+        if command == "l":
+            snapshot = scan(ctx)
+            names = filtered_names(ctx, snapshot, query)
+            show_status(ctx, snapshot, names, query=query or None)
+            out(ctx, MENU_HELP)
+            continue
         if command.startswith("/"):
             query = command[1:]
+            snapshot = scan(ctx)
+            names = filtered_names(ctx, snapshot, query)
+            show_status(ctx, snapshot, names, query=query or None)
+            out(ctx, MENU_HELP)
             continue
         try:
             parts = command.split()
@@ -669,17 +696,14 @@ def menu(ctx):
             if parts[0] == "v":
                 if len(numbers) != 1:
                     raise InputError("详情一次只接受一个编号")
-                show_detail(ctx, snapshot, selected[0])
+                show_detail(ctx, scan(ctx), selected[0])
                 continue
-            blocked = [(number, name) for number, name in zip(numbers, selected)
-                       if snapshot.groups.get(name) != GROUP_REPO]
-            if blocked:
-                lines = []
-                for number, name in blocked:
-                    group = snapshot.groups.get(name)
-                    lines.append(f"{number} 号属于「{GROUP_LABELS[group]}」组，不在安装范围。")
-                    lines.append(f"i / r 仅接受「仓库」组编号；{readonly_tail(group)}。")
-                raise InputError("\n".join(lines))
+            snapshot = scan(ctx)
+            if parts[0] == "i":
+                blocked = [f"{number} 号（{name}）" for number, name in zip(numbers, selected)
+                           if snapshot.groups.get(name) != GROUP_REPO]
+                if blocked:
+                    raise InputError("、".join(blocked) + " 不在「仓库」组，不能安装")
             action = "install" if parts[0] == "i" else "remove"
             plan = make_plan(ctx, snapshot, action, selected)
             show_plan(ctx, plan)
@@ -695,6 +719,10 @@ def menu(ctx):
             code = execute(ctx, plan, confirmed=True)
             if code == 130:
                 return code
+            # Numbers stay frozen to the last displayed list; hint when a
+            # refresh would reorder it.
+            if filtered_names(ctx, scan(ctx), query) != names:
+                out(ctx, "列表已变化；l 刷新")
         except (InputError, OperationError, OSError) as exc:
             diagnostic(ctx, str(exc))
 
