@@ -1035,6 +1035,58 @@ class V2Case(unittest.TestCase):
         with self.assertRaisesRegex(delivery.DeliveryError, "sources changed"):
             self.record(claim=False)
 
+    # Optional review-loop fields: round, blocker_ids, closed_from.
+
+    failed = {"spec": "failed", "quality": "failed"}
+
+    def loop(self, round_no, blockers, closed=(), supersedes=None, result=None):
+        changes = {"round": round_no, "blocker_ids": list(blockers), "closed_from": list(closed)}
+        if supersedes:
+            changes.update(supersedes=supersedes, reason="previous blockers closed")
+        return self.record("review", "R1", result=result or dict(self.failed), **changes)
+
+    def test_passed_review_cannot_carry_open_blockers(self):
+        self.admitted()
+        self.record()
+        with self.assertRaisesRegex(delivery.DeliveryError, "cannot carry open blockers"):
+            self.record("review", "R1", blocker_ids=["B1"], round=1)
+
+    def test_rounds_advance_and_blockers_must_close(self):
+        self.admitted()
+        self.record()
+        first = self.loop(1, ["B1", "B2"])
+        with self.assertRaisesRegex(delivery.DeliveryError, "not a subset"):
+            self.loop(2, ["B2"], ["B9"], supersedes=first["op"])
+        with self.assertRaisesRegex(delivery.DeliveryError, "advance by exactly one"):
+            self.loop(3, ["B2"], ["B1"], supersedes=first["op"])
+        second = self.loop(2, ["B2"], ["B1"], supersedes=first["op"])
+        self.loop(3, [], ["B2"], supersedes=second["op"], result={"spec": "passed", "quality": "passed"})
+        self.assertEqual(self.status()["review"]["R1"]["status"], "passed")
+
+    def test_open_blockers_block_close(self):
+        self.admitted()
+        self.record()
+        self.loop(1, ["B1"])
+        pre = self.engine.preclose()
+        self.assertIn("open blockers B1", "; ".join(pre["blocking"]))
+
+    def test_stalled_rounds_surface_as_user_decision(self):
+        self.admitted()
+        self.record()
+        first = self.loop(1, ["B1"])
+        self.loop(2, ["B1"], supersedes=first["op"])
+        nxt = self.engine.inspect("next")
+        self.assertFalse(nxt["ready_to_implement"])
+        self.assertEqual([row["target"] for row in nxt["remaining"]["user_side"]], ["R1"])
+        self.assertIn("review_escalation", [d["code"] for d in nxt["diagnostics"]])
+
+    def test_plan_gate_accepts_loop_fields(self):
+        self.configure()
+        with self.assertRaisesRegex(delivery.DeliveryError, "cannot carry open blockers"):
+            self.gate("plan_review", blocker_ids=["P1"], round=1)
+        event = self.gate("plan_review", blocker_ids=[], round=1, closed_from=[])
+        self.assertEqual(event["payload"]["blocker_ids"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

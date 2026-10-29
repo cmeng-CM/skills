@@ -183,6 +183,16 @@ report_provenance 可选；出现时 `config_operation` 必填且必须等于当
 
 kind 为 plan_review/design_review/mapping_review/change_review，result 为 passed/failed/unknown。相同 kind 最新记录生效，不能绕过后续失败选早期通过。报告、证据、来源变化令结论 stale。gate 保存的实际编排 pin，以及 plan/design 审阅对应专业 pin，必须仍属于有效来源链；兼容证据失效后，即使恢复旧包，也不能把新版生成的审阅当成旧版审阅。补齐有效兼容链或按有效来源重新审阅才可继续。无关专业包的 pin 不使该 gate 过期。
 
+### 审查循环字段（可选）
+
+review record 与 plan_review/design_review gate 可带 `round`、`blocker_ids`、`closed_from`：
+
+- `blocker_ids`：本轮未闭合的 blocker id 列表。出现任一控制字段时必填，可为空数组。
+- `closed_from`：本轮判定闭合的上轮 id，必须是上一轮 `blocker_ids` 的子集，否则拒绝。
+- `round`：同一版本内的审查轮次，从 1 开始；上一轮已声明 `round` 时，本轮必须恰好加一。
+
+结果 passed 时 `blocker_ids` 必须为空。`check --preclose` 以最近一轮未闭合的 blocker 阻塞收尾。同一 review 第 3 轮仍有 blocker，或相邻两轮 blocker 集合完全相同，`next` 输出 `review_escalation` 诊断、写入 `remaining.user_side`，并把 `ready_to_implement` 置为 false，等用户决定。缺省这些字段的旧记录保持有效，不追溯；引擎只核对声明与集合关系，不判断 blocker 是否真被修复。
+
 plan_review 排除所有历史 plan 作者；design_review 同理；mapping_review 排除所有历史 design/plan/mapping 作者；change_review 排除 mapping 作者。相同 id **或** context 都不独立。配置者自动加入 mapping 作者；重新配置不会删除原作者。专业计划和映射可同次独立检查、共用一份有分项结论的报告，但须分别登记两个 gate，实施 review 不接管它们。
 
 新引擎写入的 gate 固定包含 `gate_protocol: 2` 和 `source_hashes`（plan/design 在 gate 时的 config source object hash）。规范顺序是 **configure → gate → implementation**：configure 前编辑 plan/design 允许，configure 绑定编辑后的内容；configure 后、gate 前编辑使 config source stale，gate 的 fresh 校验拒绝，必须重新 configure；gate 后编辑由 `source_hashes` 锚点拦住。

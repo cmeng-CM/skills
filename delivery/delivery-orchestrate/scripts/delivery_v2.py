@@ -25,7 +25,8 @@ STATUS_START = "<!-- delivery:status:start -->"
 STATUS_END = "<!-- delivery:status:end -->"
 CONFIG_CORE = ("actor", "plan", "authorization", "mapping_reason", "tasks", "reviews", "acceptance")
 RECORD_CORE = ("kind", "target", "actor", "report", "result", "summary", "evidence")
-RECORD_OPTIONAL = ("issues", "resolutions", "run_operation", "confirmation", "supersedes", "reason", "implementation_skill", "implementation_authors", "review_commit", "base_commit", "agent_session")
+RECORD_OPTIONAL = ("issues", "resolutions", "run_operation", "confirmation", "supersedes", "reason", "implementation_skill", "implementation_authors", "review_commit", "base_commit", "agent_session", "round", "blocker_ids", "closed_from")
+REVIEW_LOOP = ("round", "blocker_ids", "closed_from")
 
 
 LOADED_SOURCE_BYTES = Path(__file__).read_bytes()
@@ -249,6 +250,86 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
             if "participated in a batch review" in reason:
                 fail(reason, "review_independence")
             fail(reason, "review_commit_mismatch")
+
+    def review_loop_fields(self, request):
+        """Optional round/blocker_ids/closed_from; legacy records without them stay valid."""
+        if not any(k in request for k in REVIEW_LOOP):
+            return None
+        if "blocker_ids" not in request:
+            fail("review loop requires blocker_ids when round or closed_from is given")
+        blockers = request["blocker_ids"]
+        closed = request.get("closed_from", [])
+        for name, value in (("blocker_ids", blockers), ("closed_from", closed)):
+            if not isinstance(value, list) or any(not isinstance(v, str) or not v.strip() for v in value):
+                fail(name + " must be a list of nonempty strings")
+            if len(set(value)) != len(value):
+                fail(name + " must not repeat ids")
+        round_no = request.get("round")
+        if round_no is not None and (type(round_no) is not int or round_no < 1):
+            fail("round must be a positive integer")
+        return {"round": round_no, "blocker_ids": blockers, "closed_from": closed}
+
+    def review_loop_events(self, kind, target):
+        """Prior review payloads that declared a loop, newest first."""
+        for event in reversed(self.data["events"]):
+            payload = event.get("payload") or {}
+            if not any(k in payload for k in REVIEW_LOOP) or "blocker_ids" not in payload:
+                continue
+            if kind == "review" and event["kind"] == "record" and payload.get("kind") == "review" and payload.get("target") == target:
+                yield payload
+            elif kind != "review" and event["kind"] == "gate" and payload.get("kind") == kind:
+                yield payload
+
+    def validate_review_loop(self, request, kind, target, passed):
+        loop = self.review_loop_fields(request)
+        if loop is None:
+            return None
+        if passed and loop["blocker_ids"]:
+            fail("passed review cannot carry open blockers")
+        previous = next(self.review_loop_events(kind, target), None)
+        prev_blockers = set(previous.get("blocker_ids") or []) if previous else set()
+        extra = [v for v in loop["closed_from"] if v not in prev_blockers]
+        if extra:
+            fail("closed_from is not a subset of the previous blocker ids: " + ", ".join(extra))
+        if previous and previous.get("round") is not None:
+            if loop["round"] is None:
+                fail("round is required once a review loop has started")
+            if loop["round"] != previous["round"] + 1:
+                fail("round must advance by exactly one")
+        elif loop["round"] not in (None, 1):
+            fail("review loop must start at round 1")
+        return loop
+
+    def open_review_blockers(self, config):
+        out = []
+        for item in config["payload"]["spec"]["reviews"]:
+            latest = next(self.review_loop_events("review", item["id"]), None)
+            if latest and latest.get("blocker_ids"):
+                out.append((item["id"], list(latest["blocker_ids"])))
+        for kind in ("plan_review", "design_review"):
+            latest = next(self.review_loop_events(kind, None), None)
+            if latest and latest.get("blocker_ids"):
+                out.append((kind, list(latest["blocker_ids"])))
+        return out
+
+    def review_escalations(self, config):
+        out = []
+        for item in config["payload"]["spec"]["reviews"]:
+            events = list(self.review_loop_events("review", item["id"]))
+            if not events:
+                continue
+            latest = events[0]
+            blockers = latest.get("blocker_ids") or []
+            if not blockers:
+                continue
+            previous = events[1] if len(events) > 1 else None
+            round_no = latest.get("round")
+            stalled = previous is not None and set(previous.get("blocker_ids") or []) == set(blockers)
+            if (round_no is not None and round_no >= 3) or stalled:
+                out.append({"review": item["id"], "round": round_no,
+                            "blocker_ids": list(blockers),
+                            "reason": "blockers did not converge" if stalled else "round limit reached"})
+        return out
 
     def validate_extra(self, request, fields, optional=()):
         shape(request, ("schema_version", "contract_version", "actor") + tuple(fields), tuple(optional))
@@ -800,7 +881,7 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
 
     def gate(self, request, op):
         self.validate_extra(request, ("config_operation", "kind", "report", "result", "summary", "evidence"),
-                            ("report_provenance",))
+                            ("report_provenance", "round", "blocker_ids", "closed_from"))
         if request["kind"] not in GATES or request["result"] not in ("passed", "failed", "unknown"):
             fail("invalid admission gate kind/result")
         text(request["summary"], "summary")
@@ -822,6 +903,8 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
                 fail("actual gate skill source drift; accept compatible update or restore pin")
             if request["kind"] == "design_review" and "design" not in config["payload"]["sources"]:
                 fail("design review requires actual configured design source")
+            if request["kind"] in ("plan_review", "design_review"):
+                self.validate_review_loop(request, request["kind"], None, request["result"] == "passed")
             authors = config["payload"]["source_authors"]
             roles = {"plan_review": ["plan"], "design_review": ["design"], "mapping_review": list(authors), "change_review": ["mapping"]}[request["kind"]]
             excluded = [a for role in roles for a in authors.get(role, [])]
@@ -840,6 +923,8 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
             current = config or self.current_config()
             self.validate_review_commit(request, current)
             self.validate_final_review(request, current)
+            passed = all(v == "passed" for v in request["result"].values())
+            self.validate_review_loop(request, "review", request["target"], passed)
         return super().prepare_record(request, config)
 
     def record(self, request, op):
@@ -1401,6 +1486,8 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
                 for item in config["payload"]["spec"]["acceptance"]:
                     if item["required"] and state["verification"][item["id"]]["status"] != "passed":
                         blocking.append(f"required acceptance {item['id']}: {state['verification'][item['id']]['status']}")
+            for target, ids in self.open_review_blockers(config):
+                blocking.append(f"review {target}: open blockers " + ", ".join(ids))
             if any(h["mode"] == "write" for h in state["resources"]):
                 blocking.append("write resources are still held")
             try:
@@ -1652,9 +1739,18 @@ class EngineV2(ImplementationMixin, SourcesMixin, MonitorMixin, RecoveryMixin, E
                         reasons.append("dependencies are not passed")
                     row["blocked_reason"] = reasons
                     (blocked if reasons else ready).append(row)
+            escalations = self.review_escalations(config)
+            diagnostics = list(state["diagnostics"]) + [
+                {"code": "review_escalation", "target": item["review"],
+                 "sources": [], "evidence_needed": ["user decision on " + ", ".join(item["blocker_ids"])],
+                 "next_action": "escalate", "reason": item["reason"], "round": item["round"]}
+                for item in escalations]
             return {"contract_version": 2, "ready": ready, "blocked": blocked,
-                    "ready_to_implement": not global_reasons, "blocked_reason": global_reasons,
-                    "diagnostics": state["diagnostics"],
+                    "ready_to_implement": not global_reasons and not escalations,
+                    "remaining": {"model_side": [{"kind": row["kind"], "target": row["target"], "status": row["status"]} for row in blocked],
+                                  "user_side": [{"target": item["review"], "blocker_ids": item["blocker_ids"], "reason": item["reason"]} for item in escalations]},
+                    "blocked_reason": global_reasons + [f"review {e['review']} needs user decision" for e in escalations],
+                    "diagnostics": diagnostics,
                     "note": "Eligibility still requires explicit resource claim and reading full professional sources."}
 
     def run(self, acceptance, who, timeout, op):
