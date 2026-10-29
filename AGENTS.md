@@ -40,12 +40,14 @@
 
 ```bash
 ./skill status
+./skill status --json
 ./skill install delve delivery-plan
 ./skill remove delve
 ./skill install delve --dry-run
 ```
 
 - 管理器只发现根目录及 `delivery/` 直接子包，名称取包目录 basename；不递归历史快照或归档，不维护安装数据库。
+- `status` 另以只读方式全量展示两处安装目录：按来源分组为「仓库 · 自建」（i / r 可管理）、「自建 · Obsidian Vault」（软链到 Obsidian 库，只读）、「外部 · 独立安装」（真实目录，只读）；组内排序两端都在 → 仅一端 → 未安装，两端独立副本标 ⚠ 并在详情附 SKILL.md 哈希比对；`--json` 输出机器可读状态。对两处安装目录的安装、卸载与链接调整一律通过 `./skill` 完成，不手写链接或直写目录。
 - 安装位置为 `~/.claude/skills/` 和 `~/.agents/skills/`，直接链接当前源码；归属要求目标恰好匹配本仓库允许的同名包位置，不能只检查字符串前缀。
 - 正确链接不重建，缺失时补链；实际文件、目录、外部链接或归属不明目标不覆盖、不删除。卸载只移除所属链接，不递归删除，不提供 force。
 - 批量修改先整批预检，真实执行互斥并再次核对；中途失败报告实际结果，重试幂等。`status` 和 `--dry-run` 不创建安装目录或锁文件。

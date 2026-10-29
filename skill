@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Manage this repository's source links. Python 3 standard library only."""
+"""Manage repo skill links and overview every installed skill. Python 3 standard library only."""
 from __future__ import annotations
 
 import argparse
@@ -7,6 +7,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 import errno
 import fcntl
+import hashlib
+import json
 import os
 from pathlib import Path
 import stat
@@ -20,6 +22,14 @@ RESERVED = {"Archive", "99-Archive", "docs", "tests", "scripts", "delivery"}
 TARGET_LABELS = {"claude": "Claude", "agents": "Agents"}
 CONNECTED, ABSENT, STALE = "已连接", "未安装", "链接失效"
 DELETED, CONFLICT, ERROR = "源已删除", "同名冲突", "检查错误"
+LINK_VAULT, LINK_SHARE, LINK_OTHER = "Vault 链接", "共享链接", "外部链接"
+INDEP, FOREIGN = "独立目录", "实际文件"
+GROUP_REPO, GROUP_VAULT, GROUP_EXT = "repo", "vault", "external"
+GROUP_LABELS = {GROUP_REPO: "仓库 · 自建", GROUP_VAULT: "自建 · Obsidian Vault",
+                GROUP_EXT: "外部 · 独立安装"}
+GROUP_HINTS = {GROUP_REPO: "i / r 可管理", GROUP_VAULT: "只读，v 看来源", GROUP_EXT: "只读，不改动"}
+GROUP_ORDER = (GROUP_REPO, GROUP_VAULT, GROUP_EXT)
+LINK_STATES = {LINK_VAULT, LINK_SHARE, LINK_OTHER}
 
 
 class InputError(Exception):
@@ -35,6 +45,7 @@ class Context:
     repo: Path
     targets: dict[str, Path]
     lock_path: Path
+    vault_root: Path = field(default_factory=lambda: Path.home() / "workspace/obsidian")
     cwd: Path = field(default_factory=Path.cwd)
     stdin: TextIO = field(default_factory=lambda: sys.stdin)
     stdout: TextIO = field(default_factory=lambda: sys.stdout)
@@ -46,7 +57,8 @@ class Context:
         return cls(Path(__file__).resolve().parent,
                    {"claude": user_dir / ".claude/skills",
                     "agents": user_dir / ".agents/skills"},
-                   user_dir / ".cache/local-skill-manager/write.lock")
+                   user_dir / ".cache/local-skill-manager/write.lock",
+                   user_dir / "workspace/obsidian/obsidian-repository")
 
 
 @dataclass(frozen=True)
@@ -64,7 +76,7 @@ class Snapshot:
     rows: dict[str, dict[str, Slot]]
     errors: list[str]
     target_errors: dict[str, str]
-    external: dict[str, int]
+    groups: dict[str, str]
 
 
 @dataclass(frozen=True)
@@ -154,6 +166,14 @@ def discover(ctx):
     return sources, errors
 
 
+def under(path, root):
+    try:
+        Path(os.path.abspath(path)).relative_to(Path(os.path.abspath(root)))
+        return True
+    except (ValueError, OSError):
+        return False
+
+
 def inspect_slot(ctx, name, client, candidates):
     path = ctx.targets[client] / name
     try:
@@ -165,12 +185,24 @@ def inspect_slot(ctx, name, client, candidates):
     identity = (info.st_dev, info.st_ino, info.st_mode, info.st_mtime_ns,
                 info.st_ctime_ns)
     if not stat.S_ISLNK(info.st_mode):
-        return Slot(CONFLICT, "目标是实际文件或目录，不属于可管理链接", identity=identity)
+        if candidates:
+            return Slot(CONFLICT, "目标是实际文件或目录，不属于可管理链接", identity=identity)
+        if stat.S_ISDIR(info.st_mode):
+            return Slot(INDEP, identity=identity)
+        return Slot(FOREIGN, "目标是实际文件", identity=identity)
     try:
         raw = os.readlink(path)
         normalized = Path(os.path.abspath(os.path.join(str(path.parent), raw)))
         if not source_location(ctx, name, normalized):
-            return Slot(CONFLICT, "链接归属不明、越界或存在路径别名", raw, normalized, identity)
+            if candidates:
+                return Slot(CONFLICT, "链接归属不明、越界或存在路径别名", raw, normalized, identity)
+            reason = "" if normalized.exists() else "目标不存在"
+            if under(normalized, ctx.vault_root):
+                return Slot(LINK_VAULT, reason, raw, normalized, identity)
+            for other, base in ctx.targets.items():
+                if other != client and under(normalized, base):
+                    return Slot(LINK_SHARE, reason, raw, normalized, identity)
+            return Slot(LINK_OTHER, reason, raw, normalized, identity)
         if len(candidates) > 1:
             return Slot(CONFLICT, "仓库内有多个同名源码包", raw, normalized, identity)
         if not candidates:
@@ -185,7 +217,6 @@ def inspect_slot(ctx, name, client, candidates):
 def scan(ctx):
     sources, errors = discover(ctx)
     names, target_errors = set(sources), {}
-    external = {client: 0 for client in ctx.targets}
     for client, base in ctx.targets.items():
         try:
             entries = list(base.iterdir())
@@ -195,21 +226,32 @@ def scan(ctx):
             target_errors[client] = f"无法读取 {base}：{exc}"
             continue
         for entry in entries:
+            if entry.name.startswith("."):
+                continue
             slot = inspect_slot(ctx, entry.name, client, sources.get(entry.name, []))
-            if slot.state in {CONNECTED, STALE, DELETED}:
-                names.add(entry.name)
-            elif slot.state == ERROR:
+            names.add(entry.name)
+            if slot.state == ERROR:
                 target_errors[client] = f"无法检查 {entry}：{slot.reason}"
-            else:
-                external[client] += 1
-    rows = {}
+    rows, groups = {}, {}
     for name in sorted(names):
         rows[name] = {
             client: (Slot(ERROR, target_errors[client]) if client in target_errors
                      else inspect_slot(ctx, name, client, sources.get(name, [])))
             for client in ctx.targets
         }
-    return Snapshot(sources, rows, errors, target_errors, external)
+        if sources.get(name) or any(rows[name][client].state in {CONNECTED, STALE, DELETED}
+                                    for client in ctx.targets):
+            groups[name] = GROUP_REPO
+        elif any(rows[name][client].state == LINK_VAULT for client in ctx.targets):
+            groups[name] = GROUP_VAULT
+        else:
+            groups[name] = GROUP_EXT
+    return Snapshot(sources, rows, errors, target_errors, groups)
+
+
+def readonly_tail(group):
+    return ("如需调整请维护 Vault 源目录" if group == GROUP_VAULT
+            else "外部条目不归本工具管理")
 
 
 def requested_names(ctx, snapshot, args):
@@ -223,6 +265,10 @@ def requested_names(ctx, snapshot, args):
                 raise InputError(f"不是本仓库允许的源码路径：{arg}")
         if not valid_name(name) or name not in snapshot.rows:
             raise InputError(f"未知或无效的 skill 名称：{arg}")
+        group = snapshot.groups.get(name)
+        if group != GROUP_REPO:
+            raise InputError(f"{name} 属于「{GROUP_LABELS[group]}」组，不在安装范围；"
+                             f"i / r 仅接受「仓库」组，{readonly_tail(group)}")
         if name not in names:
             names.append(name)
     if not names:
@@ -246,7 +292,7 @@ def make_plan(ctx, snapshot, action, names, target="all"):
             errors.append(f"{name}：源已删除，只能清理所属残留链接")
         source = candidates[0] if len(candidates) == 1 else None
         for client in clients:
-            slot = snapshot.rows[name][client]
+            slot = inspect_slot(ctx, name, client, candidates)
             if slot.state in {CONFLICT, ERROR}:
                 errors.append(f"{name} / {TARGET_LABELS[client]}：{slot.state}，{slot.reason}")
             if action == "install":
@@ -357,37 +403,197 @@ def pad(text, size):
     return text + " " * max(0, size - width(text))
 
 
-def show_status(ctx, snapshot, names=None):
-    names = list(snapshot.rows) if names is None else list(names)
-    name_width = max([20] + [width(safe(name)) + 2 for name in names])
-    out(ctx, f"本地 Skills：{ctx.repo}（状态表示文件连接，不代表客户端已重新加载）")
-    out(ctx, f"编号  {pad('Skill', name_width)}{pad('Claude', 14)}Agents")
-    if not names:
+def short_target(ctx, path):
+    if path is None:
+        return ""
+    try:
+        return str(Path(path).relative_to(Path(os.path.abspath(ctx.vault_root))))
+    except (ValueError, OSError):
+        text = str(path)
+        home = str(Path.home())
+        return "~" + text[len(home):] if text.startswith(home + "/") else text
+
+
+ABNORMAL = {STALE, DELETED, CONFLICT, ERROR}
+REPO_WORDS = {CONNECTED: "已连接", ABSENT: "未安装", STALE: "链接失效", DELETED: "源已删除",
+              CONFLICT: "同名冲突", ERROR: "检查错误", INDEP: "同名冲突", FOREIGN: "同名冲突",
+              LINK_VAULT: "同名冲突", LINK_SHARE: "同名冲突", LINK_OTHER: "同名冲突"}
+VAULT_WORDS = {ABSENT: "未安装", ERROR: "检查错误", INDEP: "独立",
+               LINK_VAULT: "链接", LINK_SHARE: "链接", LINK_OTHER: "链接"}
+EXT_WORDS = {ABSENT: "未安装", ERROR: "检查错误", INDEP: "独立", LINK_SHARE: "共享",
+             LINK_VAULT: "链接", LINK_OTHER: "链接", FOREIGN: "实际文件"}
+
+
+def end_word(ctx, group, slot):
+    if slot.state in LINK_STATES and slot.reason == "目标不存在":
+        word = "链接失效"
+    else:
+        words = REPO_WORDS if group == GROUP_REPO else (
+            VAULT_WORDS if group == GROUP_VAULT else EXT_WORDS)
+        word = words.get(slot.state, "同名冲突")
+    if word == "链接" and slot.target is not None:
+        word = f"链接 → {short_target(ctx, slot.target)}"
+    return word
+
+
+def end_abnormal(slot):
+    return slot.state in ABNORMAL or (
+        slot.state in LINK_STATES and slot.reason == "目标不存在")
+
+
+def merged_phrase(ctx, group, slots):
+    claude, agents = slots["claude"], slots["agents"]
+    claude_word, agents_word = end_word(ctx, group, claude), end_word(ctx, group, agents)
+    if claude.state == ABSENT and agents.state == ABSENT:
+        return "未安装"
+    if claude.state == agents.state and claude_word == agents_word:
+        if claude.state == INDEP:
+            return "两端独立 ⚠ 各一份"
+        return f"两端{claude_word}"
+    if (claude.state != ABSENT and agents.state != ABSENT) or (
+            end_abnormal(claude) or end_abnormal(agents)):
+        left = "未安装" if claude.state == ABSENT else claude_word
+        right = "未安装" if agents.state == ABSENT else agents_word
+        return f"Claude {left} · Agents {right}"
+    if claude.state == ABSENT:
+        return f"仅 Agents {agents_word}"
+    return f"仅 Claude {claude_word}"
+
+
+def presence_rank(slots):
+    present = [slot.state != ABSENT for slot in slots.values()]
+    if all(present):
+        return 0
+    return 2 if not any(present) else 1
+
+
+def ordered_names(snapshot, names=None):
+    selected = set(snapshot.rows) if names is None else set(names)
+    ordered = []
+    for group in GROUP_ORDER:
+        members = [name for name in selected if snapshot.groups.get(name) == group]
+        members.sort(key=lambda name: (presence_rank(snapshot.rows[name]), name))
+        ordered.extend(members)
+    return ordered
+
+
+def show_status(ctx, snapshot, names=None, query=None):
+    ordered = ordered_names(snapshot, names)
+    if query is not None:
+        out(ctx, f"筛选「{query}」· {len(ordered)} 项")
+    elif names is None or set(names) == set(snapshot.rows):
+        counts = {group: sum(1 for g in snapshot.groups.values() if g == group)
+                  for group in GROUP_ORDER}
+        present = {client: sum(1 for row in snapshot.rows.values()
+                               if row[client].state != ABSENT)
+                   for client in ctx.targets}
+        out(ctx, f"skills 总览 · {len(snapshot.rows)} 项｜仓库 {counts[GROUP_REPO]}"
+                 f" · Vault {counts[GROUP_VAULT]} · 外部 {counts[GROUP_EXT]}"
+                 f"｜Claude {present['claude']} · Agents {present['agents']}")
+    else:
+        out(ctx, f"所选 {len(ordered)} 项")
+    out(ctx, "状态表示文件连接，不代表客户端已重新加载；组内两端都在 → 仅一端 → 未安装")
+    if not ordered:
         out(ctx, "（没有可管理的 skill；/ 清除筛选，q 退出）")
-    for index, name in enumerate(names, 1):
-        slots = snapshot.rows.get(name, {client: Slot(ABSENT) for client in ctx.targets})
-        duplicate = " [源码重名]" if len(snapshot.sources.get(name, [])) > 1 else ""
-        out(ctx, f"{index:>3}   {pad(name, name_width)}{pad(slots['claude'].state, 14)}{slots['agents'].state}{duplicate}")
-    out(ctx, f"外部内容不管理：Claude {snapshot.external['claude']} 项，Agents {snapshot.external['agents']} 项")
+    name_width = max([20] + [width(safe(name)) + 2 for name in ordered])
+    index = 0
+    for group in GROUP_ORDER:
+        members = [name for name in ordered if snapshot.groups.get(name) == group]
+        if not members:
+            continue
+        out(ctx, "")
+        out(ctx, f"{GROUP_LABELS[group]} {len(members)} 项 · {GROUP_HINTS[group]}")
+        for name in members:
+            index += 1
+            phrase = merged_phrase(ctx, group, snapshot.rows[name])
+            if group == GROUP_REPO and len(snapshot.sources.get(name, [])) > 1:
+                phrase += " [源码重名]"
+            out(ctx, f"{index:>3}   {pad(name, name_width)}{phrase}")
     errors = snapshot.errors + list(snapshot.target_errors.values())
     for error in errors:
         diagnostic(ctx, error)
     return 1 if errors else 0
 
 
+def describe_skill(path):
+    try:
+        text = (path / "SKILL.md").read_text(errors="replace")[:4096]
+    except OSError:
+        return ""
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return ""
+    for index, line in enumerate(lines[1:], 1):
+        if line.strip() == "---":
+            break
+        if not line.startswith("description:"):
+            continue
+        value = line[len("description:"):].strip().strip('>"\'')
+        if value:
+            return truncate_text(value)
+        for follow in lines[index + 1:]:
+            if not follow[:1].isspace() or not follow.strip():
+                break
+            content = follow.strip().strip('>"\'')
+            if content and content != ">":
+                return truncate_text(content)
+    return ""
+
+
+def truncate_text(text):
+    return text if width(safe(text)) <= 64 else text[:60].rstrip() + "…"
+
+
+def skill_digest(path):
+    try:
+        return hashlib.sha256((path / "SKILL.md").read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
 def show_detail(ctx, snapshot, name):
-    out(ctx, f"Skill：{name}")
-    for source in snapshot.sources.get(name, []):
-        out(ctx, f"  源码：{source}")
-    if not snapshot.sources.get(name):
-        out(ctx, "  源码：不存在有效源码包")
-    for client, slot in snapshot.rows[name].items():
+    group = snapshot.groups.get(name, GROUP_EXT)
+    slots = snapshot.rows[name]
+    out(ctx, f"Skill：{name}　{GROUP_LABELS[group]}")
+    sources = snapshot.sources.get(name, [])
+    if group == GROUP_REPO:
+        for source in sources:
+            out(ctx, f"  源码：{source}")
+        if not sources:
+            out(ctx, "  源码：不存在有效源码包")
+    for client, slot in slots.items():
         out(ctx, f"  {TARGET_LABELS[client]}：{ctx.targets[client] / name}  {slot.state}")
         if slot.raw is not None:
             out(ctx, f"    链接文本：{slot.raw}")
             out(ctx, f"    解析目标：{slot.target}")
         if slot.reason:
             out(ctx, f"    原因：{slot.reason}")
+    if group == GROUP_EXT and all(slots[c].state == INDEP for c in slots):
+        out(ctx, "  ⚠ 两端各一份独立副本，更新互不同步")
+        digests = {client: skill_digest(ctx.targets[client] / name) for client in slots}
+        if all(digest is not None for digest in digests.values()):
+            verdict = ("两端一致（内容哈希相同）" if len(set(digests.values())) == 1
+                       else "两端不一致（内容哈希不同）")
+            out(ctx, f"  SKILL.md：{verdict}")
+    description_base = None
+    if group == GROUP_REPO and sources:
+        description_base = sources[0]
+    else:
+        for client in ctx.targets:
+            slot = slots[client]
+            if slot.state in LINK_STATES and slot.target is not None:
+                description_base = slot.target
+                break
+            if slot.state == INDEP:
+                description_base = ctx.targets[client] / name
+                break
+    description = describe_skill(description_base) if description_base else ""
+    if description:
+        out(ctx, f"  说明：{description}")
+    if group == GROUP_VAULT:
+        out(ctx, "  本工具不修改此条目；调整请维护 Vault 源目录")
+    elif group == GROUP_EXT:
+        out(ctx, "  本工具不修改、不删除外部目录")
 
 
 def readline(ctx, prompt):
@@ -396,14 +602,54 @@ def readline(ctx, prompt):
     return None if value == "" else value.strip()
 
 
+JSON_STATES = {CONNECTED: "connected", ABSENT: "absent", STALE: "stale", DELETED: "deleted",
+               CONFLICT: "conflict", ERROR: "error", LINK_VAULT: "link", LINK_SHARE: "share",
+               LINK_OTHER: "link", INDEP: "independent", FOREIGN: "foreign-file"}
+
+
+def emit_json(ctx, snapshot):
+    skills = []
+    for name in ordered_names(snapshot):
+        entry = {"name": name, "origin": snapshot.groups[name]}
+        for client in ctx.targets:
+            slot = snapshot.rows[name][client]
+            item = {"state": JSON_STATES.get(slot.state, "unknown")}
+            if slot.state in LINK_STATES and slot.target is not None:
+                item["target"] = str(slot.target)
+            entry[client] = item
+        if all(snapshot.rows[name][client].state == INDEP for client in ctx.targets):
+            entry["warning"] = "independent-copies"
+        skills.append(entry)
+    payload = {
+        "repo": str(ctx.repo),
+        "summary": {
+            "total": len(snapshot.rows),
+            "repo": sum(1 for g in snapshot.groups.values() if g == GROUP_REPO),
+            "vault": sum(1 for g in snapshot.groups.values() if g == GROUP_VAULT),
+            "external": sum(1 for g in snapshot.groups.values() if g == GROUP_EXT),
+            "clients": {client: sum(1 for row in snapshot.rows.values()
+                                    if row[client].state != ABSENT)
+                        for client in ctx.targets},
+        },
+        "skills": skills,
+    }
+    errors = snapshot.errors + list(snapshot.target_errors.values())
+    if errors:
+        payload["errors"] = errors
+    # json.dumps escapes control characters inside strings; bypass safe() so
+    # the structural newlines from indent stay real line breaks.
+    print(json.dumps(payload, ensure_ascii=False, indent=2), file=ctx.stdout, flush=True)
+    return 1 if errors else 0
+
+
 def menu(ctx):
     query = ""
     while True:
         snapshot = scan(ctx)
-        names = [name for name in snapshot.rows if query in name]
-        show_status(ctx, snapshot, names)
-        out(ctx, "i 安装  r 卸载  v 详情  /关键词 筛选  q 退出；默认操作两处")
-        command = readline(ctx, "输入操作和编号，例如 i 2 或 r 1 2：")
+        names = ordered_names(snapshot, [name for name in snapshot.rows if query in name])
+        show_status(ctx, snapshot, names, query=query or None)
+        out(ctx, "i 安装  r 卸载  v 详情  /关键词 筛选  q 退出 · i / r 仅接受「仓库」组编号")
+        command = readline(ctx, "输入操作和编号，例如 i 12、v 26：")
         if command is None or command == "q":
             return 0
         if command.startswith("/"):
@@ -425,6 +671,15 @@ def menu(ctx):
                     raise InputError("详情一次只接受一个编号")
                 show_detail(ctx, snapshot, selected[0])
                 continue
+            blocked = [(number, name) for number, name in zip(numbers, selected)
+                       if snapshot.groups.get(name) != GROUP_REPO]
+            if blocked:
+                lines = []
+                for number, name in blocked:
+                    group = snapshot.groups.get(name)
+                    lines.append(f"{number} 号属于「{GROUP_LABELS[group]}」组，不在安装范围。")
+                    lines.append(f"i / r 仅接受「仓库」组编号；{readonly_tail(group)}。")
+                raise InputError("\n".join(lines))
             action = "install" if parts[0] == "i" else "remove"
             plan = make_plan(ctx, snapshot, action, selected)
             show_plan(ctx, plan)
@@ -460,9 +715,12 @@ class Parser(argparse.ArgumentParser):
 
 def argument_parser(ctx):
     parser = Parser(prog="skill", context=ctx,
-                    description="管理本仓库源码软链接。裸命令进入编号菜单；无终端时只显示状态。")
+                    description="管理并总览本机 agent skills：仓库源码软链安装（install/remove），"
+                                "全量展示两处安装目录的来源与状态（status）。裸命令进入编号菜单；"
+                                "无终端时只显示状态。")
     commands = parser.add_subparsers(dest="command", parser_class=lambda **kw: Parser(context=ctx, **kw))
-    commands.add_parser("status", aliases=["list"], help="查看两处连接状态")
+    status = commands.add_parser("status", aliases=["list"], help="查看全部来源分组与两端状态")
+    status.add_argument("--json", action="store_true", help="输出机器可读 JSON")
     for action, aliases, help_text in [("install", [], "连接或修复源码链接"),
                                         ("remove", ["uninstall"], "仅移除所属链接")]:
         command = commands.add_parser(action, aliases=aliases, help=help_text)
@@ -483,6 +741,8 @@ def main(argv=None, ctx=None):
             return menu(ctx)
         snapshot = scan(ctx)
         if args.command in {None, "status", "list"}:
+            if getattr(args, "json", False):
+                return emit_json(ctx, snapshot)
             return show_status(ctx, snapshot)
         action = "remove" if args.command == "uninstall" else args.command
         plan = make_plan(ctx, snapshot, action, args.names, args.target)

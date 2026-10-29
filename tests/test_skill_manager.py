@@ -3,6 +3,7 @@ import errno
 import importlib.machinery
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
 import pty
@@ -43,11 +44,19 @@ class ManagerTests(unittest.TestCase):
         self.ctx = m.Context(self.repo, {"claude": self.base / "claude", "agents": self.base / "agents"},
                              self.base / "cache/write.lock", cwd=self.base,
                              stdin=io.StringIO(), stdout=io.StringIO(), stderr=io.StringIO())
+        self.ctx.vault_root = self.base / "vault"
 
     def package(self, name="alpha", group=""):
         p = self.repo / group / name
         p.mkdir(parents=True)
         (p / "SKILL.md").write_text("original")
+        return p
+
+    def vault_package(self, rel):
+        p = self.ctx.vault_root / rel
+        p.mkdir(parents=True)
+        (p / "SKILL.md").write_text(
+            "---\nname: x\ndescription: 测试用 Vault skill\n---\n")
         return p
 
     def link(self, name, target, client="claude"):
@@ -226,7 +235,10 @@ class ManagerTests(unittest.TestCase):
         shutil.rmtree(self.repo / "alpha")
         (self.repo / "alpha").symlink_to(outside)
         slot.symlink_to(self.repo / "alpha")
-        self.assertNotIn("alpha", m.scan(self.ctx).rows)
+        snapshot = m.scan(self.ctx)
+        self.assertIn("alpha", snapshot.rows)
+        self.assertEqual(snapshot.groups["alpha"], m.GROUP_EXT)
+        self.assertEqual(snapshot.rows["alpha"]["claude"].state, m.LINK_OTHER)
         self.assertEqual(self.call("remove", "alpha"), 2)
         self.assertTrue(slot.is_symlink())
 
@@ -380,6 +392,103 @@ class ManagerTests(unittest.TestCase):
         self.assertFalse(slot.is_symlink())
         self.assertTrue((source / "SKILL.md").exists())
         self.assertEqual(self.call("install", "/external/alpha with spaces"), 2)
+
+    def test_vault_links_grouped_readonly_with_target_labels(self):
+        self.package()
+        both = self.vault_package("61-skills/folo")
+        single = self.vault_package("61-skills/dupe")
+        self.link("folo", both, "claude")
+        self.link("folo", both, "agents")
+        self.link("dupe", single, "claude")
+        snapshot = m.scan(self.ctx)
+        self.assertEqual(snapshot.groups["folo"], m.GROUP_VAULT)
+        self.assertEqual(snapshot.groups["dupe"], m.GROUP_VAULT)
+        self.assertEqual(self.call("status"), 0)
+        output = self.ctx.stdout.getvalue()
+        self.assertIn("自建 · Obsidian Vault 2 项 · 只读，v 看来源", output)
+        self.assertIn("folo", output)
+        self.assertIn("两端链接 → 61-skills/folo", output)
+        self.assertIn("仅 Claude 链接 → 61-skills/dupe", output)
+        self.assertEqual(self.call("install", "folo"), 2)
+        self.assertIn("不在安装范围", self.ctx.stderr.getvalue())
+        self.assertFalse((self.ctx.targets["agents"] / "dupe").exists())
+
+    def test_external_independent_share_warning_and_json(self):
+        for client in self.ctx.targets:
+            slot = self.ctx.targets[client] / "twin"
+            slot.parent.mkdir(parents=True, exist_ok=True)
+            slot.mkdir()
+            (slot / "SKILL.md").write_text("---\nname: twin\ndescription: 外部副本\n---\n")
+        home = self.ctx.targets["agents"] / "shared"
+        home.mkdir(parents=True)
+        (home / "SKILL.md").write_text("---\nname: shared\n---\n")
+        self.link("shared", home, "claude")
+        self.assertEqual(self.call("status"), 0)
+        output = self.ctx.stdout.getvalue()
+        self.assertIn("两端独立 ⚠ 各一份", output)
+        self.assertIn("Claude 共享 · Agents 独立", output)
+        self.assertIn("外部 · 独立安装", output)
+        self.assertEqual(self.call("status", "--json"), 0)
+        payload = json.loads(self.ctx.stdout.getvalue())
+        self.assertEqual(payload["summary"]["external"], 2)
+        by_name = {item["name"]: item for item in payload["skills"]}
+        self.assertEqual(by_name["twin"]["origin"], "external")
+        self.assertEqual(by_name["twin"]["claude"]["state"], "independent")
+        self.assertEqual(by_name["twin"]["warning"], "independent-copies")
+        self.assertEqual(by_name["shared"]["claude"]["state"], "share")
+        self.assertEqual(by_name["shared"]["claude"]["target"], str(home))
+
+    def test_group_order_sinks_uninstalled_and_numbers_continue(self):
+        self.package("alpha")
+        beta = self.package("beta")
+        self.link("beta", beta, "claude")
+        self.link("beta", beta, "agents")
+        vault = self.vault_package("61-skills/pine")
+        self.link("pine", vault, "claude")
+        self.link("pine", vault, "agents")
+        self.assertEqual(self.call("status"), 0)
+        output = self.ctx.stdout.getvalue()
+        self.assertIn("仓库 · 自建 2 项 · i / r 可管理", output)
+        positions = [output.index(text) for text in
+                     ("beta", "alpha", "自建 · Obsidian Vault", "pine")]
+        self.assertEqual(positions, sorted(positions))
+        numbers = [line.split()[0] for line in output.splitlines()
+                   if line.strip()[:1].isdigit()]
+        self.assertEqual(numbers, ["1", "2", "3"])
+
+    def test_menu_rejects_install_on_readonly_groups_without_writes(self):
+        self.package("alpha")
+        vault = self.vault_package("61-skills/pine")
+        self.link("pine", vault, "claude")
+        self.ctx.stdin = TTYInput("i 2\nq\n")
+        self.ctx.stdout = TTYOutput()
+        self.assertEqual(m.main([], self.ctx), 0)
+        output = self.ctx.stdout.getvalue() + self.ctx.stderr.getvalue()
+        self.assertIn("2 号属于「自建 · Obsidian Vault」组，不在安装范围。", output)
+        self.assertIn("i / r 仅接受「仓库」组编号", output)
+        self.assertFalse((self.ctx.targets["claude"] / "alpha").exists())
+
+    def test_detail_shows_description_boundary_and_hash_compare(self):
+        for client in self.ctx.targets:
+            slot = self.ctx.targets[client] / "twin"
+            slot.parent.mkdir(parents=True, exist_ok=True)
+            slot.mkdir()
+            (slot / "SKILL.md").write_text("---\nname: twin\ndescription: 外部副本\n---\n")
+        (self.ctx.targets["agents"] / "twin" / "SKILL.md").write_text(
+            "---\nname: twin\ndescription: 外部副本（旧）\n---\n")
+        vault = self.vault_package("61-skills/pine")
+        self.link("pine", vault, "claude")
+        self.link("pine", vault, "agents")
+        self.ctx.stdin = TTYInput("v 1\nv 2\nq\n")
+        self.ctx.stdout = TTYOutput()
+        self.assertEqual(m.main([], self.ctx), 0)
+        output = self.ctx.stdout.getvalue()
+        self.assertIn("⚠ 两端各一份独立副本，更新互不同步", output)
+        self.assertIn("两端不一致（内容哈希不同）", output)
+        self.assertIn("说明：外部副本", output)
+        self.assertIn("本工具不修改、不删除外部目录", output)
+        self.assertIn("本工具不修改此条目；调整请维护 Vault 源目录", output)
+        self.assertIn("说明：测试用 Vault skill", output)
 
     def test_real_pty_menu_on_isolated_context(self):
         self.package()
