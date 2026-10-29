@@ -58,5 +58,29 @@
     "coverage": ["no-default-experiment", "unsupported-claim"],
     "prompt": "根据给定资料判断这套方案能否保证我的系统在所有超时情况下零重复执行；如果资料证明不了，请告诉我需要怎样的验证，不要实际运行或安装任何东西。",
     "expected": "检查资料支持范围，不能证明时说明缺少的实测条件及建议方法，不自动执行研究对象或伪造实验数据；区分建议、已报告观察和用户系统实测。"
+  },
+  {
+    "id": "context-anchored",
+    "coverage": ["context-anchored", "solution-ideas"],
+    "prompt": "（前文：正在讨论工具调用循环超时后的处理，候选 A 是客户端带请求键重试，候选 B 是先查询执行状态再决定是否重发，约束是下游接口不保证幂等。）调研下业界怎么做。",
+    "expected": "把前文的问题、约束和 A/B 候选作为研究出发点，不泛化为通用业界综述，不重复询问已给出的背景；交付含结论、依据、思路、成立条件，思路回到 A/B 的取舍与推荐，并说明下游不保证幂等对结论的影响。"
+  },
+  {
+    "id": "trigger-diaoyan",
+    "coverage": ["trigger", "solution-ideas"],
+    "prompt": "调研一下 RAG 系统里重排序模型在中文场景下怎么选。",
+    "expected": "以“调研”触发并直接进入研究；交付含结论、依据、思路、成立条件，依据可追溯到实际读取的材料；不强制读取 Vault 或个人资料，不为给建议补造用户背景。"
+  },
+  {
+    "id": "fact-check-brief",
+    "coverage": ["output-proportion", "unsupported-claim"],
+    "prompt": "查证一下：PostgreSQL 的 pgvector 是否支持 HNSW 索引，从哪个版本开始？",
+    "expected": "直接核对官方文档或发布记录并给出带版本与出处的结论；思路从简或省略，不为凑格式扩写方案或长报告。"
+  },
+  {
+    "id": "not-trigger-locate",
+    "coverage": ["non-trigger"],
+    "prompt": "这个仓库里 install 函数定义在哪个文件？",
+    "expected": "属于单纯查找代码位置，不进入 research，也不发起联网研究。"
   }
 ]

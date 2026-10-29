@@ -67,3 +67,45 @@ T2 的 3 次执行关联 5 类定义；T3 追加 1 次交接执行后，合计 *
 - 四次主题集中在重试与重复执行，没有旧 skill 对照、重复采样或统计推断，不能据此宣称普遍质量提升。
 - 三组使用合成资料，不对应真实产品效果；公开资料组也未做用户系统实验，不能保证实际业务正确性或收益。
 - 未逐站重验站点表、全平台登录与凭证、真实反馈或研究成果保存、全部客户端刷新。整体终审、workflow verify/close 由本地工作流另行记录，本摘要不替代其证据。
+
+---
+
+# 2026-10-29 交付形式与上下文改动验证
+
+适用范围：本次对 `SKILL.md`（description、定位句、第 1 步上下文规则、Exit Protocol、Exit Criteria）与 `test-prompts.json`（新增 4 条案例）的改动。`references/` 三份参考未改动。上一节 2026-10-16 的记录与 SHA 表保持原样，不表示本次版本。
+
+## 改动版本
+
+| 文件 | SHA256 |
+|---|---|
+| `SKILL.md` | `3199f4cc50d0f456754fcac9fa265573d5160ceae2503a613ca4d3bd3bb4b032` |
+| `test-prompts.json` | `c48cc00fdb9ad4a2c846f93f4113bb2b4e9261f56c9ab3492317860e50e2e4e1` |
+
+## 机械检查（实际运行）
+
+- `quick_validate.py research`（取自 codex 样例包，以 `python3 -I` 运行）输出 `Skill is valid!`，退出 0。
+- description 长度 148 字符；`SKILL.md` 中 4 处相对参考链接可达；`research-topic-selection/SKILL.md` 指向 research 的 3 处引用（检索路由、站点登记表、SKILL.md）均可达。
+- `test-prompts.json` 可解析，14 个案例 id 唯一；`git diff --check` 无输出。
+
+## 行为执行（Claude Code 2.1.312，`claude -p`，每次 1 次）
+
+执行目录为临时工作区；证据（请求、工具调用序列、最终答复、退出状态）保存在本地 `.workflow/research-context-2026-10-29/reports/`，不入库。模型标识由执行环境提供，未单独核验。
+
+| 案例 | 结果 | 观察 |
+|---|---|---|
+| `context-anchored` | 通过 | 主动加载 research；26 次工具调用均围绕 A/B 与“下游不保证幂等”展开；交付含结论、依据、思路（A/B 对照表 + 分层推荐）、成立条件；未重新询问已知背景 |
+| `trigger-diaoyan` | 通过 | “调研一下”触发 research；交付四部分齐全；只读取检索参考，未读 Vault 或个人资料；结尾提出一个影响档位的澄清问题 |
+| `fact-check-brief` | 部分通过 | 篇幅短、思路从简，符合预期；但**未加载 research**，答复来自模型已有知识并无出处，仅声明“未能联网核实”。说明“查证一下”这类短请求的触发不稳定 |
+| `single-file` | 通过 | 只读指定文章，不读其他文件或外链；明确样本、统计口径与转载无法核实的限制；未扩写方案 |
+| `not-trigger-locate` | 通过（该次执行因配额 403 中断） | 只做了代码检索，未加载 research；中断发生在检索之后，不影响“未误触发”的判断 |
+
+两次涉及联网的执行（`context-anchored`、`trigger-diaoyan`）中，WebFetch 对所有目标域返回域名校验失败，Bash 的 `curl` 未获批；两次答复都声明了摘要是唯一证据并降低证据等级。首次批量执行时 3 次因代理配额 403 中断，配额恢复后重跑 2 次；`not-trigger-locate` 未重跑。环境中 WebSearch 曾出现 `unrecognized_model` 报错，与实际技能行为无关。
+
+## 尚未验证
+
+- 每个案例只执行 1 次，不能证明稳定性；未做旧版本对照或重复采样。
+- `fact-check-brief` 暴露的触发不稳定，未做进一步定位（是模型判断“简单事实无需研究”，还是 skill 发现机制），也未针对它调整描述。
+- 只覆盖 Claude Code；未验证 Codex 等客户端的触发与输出。
+- 未验证保存路径、Vault 写入、个人资料读取的改动后行为（本次未改动相关规则）。
+
+清理：本次使用的临时工作区已删除；证据副本保留在本地 `.workflow/`。
