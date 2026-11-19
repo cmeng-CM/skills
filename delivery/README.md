@@ -85,7 +85,7 @@ python3 -B delivery/delivery-orchestrate/scripts/collect_metrics.py \
 python3 -B delivery/delivery-orchestrate/scripts/validate_suite.py --skills-root delivery --output /path/to/evidence
 ```
 
-结构检查与确定性回归之外，独立审查、真实模型行为评测（见[评测说明](delivery-orchestrate/tests/evaluation/README.md)）、实际交付对象验证分别留证，互不替代。能力更新涉及必要输入、语义、独立性或门禁时先评估契约与在途流程，不因软链即时生效就让进行中的任务静默换规则。原 `task-workflow` 独立保留，本组不自动修改其引擎、门禁或运行状态。
+结构检查与确定性回归之外，独立审查、真实模型行为评测（见[评测说明](delivery-orchestrate/tests/evaluation/README.md)）、实际交付对象验证分别留证，互不替代。能力更新涉及必要输入、语义、独立性或门禁时先评估契约与在途流程，不因软链即时生效就让进行中的任务静默换规则。
 
 ## 8. 快速示例
 
